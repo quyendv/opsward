@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -319,6 +320,21 @@ func TestInvokeRedactsResultArgsAndErrors(t *testing.T) {
 		t.Fatalf("audit error = %+v", rec.Outcome)
 	}
 }
+
+func TestInvokeRedactsReturnedErrors(t *testing.T) {
+	secret := strings.Join([]string{"hunter2", "hunter2"}, "")
+	ft := &fakeTool{risk: core.RiskRead, runErr: fmt.Errorf("connect: postgres://app:%s@db:5432: %w", secret, errSentinel)}
+	e := newEngine(t, ft, allowAll, &recordingAuditor{})
+	_, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs))
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("returned error leaks the secret: %v", err)
+	}
+	if !errors.Is(err, errSentinel) {
+		t.Fatalf("redaction lost the error chain: %v", err)
+	}
+}
+
+var errSentinel = errors.New("sentinel")
 
 func TestNewRejectsDuplicateTools(t *testing.T) {
 	ft := &fakeTool{risk: core.RiskRead}

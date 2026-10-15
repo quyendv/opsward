@@ -105,6 +105,17 @@ func (e *DeniedError) Error() string {
 	return fmt.Sprintf("denied by policy (rule %s)", e.Decision.Rule)
 }
 
+// redactedError is what Invoke returns for a failed call: its text is redacted,
+// because adapters show it to the agent, while Unwrap keeps errors.Is and errors.As
+// working on the original chain.
+type redactedError struct {
+	msg   string
+	cause error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.cause }
+
 // New builds an engine. Tool names must be unique.
 func New(opt Options) (*Engine, error) {
 	if opt.Authorizer == nil || opt.Auditor == nil {
@@ -152,14 +163,16 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	rec := audit.Record{Phase: audit.PhaseOutcome, Principal: p, Tool: name}
 	finish := func(status string, cause error) error {
 		rec.Outcome = &audit.Outcome{Status: status, DurationMs: e.now().Sub(start).Milliseconds()}
+		var out error
 		if cause != nil {
-			rec.Outcome.Error = redact.String(cause.Error())
+			out = &redactedError{msg: redact.String(cause.Error()), cause: cause}
+			rec.Outcome.Error = out.Error()
 		}
 		if _, err := e.audit.Write(ctx, rec); err != nil {
 			e.log.Error("audit write failed", "tool", name, "error", err)
-			return errors.Join(cause, ErrAuditUnavailable)
+			return errors.Join(out, ErrAuditUnavailable)
 		}
-		return cause
+		return out
 	}
 
 	if p.Subject == "" {
