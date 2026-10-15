@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	mcpadapter "github.com/quyendv/opsward/internal/adapter/mcp"
 	"github.com/quyendv/opsward/internal/app"
@@ -20,6 +21,9 @@ import (
 	"github.com/quyendv/opsward/internal/store/sqlite"
 	"github.com/quyendv/opsward/internal/version"
 )
+
+// configCheckInterval is how often serve checks its configuration file (docs/design/0003).
+const configCheckInterval = 10 * time.Second
 
 const usage = `usage: opsward <command> [flags]
 
@@ -69,16 +73,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 func loadConfig(name string, args []string) (*config.Config, error) {
+	cfg, _, err := loadConfigPath(name, args)
+	return cfg, err
+}
+
+func loadConfigPath(name string, args []string) (*config.Config, string, error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "configuration file")
 	if err := fs.Parse(args); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if *path == "" {
-		return nil, errors.New("--config is required")
+		return nil, "", errors.New("--config is required")
 	}
-	return config.Load(*path)
+	cfg, err := config.Load(*path)
+	return cfg, *path, err
 }
 
 func validate(args []string, stdout io.Writer) error {
@@ -98,7 +108,7 @@ func validate(args []string, stdout io.Writer) error {
 }
 
 func serve(ctx context.Context, args []string, stderr io.Writer) error {
-	cfg, err := loadConfig("serve", args)
+	cfg, path, err := loadConfigPath("serve", args)
 	if err != nil {
 		return err
 	}
@@ -106,7 +116,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return errors.New("audit.stream.type stdout would corrupt MCP over stdio; use stderr or file")
 	}
 	log := slog.New(slog.NewJSONHandler(stderr, nil))
-	a, err := app.Open(ctx, cfg, app.Options{Logger: log, Stderr: stderr})
+	a, err := app.Open(ctx, cfg, app.Options{Logger: log, Stderr: stderr, ConfigPath: path})
 	if err != nil {
 		return err
 	}
@@ -115,6 +125,10 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		log.Warn("policy", "warning", w)
 	}
 	go a.RunRetention(ctx)
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go a.Watch(ctx, configCheckInterval, hup)
 
 	log.Info("serving MCP over stdio", "version", version.Version, "tools", len(a.Engine.Tools()))
 	return mcpadapter.ServeStdio(ctx, a.Engine, a.Principal)

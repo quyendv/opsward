@@ -115,8 +115,11 @@ Both tools are `read`, resolve the workload's pods with the call's own profile, 
 ## Configuration reload
 
 Opsward checks its configuration file every 10 seconds and on `SIGHUP`. A changed file is
-loaded completely: configuration, policy, environments, providers and knowledge packs. If all
-of it is valid, the new state replaces the old in one step, so no call sees a mix of the two.
+loaded completely: configuration, policy, environments, providers and knowledge packs. Only
+when all of it is valid is anything replaced. Providers and packs are swapped first, then
+policy and environments together; a call already running during that instant may see the new
+providers with the previous policy, but never a partially loaded configuration. Content that
+was rejected is not retried until the file changes again.
 
 | Section | On reload |
 |---|---|
