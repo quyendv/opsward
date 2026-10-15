@@ -50,6 +50,14 @@ func (f *fakeSource) WorkloadLogs(_ context.Context, _ capability.WorkloadRef, o
 	return f.logs, f.err
 }
 
+func (f *fakeSource) PodNamePattern(context.Context, capability.WorkloadRef) (string, error) {
+	f.calls = append(f.calls, "pattern")
+	if f.err != nil {
+		return "", f.err
+	}
+	return `api-7d9f8b6c5-[bcdfghjklmnpqrstvwxz2456789]{5}`, nil
+}
+
 func (f *fakeSource) WorkloadLabels(context.Context, capability.WorkloadRef) (map[string]string, error) {
 	f.calls = append(f.calls, "labels")
 	if f.err != nil {

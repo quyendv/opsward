@@ -92,8 +92,11 @@ templates, so it needs no query language:
 | `memory` | per-pod working-set bytes (`container_memory_working_set_bytes`), with requests and limits |
 | `restarts` | per-pod container restarts (`kube_pod_container_status_restarts_total`) |
 
-Pods are selected by the controller's naming scheme (Deployment `<name>-<hash>-<id>`,
-StatefulSet `<name>-<ordinal>`, DaemonSet `<name>-<id>`). Template queries pass through the same
+Pods are selected by name, exactly: for a Deployment, the names of the ReplicaSets it
+controls (so remembered revisions are included) followed by a generated suffix; for a
+StatefulSet `<name>-<ordinal>`; for a DaemonSet `<name>-` and a generated suffix. Generated
+parts use Kubernetes' vowel-free alphabet, so another workload whose name merely starts the
+same way (`api-agent` next to `api`) is not matched. Template queries pass through the same
 confinement as free-form ones.
 
 **`query_metrics`** runs a PromQL expression: an instant query without `range`, otherwise a

@@ -91,10 +91,12 @@ func diagnose(ctx context.Context, w capability.Workloads, ms capability.Metrics
 		d.Unavailable["metrics"] = "no metrics provider configured"
 	} else if m, err := ms.Metrics(env); err != nil {
 		d.Unavailable["metrics"] = err.Error()
+	} else if pods, err := w.PodNamePattern(ctx, ref); err != nil {
+		d.Unavailable["metrics"] = err.Error()
 	} else {
 		d.Metrics = map[string]*WorkloadMetricsResult{}
 		for _, metric := range []string{"cpu", "memory"} {
-			r, err := workloadMetrics(ctx, m, ref.Namespace, ref.Kind, ref.Name, metric, time.Hour)
+			r, err := workloadMetrics(ctx, m, ref.Namespace, pods, metric, time.Hour)
 			if err != nil {
 				d.Unavailable["metrics."+metric] = err.Error()
 				continue

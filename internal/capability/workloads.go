@@ -121,6 +121,10 @@ type Workloads interface {
 	WorkloadEvents(ctx context.Context, ref WorkloadRef, limit int) ([]Event, error)
 	// WorkloadLogs returns recent output of the workload's pods' containers.
 	WorkloadLogs(ctx context.Context, ref WorkloadRef, opt LogOptions) (*WorkloadLogs, error)
+	// PodNamePattern returns an RE2 pattern (unanchored; metrics backends anchor it) that
+	// matches the names of this workload's pods, current and past revisions, and no
+	// other workload's.
+	PodNamePattern(ctx context.Context, ref WorkloadRef) (string, error)
 }
 
 // WorkloadSource hands out Workloads for an environment and profile.

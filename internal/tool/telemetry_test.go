@@ -125,7 +125,7 @@ func TestGetWorkloadMetrics(t *testing.T) {
 		t.Fatalf("memory runs usage, requests and limits; got %d queries", len(m.queries))
 	}
 	usage := m.queries[0]
-	if !usage.Range || !strings.Contains(usage.Query, "container_memory_working_set_bytes") || !strings.Contains(usage.Query, `pod=~"api-[a-z0-9]{5,10}-[a-z0-9]{5}"`) {
+	if !usage.Range || !strings.Contains(usage.Query, "container_memory_working_set_bytes") || !strings.Contains(usage.Query, `pod=~"api-7d9f8b6c5-[bcdfghjklmnpqrstvwxz2456789]{5}"`) {
 		t.Fatalf("usage query = %+v", usage)
 	}
 	if b, _ := json.Marshal(out); !strings.Contains(string(b), `"unit":"bytes"`) || !strings.Contains(string(b), `"requests"`) {
@@ -136,7 +136,7 @@ func TestGetWorkloadMetrics(t *testing.T) {
 	if _, _, err := runTool(t, tl, `{"environment":"production","namespace":"shop","kind":"StatefulSet","name":"db.main","metric":"restarts"}`); err != nil {
 		t.Fatal(err)
 	}
-	if len(m.queries) != 1 || !strings.Contains(m.queries[0].Query, `pod=~"db\\.main-[0-9]+"`) {
+	if len(m.queries) != 1 || !strings.Contains(m.queries[0].Query, "kube_pod_container_status_restarts_total") {
 		t.Fatalf("restarts = %+v", m.queries)
 	}
 	if _, _, err := runTool(t, tl, `{"environment":"production","namespace":"shop","kind":"Deployment","name":"api","metric":"disk"}`); err == nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strconv"
 	"time"
 
@@ -191,19 +190,6 @@ type WorkloadMetricsResult struct {
 	Limits   *capability.MetricsResult `json:"limits,omitempty"`
 }
 
-// podPattern matches the names a workload's controller gives its pods.
-func podPattern(kind, name string) string {
-	n := regexp.QuoteMeta(name)
-	switch kind {
-	case "Deployment":
-		return n + "-[a-z0-9]{5,10}-[a-z0-9]{5}"
-	case "StatefulSet":
-		return n + "-[0-9]+"
-	default:
-		return n + "-[a-z0-9]{5}"
-	}
-}
-
 // GetWorkloadMetrics is get_workload_metrics.
 func GetWorkloadMetrics(ws capability.WorkloadSource, ms capability.MetricsSource) (engine.Tool, error) {
 	in, err := newInput[workloadMetricsInput](func(s *jsonschema.Schema) {
@@ -234,22 +220,30 @@ func GetWorkloadMetrics(ws capability.WorkloadSource, ms capability.MetricsSourc
 				Scope:   core.Scope{Environment: v.Environment, Namespace: v.Namespace, Kind: v.Kind, Name: v.Name},
 				Args:    obj,
 				Resolve: labels,
-				Run: func(ctx context.Context, _ string) (any, error) {
+				Run: func(ctx context.Context, profile string) (any, error) {
+					w, err := ws.Workloads(v.Environment, profile)
+					if err != nil {
+						return nil, err
+					}
+					pods, err := w.PodNamePattern(ctx, capability.WorkloadRef{Namespace: v.Namespace, Kind: v.Kind, Name: v.Name})
+					if err != nil {
+						return nil, err
+					}
 					m, err := ms.Metrics(v.Environment)
 					if err != nil {
 						return nil, err
 					}
-					return workloadMetrics(ctx, m, v.Namespace, v.Kind, v.Name, v.Metric, d)
+					return workloadMetrics(ctx, m, v.Namespace, pods, v.Metric, d)
 				},
 			}, nil
 		},
 	}, nil
 }
 
-// workloadMetrics runs one metric's templates for a workload's pods.
-func workloadMetrics(ctx context.Context, m capability.Metrics, namespace, kind, name, metric string, d time.Duration) (*WorkloadMetricsResult, error) {
+// workloadMetrics runs one metric's templates for the pods podPattern matches.
+func workloadMetrics(ctx context.Context, m capability.Metrics, namespace, podPattern, metric string, d time.Duration) (*WorkloadMetricsResult, error) {
 	tpl := metricTemplates[metric]
-	pods := strconv.Quote(podPattern(kind, name))
+	pods := strconv.Quote(podPattern)
 	res := &WorkloadMetricsResult{Metric: metric, Unit: tpl.unit}
 	var err error
 	if res.Usage, err = m.Query(ctx, namespace, rangeQuery(fmt.Sprintf(tpl.usage, pods), d)); err != nil {
