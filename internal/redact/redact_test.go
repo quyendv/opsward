@@ -71,3 +71,44 @@ func TestValueWalksNestedJSON(t *testing.T) {
 		t.Error("Value modified its input")
 	}
 }
+
+func TestStringRedactsBasicAuth(t *testing.T) {
+	in := "Authorization: Basic " + join("dXNlcjpw", "YXNzd29yZA==")
+	if got := String(in); strings.Contains(got, "YXNzd29yZA") || !strings.HasPrefix(got, "Authorization: Basic ") {
+		t.Fatalf("String(%q) = %q", in, got)
+	}
+	if prose := "basic auth is enabled"; String(prose) != prose {
+		t.Fatalf("String(%q) = %q, want unchanged", prose, String(prose))
+	}
+}
+
+// Kubelet event messages name Secrets and keys; they carry no secret values and must
+// stay readable, because they are what diagnosis needs.
+func TestStringLeavesKubeletMessagesAlone(t *testing.T) {
+	for _, s := range []string{
+		`MountVolume.SetUp failed for volume "app-token" : secret "app-token" not found`,
+		`Error: secret "db-secret" : key password not found`,
+		`couldn't find key password in Secret shop/db-secret`,
+	} {
+		if got := String(s); got != s {
+			t.Errorf("String(%q) = %q, want unchanged", s, got)
+		}
+	}
+}
+
+func TestValueMatchesKeyNamesLoosely(t *testing.T) {
+	out := Value(map[string]any{
+		"DB_PASSWORD": "a", "dbPassword": "b", "clientSecret": "c", "x-api-key": "d",
+		"secretName": "keep", "tokenTTL": "keep",
+	}).(map[string]any)
+	for _, k := range []string{"DB_PASSWORD", "dbPassword", "clientSecret", "x-api-key"} {
+		if out[k] != Placeholder {
+			t.Errorf("%s = %v, want redacted", k, out[k])
+		}
+	}
+	for _, k := range []string{"secretName", "tokenTTL"} {
+		if out[k] != "keep" {
+			t.Errorf("%s = %v, want kept", k, out[k])
+		}
+	}
+}

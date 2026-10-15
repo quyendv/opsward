@@ -3,7 +3,10 @@
 // tools do not ask for them.
 package redact
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // Placeholder replaces every redacted value.
 const Placeholder = "[REDACTED]"
@@ -18,13 +21,14 @@ type rule struct {
 var rules = []rule{
 	{regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----`), Placeholder},
 	{regexp.MustCompile(`(?i)\b(bearer\s+)[A-Za-z0-9\-._~+/]+=*`), "${1}" + Placeholder},
+	{regexp.MustCompile(`(?i)\b(authorization:\s*basic\s+)[A-Za-z0-9+/]+=*`), "${1}" + Placeholder},
 	{regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`), Placeholder},
 	{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}\b`), Placeholder},
 	{regexp.MustCompile(`\bglpat-[A-Za-z0-9\-_]{20,}\b`), Placeholder},
 	{regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}\b`), Placeholder},
 	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), Placeholder},
 	{regexp.MustCompile(`\b([a-zA-Z][a-zA-Z0-9+.-]*://[^:/\s@]+:)[^@\s/]+@`), "${1}" + Placeholder + "@"},
-	{regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;&]+`), "${1}" + Placeholder},
+	{regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)["']?(?::|\s*=)\s*["']?)[^\s"',;&]+`), "${1}" + Placeholder},
 }
 
 // String returns s with credential-shaped content replaced.
@@ -59,10 +63,15 @@ func Value(v any) any {
 	}
 }
 
-var sensitiveKey = regexp.MustCompile(`(?i)^(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret)$`)
+// sensitiveKey matches a map key, lower-cased with separators removed, that ends in a
+// credential word: DB_PASSWORD, dbPassword and x-api-key match; secretName does not.
+var sensitiveKey = regexp.MustCompile(`(password|passwd|pwd|secret|token|apikey|accesskey|privatekey)$`)
+
+var keySeparators = strings.NewReplacer("_", "", "-", "", ".", "")
 
 func valueFor(key string, v any) any {
-	if s, ok := v.(string); ok && sensitiveKey.MatchString(key) && s != "" {
+	norm := keySeparators.Replace(strings.ToLower(key))
+	if s, ok := v.(string); ok && sensitiveKey.MatchString(norm) && s != "" {
 		return Placeholder
 	}
 	return Value(v)
