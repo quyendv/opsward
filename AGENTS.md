@@ -11,6 +11,8 @@ per-principal policy, audit, redaction, and a write path that proposes changes i
 making them**.
 
 Status: **pre-alpha, design phase.** Nothing is stable; there are no commands yet.
+The architecture is in [docs/design/0001-architecture.md](docs/design/0001-architecture.md);
+read it before adding a package.
 
 ## Layout
 
