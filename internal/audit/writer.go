@@ -27,17 +27,17 @@ type Options struct {
 	Now      func() time.Time // defaults to time.Now
 }
 
-// Writer appends records to one hash chain, in the store and on the stream.
-// It is safe for concurrent use; records are serialized.
+// Writer appends records to one hash chain, in the store and on the stream. The chain
+// head lives in the store, so processes that share a store and writer ID share the
+// chain. It is safe for concurrent use; a process's records reach its stream in order.
 type Writer struct {
 	mu     sync.Mutex
 	opt    Options
-	seq    uint64
-	prev   string
 	stream *stream
 }
 
-// NewWriter resumes the chain for opt.WriterID from the store.
+// NewWriter checks that the store is reachable and returns a writer for
+// opt.WriterID's chain.
 func NewWriter(ctx context.Context, opt Options) (*Writer, error) {
 	if opt.WriterID == "" || opt.Store == nil || opt.Stream == nil || opt.Timeout <= 0 {
 		return nil, errors.New("audit: WriterID, Store, Stream and a positive Timeout are required")
@@ -45,25 +45,23 @@ func NewWriter(ctx context.Context, opt Options) (*Writer, error) {
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
-	w := &Writer{opt: opt, stream: newStream(opt.Stream, opt.Timeout)}
-	last, ok, err := opt.Store.LastAudit(ctx, opt.WriterID)
-	if err != nil {
-		return nil, fmt.Errorf("audit: resume chain: %w", err)
+	if _, _, err := opt.Store.LastAudit(ctx, opt.WriterID); err != nil {
+		return nil, fmt.Errorf("audit: read chain head: %w", err)
 	}
-	if ok {
-		w.seq, w.prev = last.Seq, last.Hash
-	}
-	return w, nil
+	return &Writer{opt: opt, stream: newStream(opt.Stream, opt.Timeout)}, nil
 }
 
-// Write appends r to the chain and returns it as written. The record reaches the store
-// first; if that fails, the chain does not advance. If the stream then fails, the
-// record is in the store and an error is still returned, because callers treat
+// Write appends r to this writer's chain and returns it as written. The record reaches
+// the store first; if that fails, nothing reaches the stream. If the stream then fails,
+// the record is in the store and an error is still returned, because callers treat
 // "not on both destinations" as a failure.
 func (w *Writer) Write(ctx context.Context, r Record) (Record, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.write(ctx, w.opt.WriterID, r)
+}
 
+func (w *Writer) write(ctx context.Context, chain string, r Record) (Record, error) {
 	if r.ID == "" {
 		id, err := uuid.NewV7()
 		if err != nil {
@@ -78,47 +76,29 @@ func (w *Writer) Write(ctx context.Context, r Record) (Record, error) {
 
 	sctx, cancel := context.WithTimeout(ctx, w.opt.Timeout)
 	defer cancel()
-	body, err := w.appendToStore(sctx, &r)
+	var body []byte
+	_, err := w.opt.Store.AppendAuditNext(sctx, chain, func(seq uint64, prev string) (store.AuditRow, error) {
+		r.Writer, r.Seq, r.Prev, r.Hash = chain, seq, prev, ""
+		h, err := r.hash()
+		if err != nil {
+			return store.AuditRow{}, err
+		}
+		r.Hash = h
+		if body, err = json.Marshal(r); err != nil {
+			return store.AuditRow{}, fmt.Errorf("audit: encode record: %w", err)
+		}
+		return store.AuditRow{
+			Writer: r.Writer, Seq: r.Seq, ID: r.ID, Time: r.Time,
+			Phase: string(r.Phase), Hash: r.Hash, Prev: r.Prev, Body: body,
+		}, nil
+	})
 	if err != nil {
-		// Several processes may share one store and writer ID, for example one MCP
-		// stdio server per client session. If another one advanced the chain, chain
-		// onto its last record and try once more.
-		last, ok, lerr := w.opt.Store.LastAudit(sctx, w.opt.WriterID)
-		if lerr != nil || !ok || last.Seq <= w.seq {
-			return Record{}, err
-		}
-		w.seq, w.prev = last.Seq, last.Hash
-		if body, err = w.appendToStore(sctx, &r); err != nil {
-			return Record{}, err
-		}
+		return Record{}, fmt.Errorf("audit: store: %w", err)
 	}
-	w.seq, w.prev = r.Seq, r.Hash
-
 	if err := w.stream.write(append(body, '\n')); err != nil {
 		return r, err
 	}
 	return r, nil
-}
-
-// appendToStore seals r onto the current chain head and stores it.
-func (w *Writer) appendToStore(ctx context.Context, r *Record) ([]byte, error) {
-	r.Writer, r.Seq, r.Prev, r.Hash = w.opt.WriterID, w.seq+1, w.prev, ""
-	h, err := r.hash()
-	if err != nil {
-		return nil, err
-	}
-	r.Hash = h
-	body, err := json.Marshal(r)
-	if err != nil {
-		return nil, fmt.Errorf("audit: encode record: %w", err)
-	}
-	if err := w.opt.Store.AppendAudit(ctx, store.AuditRow{
-		Writer: r.Writer, Seq: r.Seq, ID: r.ID, Time: r.Time,
-		Phase: string(r.Phase), Hash: r.Hash, Prev: r.Prev, Body: body,
-	}); err != nil {
-		return nil, fmt.Errorf("audit: store: %w", err)
-	}
-	return body, nil
 }
 
 // Prune writes a checkpoint and then removes this writer's records older than

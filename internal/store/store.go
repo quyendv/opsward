@@ -23,6 +23,10 @@ type AuditRow struct {
 type Store interface {
 	// AppendAudit stores a row. (Writer, Seq) is unique.
 	AppendAudit(ctx context.Context, r AuditRow) error
+	// AppendAuditNext appends the next row of writer's chain. It reads the chain head
+	// and inserts under one write lock, calling build with the next sequence number and
+	// the head's hash, so several processes can share one chain.
+	AppendAuditNext(ctx context.Context, writer string, build func(seq uint64, prev string) (AuditRow, error)) (AuditRow, error)
 	// LastAudit returns the row with the highest Seq for writer.
 	LastAudit(ctx context.Context, writer string) (AuditRow, bool, error)
 	// LastAuditBefore returns the highest-Seq row for writer whose Time is before t.

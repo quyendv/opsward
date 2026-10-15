@@ -123,23 +123,71 @@ func TestWriterResumesChainAfterRestart(t *testing.T) {
 	}
 }
 
-func TestWritersSharingAStoreShareOneChain(t *testing.T) {
+// Several processes (one MCP stdio server per client session) open the same file and
+// write one chain concurrently. Every write must succeed and the chain must verify.
+func TestConcurrentProcessesShareOneChain(t *testing.T) {
 	ctx := context.Background()
-	s := openStore(t)
-	var streamA, streamB bytes.Buffer
-	a := newWriter(t, s, &streamA, newClock(t0))
-	b := newWriter(t, s, &streamB, newClock(t0))
-	for i, w := range []*Writer{a, b, a, b} {
-		if _, err := w.Write(ctx, outcome("call")); err != nil {
-			t.Fatalf("write %d: %v", i, err)
-		}
+	path := filepath.Join(t.TempDir(), "a.db")
+	const processes, perProcess = 4, 25
+	var wg sync.WaitGroup
+	errs := make(chan error, processes*perProcess)
+	for range processes {
+		var stream bytes.Buffer
+		w := newWriter(t, openStoreAt(t, path), &stream, newClock(t0))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range perProcess {
+				if _, err := w.Write(ctx, outcome("call")); err != nil {
+					errs <- err
+				}
+			}
+		}()
 	}
-	records, err := Load(ctx, s, "w1")
-	if err != nil || len(records) != 4 {
-		t.Fatalf("Load = %d records, %v", len(records), err)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("write failed: %v", err)
+	}
+	records, err := Load(ctx, openStoreAt(t, path), "w1")
+	if err != nil || len(records) != processes*perProcess {
+		t.Fatalf("Load = %d records, %v; want %d", len(records), err, processes*perProcess)
 	}
 	if err := Verify(records); err != nil {
 		t.Fatalf("Verify: %v", err)
+	}
+}
+
+// A process that stayed idle while another one wrote and then pruned must chain onto
+// the current head, not onto the head it last saw.
+func TestWriterChainsOntoHeadAfterAnotherProcessPrunes(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "a.db")
+	var sa, sb bytes.Buffer
+	cb := newClock(t0)
+	a := newWriter(t, openStoreAt(t, path), &sa, newClock(t0))
+	b := newWriter(t, openStoreAt(t, path), &sb, cb)
+	if _, err := a.Write(ctx, outcome("a-1")); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := b.Write(ctx, outcome("b")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cb.Set(t0.Add(100 * 24 * time.Hour))
+	if _, err := b.Prune(ctx, 90*24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Write(ctx, outcome("a-2")); err != nil {
+		t.Fatal(err)
+	}
+	records, err := Load(ctx, openStoreAt(t, path), "w1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(records); err != nil {
+		t.Fatalf("Verify: %v (records: %d)", err, len(records))
 	}
 }
 
@@ -177,11 +225,11 @@ type failingStore struct {
 	fail bool
 }
 
-func (f *failingStore) AppendAudit(ctx context.Context, r store.AuditRow) error {
+func (f *failingStore) AppendAuditNext(ctx context.Context, writer string, build func(uint64, string) (store.AuditRow, error)) (store.AuditRow, error) {
 	if f.fail {
-		return errors.New("disk full")
+		return store.AuditRow{}, errors.New("disk full")
 	}
-	return f.Store.AppendAudit(ctx, r)
+	return f.Store.AppendAuditNext(ctx, writer, build)
 }
 
 func TestStoreFailureDoesNotAdvanceChain(t *testing.T) {

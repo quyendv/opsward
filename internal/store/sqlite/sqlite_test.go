@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,5 +124,32 @@ func TestUsesWAL(t *testing.T) {
 	var mode string
 	if err := s.db.QueryRowContext(context.Background(), `PRAGMA journal_mode`).Scan(&mode); err != nil || mode != "wal" {
 		t.Fatalf("journal_mode = %q, %v; want wal", mode, err)
+	}
+}
+
+// MCP clients start several stdio servers at once, all opening the same fresh file.
+func TestConcurrentOpenMigratesOnce(t *testing.T) {
+	ctx := context.Background()
+	for round := range 10 {
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("r%d.db", round))
+		var wg sync.WaitGroup
+		errs := make(chan error, 8)
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				s, err := Open(ctx, path)
+				if err != nil {
+					errs <- err
+					return
+				}
+				_ = s.Close()
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatalf("round %d: concurrent Open failed: %v", round, err)
+		}
 	}
 }
