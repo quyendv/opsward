@@ -2,8 +2,11 @@
 package kubernetes
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -173,7 +176,7 @@ func (w *workloads) WorkloadEvents(ctx context.Context, ref capability.WorkloadR
 		out = append(out, capability.Event{
 			Time: eventTime(e), Type: e.Type, Reason: e.Reason,
 			Object:  e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name,
-			Message: e.Message, Count: e.Count,
+			Message: e.Message, Count: eventCount(e),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
@@ -183,8 +186,19 @@ func (w *workloads) WorkloadEvents(ctx context.Context, ref capability.WorkloadR
 	return out, nil
 }
 
+// eventTime prefers the newest observation: events.k8s.io/v1 producers, such as the
+// scheduler, set EventTime and Series instead of the core timestamps.
+func eventCount(e *corev1.Event) int32 {
+	if e.Series != nil && e.Series.Count > 0 {
+		return e.Series.Count
+	}
+	return e.Count
+}
+
 func eventTime(e *corev1.Event) time.Time {
 	switch {
+	case e.Series != nil && !e.Series.LastObservedTime.IsZero():
+		return e.Series.LastObservedTime.UTC()
 	case !e.LastTimestamp.IsZero():
 		return e.LastTimestamp.UTC()
 	case !e.EventTime.IsZero():
@@ -193,6 +207,10 @@ func eventTime(e *corev1.Event) time.Time {
 		return e.FirstTimestamp.UTC()
 	}
 }
+
+// maxLogRead bounds what is read from the kubelet for one container before MaxBytes is
+// applied, in case a tail window holds a few enormous lines.
+const maxLogRead = 8 << 20
 
 func (w *workloads) WorkloadLogs(ctx context.Context, ref capability.WorkloadRef, opt capability.LogOptions) (*capability.WorkloadLogs, error) {
 	_, sel, err := w.object(ctx, ref)
@@ -203,53 +221,95 @@ func (w *workloads) WorkloadLogs(ctx context.Context, ref capability.WorkloadRef
 	if err != nil {
 		return nil, err
 	}
+	if opt.Pod != "" {
+		i := slices.IndexFunc(pods, func(p corev1.Pod) bool { return p.Name == opt.Pod })
+		if i < 0 {
+			return nil, fmt.Errorf("pod %q is not one of %s %s/%s's pods", opt.Pod, ref.Kind, ref.Namespace, ref.Name)
+		}
+		pods = pods[i : i+1]
+	}
 	out := &capability.WorkloadLogs{Logs: []capability.ContainerLog{}}
 	if opt.MaxPods > 0 && len(pods) > opt.MaxPods {
 		out.PodsOmitted = len(pods) - opt.MaxPods
 		pods = pods[:opt.MaxPods]
 	}
+	used := 0
 	for i := range pods {
 		p := &pods[i]
 		names := []string{opt.Container}
 		if opt.Container == "" {
-			names = names[:0]
-			for _, c := range p.Spec.Containers {
-				names = append(names, c.Name)
-			}
+			names = containerNames(p)
 		}
 		for _, name := range names {
-			out.Logs = append(out.Logs, w.containerLog(ctx, p, name, opt))
+			if opt.TotalBytes > 0 && used >= opt.TotalBytes {
+				out.ContainersOmitted++
+				continue
+			}
+			entry, n := w.containerLog(ctx, p, name, opt)
+			used += n
+			out.Logs = append(out.Logs, entry)
 		}
 	}
 	return out, nil
 }
 
-func (w *workloads) containerLog(ctx context.Context, p *corev1.Pod, container string, opt capability.LogOptions) capability.ContainerLog {
-	entry := capability.ContainerLog{Pod: p.Name, Container: container}
-	found := false
+// containerNames lists init containers first, in the order they run, then the others.
+func containerNames(p *corev1.Pod) []string {
+	var names []string
+	for _, c := range p.Spec.InitContainers {
+		names = append(names, c.Name)
+	}
 	for _, c := range p.Spec.Containers {
-		found = found || c.Name == container
+		names = append(names, c.Name)
 	}
-	if !found {
+	return names
+}
+
+// containerLog reads one container's tail and returns it with the bytes it kept.
+func (w *workloads) containerLog(ctx context.Context, p *corev1.Pod, container string, opt capability.LogOptions) (capability.ContainerLog, int) {
+	entry := capability.ContainerLog{Pod: p.Name, Container: container}
+	if !slices.Contains(containerNames(p), container) {
 		entry.Error = fmt.Sprintf("pod %s has no container %q", p.Name, container)
-		return entry
+		return entry, 0
 	}
+	// No LimitBytes here: the kubelet applies it from the start of the tail window,
+	// which would keep the oldest lines and drop the ones just before a crash.
 	po := &corev1.PodLogOptions{Container: container, Previous: opt.Previous, Timestamps: true}
 	if opt.TailLines > 0 {
 		po.TailLines = &opt.TailLines
 	}
-	if opt.LimitBytes > 0 {
-		po.LimitBytes = &opt.LimitBytes
-	}
-	raw, err := w.c.CoreV1().Pods(p.Namespace).GetLogs(p.Name, po).DoRaw(ctx)
+	stream, err := w.c.CoreV1().Pods(p.Namespace).GetLogs(p.Name, po).Stream(ctx)
 	if err != nil {
 		entry.Error = err.Error()
-		return entry
+		return entry, 0
 	}
-	if text := strings.TrimRight(string(raw), "\n"); text != "" {
-		entry.Lines = strings.Split(text, "\n")
+	defer func() { _ = stream.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(stream, maxLogRead))
+	if err != nil {
+		entry.Error = err.Error()
+		return entry, 0
 	}
-	return entry
+	text, truncated := string(raw), false
+	if opt.MaxBytes > 0 {
+		text, truncated = keepTail(raw, opt.MaxBytes)
+	}
+	entry.Truncated = truncated
+	if t := strings.TrimRight(text, "\n"); t != "" {
+		entry.Lines = strings.Split(t, "\n")
+	}
+	return entry, len(text)
+}
+
+// keepTail returns at most max bytes from the end of b, starting at a line boundary.
+func keepTail(b []byte, max int) (string, bool) {
+	if len(b) <= max {
+		return string(b), false
+	}
+	tail := b[len(b)-max:]
+	if i := bytes.IndexByte(tail, '\n'); i >= 0 {
+		tail = tail[i+1:]
+	}
+	return string(tail), true
 }
 
 func (w *workloads) pods(ctx context.Context, namespace string, selector *metav1.LabelSelector) ([]capability.Pod, error) {

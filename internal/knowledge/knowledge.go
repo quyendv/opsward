@@ -162,7 +162,7 @@ func Load(opt Options) (*Pack, []string, error) {
 		// would otherwise stop at it.
 		root, err := filepath.EvalSymlinks(configured)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("knowledge: %w", err))
+			errs = append(errs, fmt.Errorf("knowledge path %q: %w", configured, err))
 			continue
 		}
 		before := len(files)

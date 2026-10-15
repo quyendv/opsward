@@ -72,11 +72,13 @@ type Event struct {
 
 // LogOptions selects which logs WorkloadLogs reads.
 type LogOptions struct {
-	Container  string // empty: every container
+	Pod        string // empty: every pod of the workload, up to MaxPods
+	Container  string // empty: every init and regular container
 	TailLines  int64
-	Previous   bool  // the container instance before the last restart
-	MaxPods    int   // pods are read in name order; the rest are counted, not read
-	LimitBytes int64 // per container
+	Previous   bool // the container instance before the last restart
+	MaxPods    int  // pods are read in name order; the rest are counted, not read
+	MaxBytes   int  // per container; the newest output is kept, cut at a line boundary
+	TotalBytes int  // across containers; containers past it are counted, not read
 }
 
 // ContainerLog is one container's recent output, or why it could not be read.
@@ -84,13 +86,15 @@ type ContainerLog struct {
 	Pod       string   `json:"pod"`
 	Container string   `json:"container"`
 	Lines     []string `json:"lines,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"` // older lines were dropped to fit MaxBytes
 	Error     string   `json:"error,omitempty"`
 }
 
 // WorkloadLogs is the recent output of a workload's containers.
 type WorkloadLogs struct {
-	Logs        []ContainerLog `json:"logs"`
-	PodsOmitted int            `json:"podsOmitted,omitempty"`
+	Logs              []ContainerLog `json:"logs"`
+	PodsOmitted       int            `json:"podsOmitted,omitempty"`
+	ContainersOmitted int            `json:"containersOmitted,omitempty"` // not read: TotalBytes reached
 }
 
 // Workloads reads workloads in one cluster with one profile's credentials.

@@ -119,21 +119,21 @@ func TestWorkloadLogsTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := src.logOptions; got != (capability.LogOptions{TailLines: 100, MaxPods: 10, LimitBytes: 256 << 10}) {
+	if got := src.logOptions; got != (capability.LogOptions{TailLines: 100, MaxPods: 10, MaxBytes: 256 << 10, TotalBytes: 1 << 20}) {
 		t.Fatalf("defaults = %+v", got)
 	}
 	if b, _ := json.Marshal(out); !strings.Contains(string(b), "boom") {
 		t.Fatalf("Run = %s", b)
 	}
 
-	p, err = tl.Prepare(json.RawMessage(strings.Replace(validArgs, `"name":"api"`, `"name":"api","container":"app","tailLines":20,"previous":true`, 1)))
+	p, err = tl.Prepare(json.RawMessage(strings.Replace(validArgs, `"name":"api"`, `"name":"api","pod":"api-7d9f-a","container":"app","tailLines":20,"previous":true`, 1)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.Run(context.Background(), engine.ProfileReader); err != nil {
 		t.Fatal(err)
 	}
-	if got := src.logOptions; got.Container != "app" || got.TailLines != 20 || !got.Previous {
+	if got := src.logOptions; got.Pod != "api-7d9f-a" || got.Container != "app" || got.TailLines != 20 || !got.Previous {
 		t.Fatalf("options = %+v", got)
 	}
 }

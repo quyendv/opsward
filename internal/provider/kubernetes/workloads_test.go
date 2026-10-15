@@ -346,3 +346,78 @@ func TestSourceUpdateRebuildsOnlyChangedProfiles(t *testing.T) {
 		t.Fatalf("clients built = %v; want the changed reader rebuilt and team reused", built)
 	}
 }
+
+// The kubelet's byte limit keeps the start of the tail window; Opsward keeps its end,
+// where the crash is, cut at a line boundary.
+func TestKeepTail(t *testing.T) {
+	text, truncated := keepTail([]byte("line1\nline2\nline3\n"), 8)
+	if text != "line3\n" || !truncated {
+		t.Fatalf("keepTail = %q, %v", text, truncated)
+	}
+	text, truncated = keepTail([]byte("line1\nline2\n"), 100)
+	if text != "line1\nline2\n" || truncated {
+		t.Fatalf("keepTail under the cap = %q, %v", text, truncated)
+	}
+}
+
+func TestWorkloadLogsTotalBudgetAndPodFilter(t *testing.T) {
+	c := fake.NewClientset(deployment(), twoContainerPod("api-b"), twoContainerPod("api-a"))
+	ref := capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"}
+	w := NewWorkloads(c)
+
+	// "fake logs" is 9 bytes: two containers fill 18 of 20, the third crosses the budget,
+	// the fourth is not read.
+	got, err := w.WorkloadLogs(context.Background(), ref, capability.LogOptions{TailLines: 10, MaxPods: 10, TotalBytes: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Logs) != 3 || got.ContainersOmitted != 1 {
+		t.Fatalf("budget: %d logs, %d omitted", len(got.Logs), got.ContainersOmitted)
+	}
+
+	one, err := w.WorkloadLogs(context.Background(), ref, capability.LogOptions{Pod: "api-b", TailLines: 10, MaxPods: 10})
+	if err != nil || len(one.Logs) != 2 || one.Logs[0].Pod != "api-b" {
+		t.Fatalf("pod filter = %+v, %v", one, err)
+	}
+	if _, err := w.WorkloadLogs(context.Background(), ref, capability.LogOptions{Pod: "other", TailLines: 10, MaxPods: 10}); err == nil || !strings.Contains(err.Error(), "other") {
+		t.Fatalf("foreign pod: err = %v", err)
+	}
+}
+
+func TestWorkloadLogsInitContainers(t *testing.T) {
+	p := pod("api-a", map[string]string{"app": "api"}, false, 0, "")
+	p.Spec.InitContainers = []corev1.Container{{Name: "migrate"}}
+	p.Spec.Containers = []corev1.Container{{Name: "app"}}
+	c := fake.NewClientset(deployment(), p)
+	ref := capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"}
+	all, err := NewWorkloads(c).WorkloadLogs(context.Background(), ref, capability.LogOptions{TailLines: 10, MaxPods: 10})
+	if err != nil || len(all.Logs) != 2 || all.Logs[0].Container != "migrate" {
+		t.Fatalf("default containers = %+v, %v", all, err)
+	}
+	one, _ := NewWorkloads(c).WorkloadLogs(context.Background(), ref, capability.LogOptions{Container: "migrate", TailLines: 10, MaxPods: 10})
+	if len(one.Logs) != 1 || one.Logs[0].Error != "" {
+		t.Fatalf("init container by name = %+v", one)
+	}
+}
+
+// events.k8s.io/v1 producers (the scheduler) set EventTime and Series, not the core
+// timestamps and count.
+func TestWorkloadEventsSeries(t *testing.T) {
+	d := deployment()
+	d.UID = "d1"
+	first := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	e := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "e1", Namespace: "shop"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Deployment", Name: "api", UID: "d1"},
+		Reason:         "FailedScheduling", Type: "Warning",
+		EventTime: metav1.NewMicroTime(first),
+		Series:    &corev1.EventSeries{Count: 7, LastObservedTime: metav1.NewMicroTime(first.Add(time.Hour))},
+	}
+	got, err := NewWorkloads(fake.NewClientset(d, e)).WorkloadEvents(context.Background(), capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"}, 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("events = %+v, %v", got, err)
+	}
+	if got[0].Count != 7 || !got[0].Time.Equal(first.Add(time.Hour)) {
+		t.Fatalf("series event = %+v", got[0])
+	}
+}

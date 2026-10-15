@@ -18,7 +18,8 @@ const (
 	defaultTailLines  = 100
 	maxTailLines      = 1000
 	maxLogPods        = 10
-	maxLogBytes       = 256 << 10
+	maxLogBytes       = 256 << 10 // per container
+	maxLogTotalBytes  = 1 << 20   // per call
 )
 
 type eventsInput struct {
@@ -61,7 +62,8 @@ func WorkloadEvents(src capability.WorkloadSource) (engine.Tool, error) {
 
 type logsInput struct {
 	workloadInput
-	Container string `json:"container,omitempty" jsonschema:"one container; default every container of each pod"`
+	Pod       string `json:"pod,omitempty" jsonschema:"one pod of the workload; default the first 10 pods by name"`
+	Container string `json:"container,omitempty" jsonschema:"one container, init containers included; default every container of each pod"`
 	TailLines int64  `json:"tailLines,omitempty" jsonschema:"lines from the end of each container's log; default 100"`
 	Previous  bool   `json:"previous,omitempty" jsonschema:"read the container instance before its last restart, which holds the crash"`
 }
@@ -70,6 +72,7 @@ type logsInput struct {
 func WorkloadLogs(src capability.WorkloadSource) (engine.Tool, error) {
 	in, err := newInput[logsInput](func(s *jsonschema.Schema) {
 		refineWorkloadInput(s)
+		s.Properties["pod"].MinLength = jsonschema.Ptr(1)
 		s.Properties["container"].MinLength = jsonschema.Ptr(1)
 		s.Properties["tailLines"].Minimum = jsonschema.Ptr(1.0)
 		s.Properties["tailLines"].Maximum = jsonschema.Ptr(float64(maxTailLines))
@@ -79,8 +82,9 @@ func WorkloadLogs(src capability.WorkloadSource) (engine.Tool, error) {
 	}
 	return engine.Tool{
 		Name: "list_workload_logs",
-		Description: "Read the last lines of each container of a workload's pods (at most 10 pods, in name order). " +
-			"Use previous=true for a container in CrashLoopBackOff: the current instance has usually not failed yet.",
+		Description: "Read the last lines of each container (init containers included) of a workload's pods: at most 10 pods " +
+			"in name order, or one pod with pod=. Use previous=true for a container in CrashLoopBackOff: the current " +
+			"instance has usually not failed yet. Long output keeps the newest lines and is marked truncated.",
 		Risk:        core.RiskRead,
 		InputSchema: in.schema,
 		Args:        in.names,
@@ -90,8 +94,8 @@ func WorkloadLogs(src capability.WorkloadSource) (engine.Tool, error) {
 				return nil, err
 			}
 			opt := capability.LogOptions{
-				Container: v.Container, TailLines: v.TailLines, Previous: v.Previous,
-				MaxPods: maxLogPods, LimitBytes: maxLogBytes,
+				Pod: v.Pod, Container: v.Container, TailLines: v.TailLines, Previous: v.Previous,
+				MaxPods: maxLogPods, MaxBytes: maxLogBytes, TotalBytes: maxLogTotalBytes,
 			}
 			if opt.TailLines == 0 {
 				opt.TailLines = defaultTailLines
