@@ -21,8 +21,8 @@ import (
 
 // Profile names used when the authorizing binding names none.
 const (
-	ProfileReader   = "reader"
-	ProfileOperator = "operator"
+	ProfileReader   = core.ProfileReader
+	ProfileOperator = core.ProfileOperator
 )
 
 // Tool is a named operation with typed arguments and a declared risk class.

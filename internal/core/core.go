@@ -41,6 +41,14 @@ func (e Effect) Valid() bool {
 	return false
 }
 
+// Profiles a call runs with when the binding that authorized it names none: read tools
+// use ProfileReader, every other tool ProfileOperator. ProfileReader also reads target
+// labels for policy.
+const (
+	ProfileReader   = "reader"
+	ProfileOperator = "operator"
+)
+
 // DefaultDenyRule names the decision taken when no binding matches.
 const DefaultDenyRule = "default-deny"
 

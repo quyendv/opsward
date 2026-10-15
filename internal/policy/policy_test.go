@@ -250,3 +250,38 @@ func TestDecideUnknownLabelsFailClosed(t *testing.T) {
 		})
 	}
 }
+
+// A binding without a profile runs read tools as "reader" and others as "operator";
+// a config whose environment lacks them would validate and then fail on every call.
+func TestCompileRequiresDefaultProfiles(t *testing.T) {
+	cat := Catalog{Tools: testCatalog.Tools, Environments: map[string][]string{"dev": {"viewer"}}}
+	roles := map[string]Role{
+		"viewer":    {Risk: []core.Risk{core.RiskRead}},
+		"restarter": {Tools: []string{"restart_workload"}},
+	}
+	_, _, err := Compile(Config{Roles: roles, Bindings: []Binding{{Name: "b", Role: "viewer"}}}, cat, nil)
+	if err == nil || !strings.Contains(err.Error(), `needs profile "reader" in environment "dev"`) {
+		t.Fatalf("err = %v", err)
+	}
+	_, _, err = Compile(Config{Roles: roles, Bindings: []Binding{{Name: "b", Role: "restarter"}}}, cat, nil)
+	if err == nil || !strings.Contains(err.Error(), `needs profile "operator" in environment "dev"`) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, _, err := Compile(Config{Roles: roles, Bindings: []Binding{{Name: "b", Role: "viewer", Profile: "viewer"}}}, cat, nil); err != nil {
+		t.Fatalf("an explicit profile should satisfy the check: %v", err)
+	}
+}
+
+func TestCompileWarnsWhenAppsCannotBeResolved(t *testing.T) {
+	cat := Catalog{Tools: testCatalog.Tools, Environments: map[string][]string{"dev": {"viewer"}}}
+	_, warnings, err := Compile(Config{
+		Roles:    map[string]Role{"viewer": {Risk: []core.Risk{core.RiskRead}}},
+		Bindings: []Binding{{Name: "b", Role: "viewer", Profile: "viewer", Scope: ScopeSelector{Apps: []string{"shop"}}}},
+	}, cat, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(warnings, "\n"), `labels are read with the "reader" profile`) {
+		t.Fatalf("warnings = %v", warnings)
+	}
+}

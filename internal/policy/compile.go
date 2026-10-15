@@ -108,11 +108,24 @@ func Compile(cfg Config, cat Catalog, log *slog.Logger) (*Policy, []string, erro
 				}
 			}
 		}
-		if b.Profile != "" {
-			for envName, profiles := range cat.Environments {
-				if anyGlob(b.Scope.Environments, envName) && !slices.Contains(profiles, b.Profile) {
-					fail("%s: profile %q is not declared for environment %q", where, b.Profile, envName)
+		for envName, profiles := range cat.Environments {
+			if !anyGlob(b.Scope.Environments, envName) {
+				continue
+			}
+			if b.Profile != "" && !slices.Contains(profiles, b.Profile) {
+				fail("%s: profile %q is not declared for environment %q", where, b.Profile, envName)
+			}
+			if b.Profile == "" {
+				for _, need := range defaultProfiles(role, cat) {
+					if !slices.Contains(profiles, need) {
+						fail("%s: needs profile %q in environment %q, or name another with profile:", where, need, envName)
+					}
 				}
+			}
+			if len(b.Scope.Apps) > 0 && !slices.Contains(profiles, core.ProfileReader) {
+				warnings = append(warnings, fmt.Sprintf(
+					"%s: apps labels are read with the %q profile, which environment %q does not declare; they will always be unknown",
+					where, core.ProfileReader, envName))
 			}
 		}
 
@@ -132,6 +145,25 @@ func Compile(cfg Config, cat Catalog, log *slog.Logger) (*Policy, []string, erro
 		return nil, warnings, errors.Join(errs...)
 	}
 	return p, warnings, nil
+}
+
+// defaultProfiles returns the profiles the role's registered tools run with when a
+// binding names none.
+func defaultProfiles(r Role, cat Catalog) []string {
+	var out []string
+	for name, t := range cat.Tools {
+		if !r.contains(name, t.Risk) {
+			continue
+		}
+		need := core.ProfileOperator
+		if t.Risk == core.RiskRead {
+			need = core.ProfileReader
+		}
+		if !slices.Contains(out, need) {
+			out = append(out, need)
+		}
+	}
+	return out
 }
 
 func grantsDestructive(r Role, cat Catalog) bool {
