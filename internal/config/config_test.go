@@ -337,3 +337,16 @@ func TestBackendURLMustNotCarryCredentialsOrQuery(t *testing.T) {
 		}
 	}
 }
+
+// Warnings are logged on every reload; they name a missing credential file by its field,
+// never by its path.
+func TestBackendWarningsDoNotNameCredentialPaths(t *testing.T) {
+	c, err := Parse([]byte(withBackends(minimal, "\n  metrics: { type: prometheus, url: https://m.example.com, auth: { basic: { username: u, passwordFile: /run/secrets/metrics-password } } }\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := strings.Join(c.Warnings(), "\n")
+	if strings.Contains(w, "/run/secrets/metrics-password") || !strings.Contains(w, "auth.basic.passwordFile does not exist") {
+		t.Fatalf("warnings = %s", w)
+	}
+}

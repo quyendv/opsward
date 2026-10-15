@@ -114,10 +114,11 @@ type BasicAuth struct {
 	PasswordFile string `yaml:"passwordFile"`
 }
 
-func (b *Backend) files() []string {
-	out := []string{b.Auth.BearerTokenFile, b.CAFile}
+// files maps each referenced file's field name to its path.
+func (b *Backend) files() map[string]string {
+	out := map[string]string{"auth.bearerTokenFile": b.Auth.BearerTokenFile, "caFile": b.CAFile}
 	if b.Auth.Basic != nil {
-		out = append(out, b.Auth.Basic.PasswordFile)
+		out["auth.basic.passwordFile"] = b.Auth.Basic.PasswordFile
 	}
 	return out
 }
@@ -354,12 +355,14 @@ func (c *Config) Warnings() []string {
 		if strings.HasPrefix(b.URL, "http://") && (b.Auth.BearerTokenFile != "" || b.Auth.Basic != nil) {
 			out = append(out, fmt.Sprintf("providers.%s sends credentials over plain http", name))
 		}
-		for _, f := range b.files() {
+		// Warnings are logged on every reload: they name the field, not the path, which
+		// for a credential file is better kept out of logs.
+		for field, f := range b.files() {
 			if f == "" || strings.HasPrefix(f, "~") {
 				continue
 			}
 			if _, err := os.Stat(f); err != nil {
-				out = append(out, fmt.Sprintf("providers.%s: %q does not exist here", name, f))
+				out = append(out, fmt.Sprintf("providers.%s.%s does not exist here", name, field))
 			}
 		}
 	}
@@ -430,9 +433,9 @@ func (c *Config) validateBackend(name string, b *Backend, wantType string, fail 
 	if b.Auth.Basic != nil && (b.Auth.Basic.Username == "" || b.Auth.Basic.PasswordFile == "") {
 		fail("providers.%s.auth.basic: username and passwordFile is required", name)
 	}
-	for _, f := range b.files() {
+	for field, f := range b.files() {
 		if strings.HasPrefix(f, "~") {
-			fail("providers.%s: %q: ~ is not expanded, use an absolute path", name, f)
+			fail("providers.%s.%s: ~ is not expanded, use an absolute path", name, field)
 		}
 	}
 }
