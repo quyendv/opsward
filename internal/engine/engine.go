@@ -160,6 +160,9 @@ func (e *Engine) Tools() []Tool {
 // path through it, including denials and failures, writes an audit record.
 func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args json.RawMessage) (any, error) {
 	start := e.now()
+	// A client that cancels or disconnects must not erase the record of what it
+	// asked for; the audit writer's own timeout bounds these writes.
+	actx := context.WithoutCancel(ctx)
 	rec := audit.Record{Phase: audit.PhaseOutcome, Principal: p, Tool: name}
 	finish := func(status string, cause error) error {
 		rec.Outcome = &audit.Outcome{Status: status, DurationMs: e.now().Sub(start).Milliseconds()}
@@ -168,7 +171,7 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 			out = &redactedError{msg: redact.String(cause.Error()), cause: cause}
 			rec.Outcome.Error = out.Error()
 		}
-		if _, err := e.audit.Write(ctx, rec); err != nil {
+		if _, err := e.audit.Write(actx, rec); err != nil {
 			e.log.Error("audit write failed", "tool", name, "error", err)
 			return errors.Join(out, ErrAuditUnavailable)
 		}
@@ -217,7 +220,7 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	if tool.Risk != core.RiskRead {
 		intent := rec
 		intent.Phase = audit.PhaseIntent
-		if _, err := e.audit.Write(ctx, intent); err != nil {
+		if _, err := e.audit.Write(actx, intent); err != nil {
 			e.log.Error("audit intent write failed; refusing the call", "tool", name, "error", err)
 			return nil, finish(audit.StatusError, ErrAuditUnavailable)
 		}

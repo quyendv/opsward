@@ -22,14 +22,16 @@ func allowAll(core.Request) core.Decision {
 }
 
 type recordingAuditor struct {
-	mu      sync.Mutex
-	records []audit.Record
-	failOn  audit.Phase
+	mu        sync.Mutex
+	records   []audit.Record
+	failOn    audit.Phase
+	ctxErrors []error
 }
 
-func (a *recordingAuditor) Write(_ context.Context, r audit.Record) (audit.Record, error) {
+func (a *recordingAuditor) Write(ctx context.Context, r audit.Record) (audit.Record, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.ctxErrors = append(a.ctxErrors, ctx.Err())
 	if a.failOn != "" && r.Phase == a.failOn {
 		return audit.Record{}, errors.New("audit sink down")
 	}
@@ -335,6 +337,23 @@ func TestInvokeRedactsReturnedErrors(t *testing.T) {
 }
 
 var errSentinel = errors.New("sentinel")
+
+func TestInvokeAuditsACancelledCall(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskWrite}
+	aud := &recordingAuditor{}
+	e := newEngine(t, ft, allowAll, aud)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = e.Invoke(ctx, alice, "do_thing", json.RawMessage(goodArgs))
+	if len(aud.ctxErrors) != 2 {
+		t.Fatalf("audit writes = %d, want intent and outcome", len(aud.ctxErrors))
+	}
+	for i, err := range aud.ctxErrors {
+		if err != nil {
+			t.Fatalf("audit write %d got a cancelled context (%v): a client that disconnects must not erase the record", i, err)
+		}
+	}
+}
 
 func TestNewRejectsDuplicateTools(t *testing.T) {
 	ft := &fakeTool{risk: core.RiskRead}
