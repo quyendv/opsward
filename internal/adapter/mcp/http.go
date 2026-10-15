@@ -119,6 +119,10 @@ func newHTTPHandler(e *engine.Engine, opt HTTPOptions, stop context.Context) htt
 		})
 		mux.Handle("/.well-known/oauth-protected-resource", meta)
 		mux.Handle("/.well-known/oauth-protected-resource/mcp", meta)
+		// Where RFC 9728 puts it for a resource behind a path, such as a shared host.
+		if u, err := url.Parse(r.URL); err == nil && u.Path != "/mcp" && u.Path != "" {
+			mux.Handle("/.well-known/oauth-protected-resource"+u.Path, meta)
+		}
 		challenge = fmt.Sprintf("Bearer resource_metadata=%q", metadataURL(r.URL))
 		if len(r.Scopes) > 0 {
 			challenge += fmt.Sprintf(", scope=%q", strings.Join(r.Scopes, " "))

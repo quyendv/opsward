@@ -3,6 +3,7 @@ package config
 import (
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -32,13 +33,24 @@ func (o *OIDC) GroupsPrefixOrDefault() string {
 	return *o.GroupsPrefix
 }
 
-// ResourceURL is the MCP endpoint as clients reach it, or "" without a publicURL.
+// ResourceURL is the MCP endpoint as clients reach it, or "" without a publicURL. Scheme
+// and host are lowercased, as clients write them in the resource indicator that becomes a
+// token's audience.
 func (c *Config) ResourceURL() string {
 	if c.Server.HTTP == nil || c.Server.HTTP.PublicURL == "" {
 		return ""
 	}
-	return strings.TrimSuffix(c.Server.HTTP.PublicURL, "/") + "/mcp"
+	u, err := url.Parse(c.Server.HTTP.PublicURL)
+	if err != nil {
+		return ""
+	}
+	u.Scheme, u.Host = strings.ToLower(u.Scheme), strings.ToLower(u.Host)
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/mcp"
+	return u.String()
 }
+
+// scopeToken is RFC 6749's scope-token: printable ASCII except space, " and \.
+var scopeToken = regexp.MustCompile(`^[\x21\x23-\x5B\x5D-\x7E]+$`)
 
 func (c *Config) oidcDefaults() {
 	o := c.Identity.OIDC
@@ -75,6 +87,11 @@ func (c *Config) validateOIDC(fail func(string, ...any)) {
 	}
 	if o.Audience == "" {
 		fail("identity.oidc.audience is required")
+	}
+	for _, s := range o.Scopes {
+		if !scopeToken.MatchString(s) {
+			fail("identity.oidc.scopes: %q is not a scope token (printable ASCII without spaces, quotes or backslashes)", s)
+		}
 	}
 	if strings.TrimSpace(o.SubjectClaim) == "" || strings.TrimSpace(o.GroupsClaim) == "" {
 		fail("identity.oidc.subjectClaim and groupsClaim must not be blank")
