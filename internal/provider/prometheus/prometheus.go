@@ -94,7 +94,7 @@ func (m *metrics) Query(ctx context.Context, namespace string, q capability.Metr
 	} else if !q.Time.IsZero() {
 		params.Set("time", unix(q.Time))
 	}
-	body, err := m.s.client.Get(ctx, path, params)
+	body, err := m.s.client.Post(ctx, path, params)
 	if err != nil {
 		return nil, fmt.Errorf("metrics: %w", err)
 	}

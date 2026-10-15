@@ -20,8 +20,10 @@ const (
 	maxWindow       = 24 * time.Hour
 	pointsPerSeries = 60
 	maxQueryLength  = 4096
-	defaultLogLines = 100
-	maxLogLines     = 1000
+	// LogQL goes over GET: 2048 characters stay under common 8 KB URL limits once encoded.
+	maxLogQueryLength = 2048
+	defaultLogLines   = 100
+	maxLogLines       = 1000
 )
 
 // window parses a range such as "30m" or "6h"; empty means the default.
@@ -126,7 +128,7 @@ func QueryLogs(src capability.LogsSource) (engine.Tool, error) {
 	in, err := newInput[queryLogsInput](func(s *jsonschema.Schema) {
 		refineNamespaceInput(s)
 		s.Properties["query"].MinLength = jsonschema.Ptr(1)
-		s.Properties["query"].MaxLength = jsonschema.Ptr(maxQueryLength)
+		s.Properties["query"].MaxLength = jsonschema.Ptr(maxLogQueryLength)
 		s.Properties["limit"].Minimum = jsonschema.Ptr(1.0)
 		s.Properties["limit"].Maximum = jsonschema.Ptr(float64(maxLogLines))
 	})

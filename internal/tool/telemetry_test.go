@@ -190,3 +190,12 @@ func TestRequestsAndLimitsReportErrors(t *testing.T) {
 		t.Fatalf("result = %+v", r)
 	}
 }
+
+// LogQL still goes over GET, so its query is kept under common 8 KB URL limits.
+func TestQueryLogsLengthLimit(t *testing.T) {
+	tl, _ := QueryLogs(&fakeLogs{})
+	long, _ := json.Marshal(map[string]string{"environment": "production", "namespace": "shop", "query": "{a=\"b\"} |= \"" + strings.Repeat("x", 2048) + "\""})
+	if _, err := tl.Prepare(long); err == nil {
+		t.Fatal("a query over 2048 characters was accepted")
+	}
+}

@@ -24,7 +24,10 @@ type fakeProm struct {
 }
 
 func (f *fakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("query")
+	if r.Method != http.MethodPost {
+		f.t.Errorf("method = %s, want POST", r.Method)
+	}
+	q := r.FormValue("query")
 	f.queries = append(f.queries, q)
 	f.paths = append(f.paths, r.URL.Path)
 	if !strings.Contains(q, `namespace="shop"`) || !strings.Contains(q, `cluster="prod-a"`) {

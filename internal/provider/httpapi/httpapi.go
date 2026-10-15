@@ -71,6 +71,23 @@ func (c *Client) Get(ctx context.Context, path string, query url.Values) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	return c.do(req, path)
+}
+
+// Post sends form as an application/x-www-form-urlencoded body, which keeps long queries
+// out of the URL, where proxies limit the length.
+func (c *Client) Post(ctx context.Context, path string, form url.Values) ([]byte, error) {
+	u := *c.base
+	u.Path = strings.TrimSuffix(u.Path, "/") + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return c.do(req, path)
+}
+
+func (c *Client) do(req *http.Request, path string) ([]byte, error) {
 	if c.opt.Tenant != "" {
 		req.Header.Set("X-Scope-OrgID", c.opt.Tenant)
 	}
