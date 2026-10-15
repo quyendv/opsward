@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -398,6 +399,9 @@ func (c *Config) RestartRequired(next *Config) []string {
 	return out
 }
 
+// labelName is the label syntax both Prometheus and Loki accept unquoted.
+var labelName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
 func (c *Config) validateBackend(name string, b *Backend, wantType string, fail func(string, ...any)) {
 	if b == nil {
 		return
@@ -425,6 +429,11 @@ func (c *Config) validateBackend(name string, b *Backend, wantType string, fail 
 		}
 		if len(clusters) > 1 {
 			fail("providers.%s.clusterLabel is required when environments use more than one cluster: without it a query cannot be limited to one cluster", name)
+		}
+	}
+	for field, label := range map[string]string{"namespaceLabel": b.NamespaceLabel, "clusterLabel": b.ClusterLabel} {
+		if label != "" && !labelName.MatchString(label) {
+			fail("providers.%s.%s: %q is not a valid label name ([a-zA-Z_][a-zA-Z0-9_]*)", name, field, label)
 		}
 	}
 	if b.Auth.BearerTokenFile != "" && b.Auth.Basic != nil {
