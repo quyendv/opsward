@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -63,8 +64,24 @@ func handler(e *engine.Engine, p core.Principal, name string) mcp.ToolHandler {
 		if err != nil {
 			return errorResult(fmt.Sprintf("encode result: %v", err)), nil
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}, nil
+		content := []mcp.Content{&mcp.TextContent{Text: string(b)}}
+		if len(res.Notes) > 0 {
+			content = append(content, &mcp.TextContent{Text: notesText(res.Notes)})
+		}
+		return &mcp.CallToolResult{Content: content}, nil
 	}
+}
+
+// notesText renders attached knowledge after the result, in a separate block so that the
+// result itself stays plain JSON.
+func notesText(notes []core.Note) string {
+	var b strings.Builder
+	b.WriteString("Knowledge that may apply to this result:\n")
+	for _, n := range notes {
+		fmt.Fprintf(&b, "- [%s] %s (id: %s): %s\n", n.Severity, n.Title, n.ID, n.Summary)
+	}
+	b.WriteString("Read a document in full with get_knowledge.")
+	return b.String()
 }
 
 func errorResult(msg string) *mcp.CallToolResult {

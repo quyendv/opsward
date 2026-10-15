@@ -113,3 +113,41 @@ func TestCallAllowedAndDenied(t *testing.T) {
 		t.Fatalf("audited principals = %+v", aud.principals)
 	}
 }
+
+type noteAll struct{}
+
+func (noteAll) Annotate(core.Request, any) []core.Note {
+	return []core.Note{{ID: "crashloop-backoff", Title: "Crash loop", Severity: "warning", Summary: "Read the previous logs."}}
+}
+
+func TestCallSendsNotesAsASecondBlock(t *testing.T) {
+	e, err := engine.New(engine.Options{
+		Tools:        []engine.Tool{echoTool()},
+		Environments: []engine.Environment{{Name: "staging", Namespaces: []string{"*"}}},
+		Authorizer:   authorizerFunc(func(core.Request) core.Decision { return core.Decision{Effect: core.EffectAllow} }),
+		Auditor:      &nopAuditor{}, Annotator: noteAll{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := NewServer(e, core.Principal{Subject: "me", Adapter: AdapterStdio}).Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cs.Close() }()
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"name": "api"}})
+	if err != nil || res.IsError || len(res.Content) != 2 {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	notes := res.Content[1].(*mcp.TextContent).Text
+	for _, want := range []string{"[warning] Crash loop", "crashloop-backoff", "Read the previous logs.", "get_knowledge"} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("notes %q missing %q", notes, want)
+		}
+	}
+}
