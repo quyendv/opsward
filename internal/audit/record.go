@@ -34,6 +34,7 @@ const (
 )
 
 // Record is one audit entry. Writer, Seq, Prev and Hash are set by the Writer.
+// Its JSON shape is part of every stored hash; see TestRecordHashIsStable.
 type Record struct {
 	ID         string         `json:"id"`
 	Writer     string         `json:"writer"`
