@@ -1,0 +1,19 @@
+/bin/
+/dist/
+/coverage.*
+*.test
+*.out
+
+# Maintainers' private working notes: discussion, open questions, drafts
+/.local/
+
+# Local configuration, credentials and editor state
+.env
+.env.*
+!.env.example
+*.kubeconfig
+/config.local.*
+.idea/
+.vscode/
+.DS_Store
+.claude/settings.local.json

@@ -1,0 +1,64 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - depguard
+    - errname
+    - errorlint
+    - exhaustive
+    - gocritic
+    - gosec
+    - misspell
+    - noctx
+    - nolintlint
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+  settings:
+    depguard:
+      rules:
+        # Tools act through typed provider clients. A shell-out would be a free-form
+        # command channel that no policy can reason about.
+        no-exec:
+          files: ["$all"]
+          deny:
+            - pkg: os/exec
+              desc: Opsward never shells out; see AGENTS.md "Invariants"
+        # The engine must not depend on any one client protocol.
+        mcp-at-the-edge:
+          files:
+            - "$all"
+            - "!**/internal/adapter/mcp/**"
+          deny:
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: only internal/adapter/mcp may import the MCP SDK
+        stdlib-errors:
+          files: ["$all"]
+          deny:
+            - pkg: github.com/pkg/errors
+              desc: use errors and fmt.Errorf with %w
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      rules:
+        - name: exported
+          arguments: [disableStutteringCheck]
+  exclusions:
+    presets:
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/quyendv/opsward
