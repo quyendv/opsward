@@ -67,12 +67,9 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	return b.base.RoundTrip(r)
 }
 
-func httpClient(t *testing.T, url, token string, base http.RoundTripper) *mcp.ClientSession {
+func httpClient(t *testing.T, url, token string) *mcp.ClientSession {
 	t.Helper()
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	tr := &mcp.StreamableClientTransport{Endpoint: url, HTTPClient: &http.Client{Transport: bearer{token, base}}}
+	tr := &mcp.StreamableClientTransport{Endpoint: url, HTTPClient: &http.Client{Transport: bearer{token, http.DefaultTransport}}}
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(context.Background(), tr, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -86,7 +83,7 @@ func TestHTTPCallsRunAsTheTokensPrincipal(t *testing.T) {
 	srv := httptest.NewServer(NewHTTPHandler(httpEngine(t, aud), HTTPOptions{Authenticate: tokens(map[string]string{"ta": "alice@example.com", "tb": "bob@example.com"})}))
 	defer srv.Close()
 	for _, tok := range []string{"ta", "tb"} {
-		cs := httpClient(t, srv.URL+"/mcp", tok, nil)
+		cs := httpClient(t, srv.URL+"/mcp", tok)
 		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"name": "api"}})
 		if err != nil || res.IsError {
 			t.Fatalf("call with %s = %+v, %v", tok, res, err)
@@ -105,7 +102,12 @@ func TestHTTPCallsRunAsTheTokensPrincipal(t *testing.T) {
 
 func post(t *testing.T, url string, header map[string]string) (int, string) {
 	t.Helper()
-	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	return postBody(t, url, header, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+}
+
+func postBody(t *testing.T, url string, header map[string]string, body string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	for k, v := range header {
@@ -190,7 +192,7 @@ func TestServeHTTPStopsWhenContextEnds(t *testing.T) {
 	go func() {
 		done <- ServeHTTP(ctx, ln, httpEngine(t, &nopAuditor{}), HTTPOptions{Authenticate: tokens(map[string]string{"ta": "a"})})
 	}()
-	cs := httpClient(t, "http://"+ln.Addr().String()+"/mcp", "ta", nil)
+	cs := httpClient(t, "http://"+ln.Addr().String()+"/mcp", "ta")
 	if _, err := cs.ListTools(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}

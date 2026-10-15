@@ -21,11 +21,15 @@ const AdapterStdio = "mcp-stdio"
 
 // NewServer registers every engine tool on a new MCP server. Every call is made as p.
 func NewServer(e *engine.Engine, p core.Principal) *mcp.Server {
-	return newServer(e, func(*mcp.CallToolRequest) (core.Principal, error) { return p, nil })
+	return newServer(e, func(*mcp.CallToolRequest) (core.Principal, error) { return p, nil }, nil)
 }
 
-// newServer registers every engine tool; principal names the caller of each call.
-func newServer(e *engine.Engine, principal func(*mcp.CallToolRequest) (core.Principal, error)) *mcp.Server {
+// callContext derives the context a call runs with.
+type callContext func(context.Context) (context.Context, context.CancelFunc)
+
+// newServer registers every engine tool; principal names the caller of each call, and
+// callCtx, when set, bounds it.
+func newServer(e *engine.Engine, principal func(*mcp.CallToolRequest) (core.Principal, error), callCtx callContext) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "opsward", Version: version.Version}, nil)
 	for _, t := range e.Tools() {
 		s.AddTool(&mcp.Tool{
@@ -33,7 +37,7 @@ func newServer(e *engine.Engine, principal func(*mcp.CallToolRequest) (core.Prin
 			Description: t.Description,
 			InputSchema: t.InputSchema,
 			Annotations: annotations(t.Risk),
-		}, handler(e, principal, t.Name))
+		}, handler(e, principal, callCtx, t.Name))
 	}
 	return s
 }
@@ -58,8 +62,13 @@ func annotations(r core.Risk) *mcp.ToolAnnotations {
 	}
 }
 
-func handler(e *engine.Engine, principal func(*mcp.CallToolRequest) (core.Principal, error), name string) mcp.ToolHandler {
+func handler(e *engine.Engine, principal func(*mcp.CallToolRequest) (core.Principal, error), callCtx callContext, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if callCtx != nil {
+			var cancel context.CancelFunc
+			ctx, cancel = callCtx(ctx)
+			defer cancel()
+		}
 		p, err := principal(req)
 		if err != nil {
 			return errorResult(err.Error()), nil
