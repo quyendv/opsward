@@ -26,6 +26,7 @@ type searchInput struct {
 func SearchKnowledge(lib *knowledge.Library) (engine.Tool, error) {
 	in, err := newInput[searchInput](func(s *jsonschema.Schema) {
 		s.Properties["query"].MinLength = jsonschema.Ptr(1)
+		s.Properties["query"].MaxLength = jsonschema.Ptr(256)
 		s.Properties["limit"].Minimum = jsonschema.Ptr(1.0)
 		s.Properties["limit"].Maximum = jsonschema.Ptr(float64(maxSearchLimit))
 	})

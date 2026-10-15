@@ -180,3 +180,32 @@ func TestRestartRequired(t *testing.T) {
 		})
 	}
 }
+
+// Equivalent identity, storage and audit sections must not force a restart (#10).
+func TestRestartRequiredIgnoresEquivalentForms(t *testing.T) {
+	doc := strings.Replace(minimal, "groups: [admin]", "groups: [admin, ops]", 1)
+	base, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, next := range map[string]string{
+		"reordered groups":         strings.Replace(doc, "groups: [admin, ops]", "groups: [ops, admin]", 1),
+		"duplicate group":          strings.Replace(doc, "groups: [admin, ops]", "groups: [ops, admin, ops]", 1),
+		"retention as 90d spelled": strings.Replace(doc, "  path: /var/lib/opsward/opsward.db", "  path: /var/lib/opsward/opsward.db\n  auditRetention: 2160h", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, err := Parse([]byte(next))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := base.RestartRequired(c); len(got) != 0 {
+				t.Fatalf("RestartRequired = %v, want none", got)
+			}
+		})
+	}
+	empty, _ := Parse([]byte(strings.Replace(minimal, "groups: [admin]", "groups: []", 1)))
+	omitted, _ := Parse([]byte(strings.Replace(minimal, ", groups: [admin]", "", 1)))
+	if got := empty.RestartRequired(omitted); len(got) != 0 {
+		t.Fatalf("empty vs omitted groups: %v", got)
+	}
+}

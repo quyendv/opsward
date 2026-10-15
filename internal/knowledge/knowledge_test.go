@@ -1,8 +1,10 @@
 package knowledge
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -277,5 +279,66 @@ func TestBuiltinNotesOnStatusDetails(t *testing.T) {
 	unscheduled := map[string]any{"pods": []any{map[string]any{"name": "a", "phase": "Pending"}}}
 	if got := ids(unscheduled); got != "failed-scheduling" {
 		t.Fatalf("unscheduled notes = %q", got)
+	}
+}
+
+// Issue #5: a query word finds the same word in another inflection or in camel case.
+func TestTokensMatchAcrossInflections(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"images", "image"},
+		{"schedule", "scheduling"},
+		{"liveness", "liveness"},
+		{"oom killed", "OOMKilled"},
+		{"crashes", "crashing"},
+		{"pulled", "pull"},
+		{"processes", "process"},
+	} {
+		q, d := tokens(pair[0]), tokens(pair[1])
+		for _, w := range d {
+			if !slices.Contains(q, w) {
+				t.Errorf("tokens(%q) = %v does not contain %q from tokens(%q) = %v", pair[0], q, w, pair[1], d)
+			}
+		}
+	}
+}
+
+// Issue #6: the default summary skips headings, and pack files have a size limit.
+func TestSummarySkipsHeadings(t *testing.T) {
+	d, err := parse("x.md", []byte("---\nid: a\ntitle: b\n---\n# A heading\n\nThe real summary.\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Summary != "The real summary." {
+		t.Fatalf("summary = %q", d.Summary)
+	}
+}
+
+func TestLoadRejectsOversizedFiles(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "huge.md", crashDoc+strings.Repeat("x", maxDocBytes))
+	_, _, err := Load(Options{Paths: []string{dir}})
+	if err == nil || !strings.Contains(err.Error(), "huge.md") || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Issue #8: conditions share one cost budget per call; once it is spent, the remaining
+// conditional documents are not evaluated.
+func TestAnnotateStopsAtTheCostBudget(t *testing.T) {
+	dir := t.TempDir()
+	for i := range 5 {
+		write(t, dir, fmt.Sprintf("d%d.md", i), fmt.Sprintf("---\nid: d%d\ntitle: t\napplies-to:\n  tools: [x]\n  when: '[1,2,3,4,5,6,7,8,9,10].all(v, v > 0)'\n---\nbody\n", i))
+	}
+	pack, _, err := Load(Options{Paths: []string{dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(pack.Annotate(request("x"), nil)); n != 5 {
+		t.Fatalf("default budget: %d notes, want 5", n)
+	}
+	defer func(b uint64) { annotateBudget = b }(annotateBudget)
+	annotateBudget = 1
+	if n := len(pack.Annotate(request("x"), nil)); n != 1 {
+		t.Fatalf("budget 1: %d notes, want only the first document evaluated", n)
 	}
 }

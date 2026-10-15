@@ -227,3 +227,35 @@ func eventually(t *testing.T, ok func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// Issue #3: a change written between parsing the configuration and Open is applied, because
+// Open records the hash of what was parsed, not of the file as it is when Open runs.
+func TestWatchAppliesAChangeMadeDuringStartUp(t *testing.T) {
+	dir := t.TempDir()
+	f := &fixture{t: t, path: filepath.Join(dir, "opsward.yaml"), db: filepath.Join(dir, "o.db")}
+	f.write("nobody", "")
+	parsed, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.write("team-a", "") // the change lands before Open
+	cluster := fake.NewClientset(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop"}})
+	a, err := Open(context.Background(), cfg, Options{
+		Stderr:        &strings.Builder{},
+		ClientFactory: func(kubernetes.Profile) (k8s.Interface, error) { return cluster, nil },
+		ConfigPath:    f.path,
+		ConfigHash:    ContentHash(parsed),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	f.app = a
+	_, stop := watch(t, f, 20*time.Millisecond)
+	defer stop()
+	eventually(t, func() bool { return f.call("get_workload_status", statusArgs) == nil })
+}

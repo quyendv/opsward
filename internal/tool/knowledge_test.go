@@ -74,3 +74,15 @@ func TestGetKnowledge(t *testing.T) {
 		t.Fatalf("unknown id: err = %v", err)
 	}
 }
+
+// Issue #7: the query is bounded.
+func TestSearchKnowledgeQueryLength(t *testing.T) {
+	tl, err := SearchKnowledge(library(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	long, _ := json.Marshal(map[string]string{"query": strings.Repeat("a", 257)})
+	if _, err := tl.Prepare(long); err == nil {
+		t.Fatal("a 257-character query was accepted")
+	}
+}

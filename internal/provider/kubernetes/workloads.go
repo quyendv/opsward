@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -140,6 +141,7 @@ func (w *workloads) WorkloadEvents(ctx context.Context, ref capability.WorkloadR
 		return nil, err
 	}
 	uids := map[types.UID]bool{meta.GetUID(): true}
+	var rsNames []string
 	if ref.Kind == "Deployment" {
 		// FailedCreate (quota, admission) is reported on the ReplicaSet.
 		s, err := metav1.LabelSelectorAsSelector(sel)
@@ -153,6 +155,7 @@ func (w *workloads) WorkloadEvents(ctx context.Context, ref capability.WorkloadR
 		for i := range rss.Items {
 			if metav1.IsControlledBy(&rss.Items[i], meta) {
 				uids[rss.Items[i].UID] = true
+				rsNames = append(rsNames, rss.Items[i].Name)
 			}
 		}
 	}
@@ -163,14 +166,26 @@ func (w *workloads) WorkloadEvents(ctx context.Context, ref capability.WorkloadR
 	for i := range pods {
 		uids[pods[i].UID] = true
 	}
-	list, err := w.c.CoreV1().Events(ref.Namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("list events: %w", err)
+	// Pods that no longer exist, such as the old pods of a failed rollout, are matched by
+	// the controller's naming scheme, since their UIDs are gone.
+	owned := ownedPodNames(ref.Kind, ref.Name, rsNames)
+	var items []corev1.Event
+	opts := metav1.ListOptions{Limit: eventPageSize}
+	for {
+		list, err := w.c.CoreV1().Events(ref.Namespace).List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("list events: %w", err)
+		}
+		items = append(items, list.Items...)
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
 	}
 	out := []capability.Event{}
-	for i := range list.Items {
-		e := &list.Items[i]
-		if !uids[e.InvolvedObject.UID] {
+	for i := range items {
+		e := &items[i]
+		if !uids[e.InvolvedObject.UID] && (e.InvolvedObject.Kind != "Pod" || !owned(e.InvolvedObject.Name)) {
 			continue
 		}
 		out = append(out, capability.Event{
@@ -188,6 +203,36 @@ func (w *workloads) WorkloadEvents(ctx context.Context, ref capability.WorkloadR
 
 // eventTime prefers the newest observation: events.k8s.io/v1 producers, such as the
 // scheduler, set EventTime and Series instead of the core timestamps.
+// eventPageSize is the page size for listing a namespace's events.
+const eventPageSize = 500
+
+// ownedPodNames returns a matcher for names the workload's controllers give their pods:
+// "<replicaset>-<5 chars>" for a Deployment's ReplicaSets, "<name>-<ordinal>" for a
+// StatefulSet, "<name>-<5 chars>" for a DaemonSet.
+func ownedPodNames(kind, name string, rsNames []string) func(string) bool {
+	var pats []*regexp.Regexp
+	switch kind {
+	case "Deployment":
+		for _, rs := range rsNames {
+			if rs != "" {
+				pats = append(pats, regexp.MustCompile(`^`+regexp.QuoteMeta(rs)+`-[a-z0-9]{5}$`))
+			}
+		}
+	case "StatefulSet":
+		pats = append(pats, regexp.MustCompile(`^`+regexp.QuoteMeta(name)+`-[0-9]+$`))
+	case "DaemonSet":
+		pats = append(pats, regexp.MustCompile(`^`+regexp.QuoteMeta(name)+`-[a-z0-9]{5}$`))
+	}
+	return func(pod string) bool {
+		for _, p := range pats {
+			if p.MatchString(pod) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 func eventCount(e *corev1.Event) int32 {
 	if e.Series != nil && e.Series.Count > 0 {
 		return e.Series.Count

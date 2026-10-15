@@ -94,8 +94,10 @@ Organization-specific packs live in the operator's repository and are loaded by 
 
 **`list_workload_events`** returns the Kubernetes events of the workload, of the ReplicaSets a
 Deployment owns, and of the workload's pods. The pods matter most: `FailedScheduling`,
-`ImagePullBackOff` and failed probes are reported on the pod, not the Deployment. Events come
-newest first, 50 by default, at most 200.
+`ImagePullBackOff` and failed probes are reported on the pod, not the Deployment. Pods that
+no longer exist, such as the old pods of a failed rollout, are recognized by their
+controller's naming scheme, so their events are kept. Events come newest first, 50 by
+default, at most 200; the namespace's events are listed in pages.
 
 **`list_workload_logs`** returns the last lines of each container of the workload's pods:
 
@@ -134,8 +136,9 @@ being replaced, is retried with `SIGHUP`.
 | `identity`, `storage`, `audit` | must be unchanged; a change rejects the whole reload and needs a restart |
 
 A rejected reload is logged with its reason and the previous configuration stays in force. A
-Kubernetes client whose profile changed (kubeconfig path or context) is rebuilt on its next
-use.
+Kubernetes client whose profile changed (kubeconfig path or context) or whose kubeconfig
+content changed is rebuilt on its next use; after rotating credentials in place, send
+`SIGHUP`.
 
 The `opsward_config_last_reload_successful` metric in 0002 arrives with the HTTP adapter.
 Until then the log is the only signal.

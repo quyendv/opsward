@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -302,7 +303,7 @@ func (c *Config) Warnings() []string {
 // process cannot apply: identity, storage and audit. docs/design/0003.
 func (c *Config) RestartRequired(next *Config) []string {
 	var out []string
-	if !reflect.DeepEqual(c.Identity, next.Identity) {
+	if !reflect.DeepEqual(normalIdentity(c.Identity), normalIdentity(next.Identity)) {
 		out = append(out, "identity")
 	}
 	if !reflect.DeepEqual(c.Storage, next.Storage) {
@@ -312,4 +313,17 @@ func (c *Config) RestartRequired(next *Config) []string {
 		out = append(out, "audit")
 	}
 	return out
+}
+
+// normalIdentity makes equivalent identities compare equal: groups are a set, and an
+// empty list is the same as an omitted one.
+func normalIdentity(i Identity) Identity {
+	g := slices.Clone(i.Principal.Groups)
+	slices.Sort(g)
+	g = slices.Compact(g)
+	if len(g) == 0 {
+		g = nil
+	}
+	i.Principal.Groups = g
+	return i
 }

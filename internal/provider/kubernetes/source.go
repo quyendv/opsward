@@ -1,7 +1,10 @@
 package kubernetes
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -29,7 +32,14 @@ type Source struct {
 	newClient  ClientFactory
 
 	mu      sync.Mutex
-	clients map[string]kubernetes.Interface
+	clients map[string]cachedClient
+}
+
+// cachedClient remembers the kubeconfig content a client was built from, so that
+// credentials rotated in place are noticed on the next Update.
+type cachedClient struct {
+	c   kubernetes.Interface
+	sum string
 }
 
 var _ capability.WorkloadSource = (*Source)(nil)
@@ -40,7 +50,7 @@ func NewSource(envCluster map[string]string, profiles map[string]map[string]Prof
 	if f == nil {
 		f = FromKubeconfig
 	}
-	return &Source{envCluster: envCluster, profiles: profiles, newClient: f, clients: map[string]kubernetes.Interface{}}
+	return &Source{envCluster: envCluster, profiles: profiles, newClient: f, clients: map[string]cachedClient{}}
 }
 
 // Workloads implements capability.WorkloadSource. An unknown environment or a profile
@@ -57,30 +67,42 @@ func (s *Source) Workloads(environment, profile string) (capability.Workloads, e
 		return nil, fmt.Errorf("kubernetes: cluster %q has no profile %q", cluster, profile)
 	}
 	key := cluster + "/" + profile
-	c, ok := s.clients[key]
+	cc, ok := s.clients[key]
 	if !ok {
-		var err error
-		if c, err = s.newClient(p); err != nil {
+		c, err := s.newClient(p)
+		if err != nil {
 			return nil, fmt.Errorf("kubernetes: cluster %q profile %q: %w", cluster, profile, err)
 		}
-		s.clients[key] = c
+		cc = cachedClient{c: c, sum: fileSum(p.Kubeconfig)}
+		s.clients[key] = cc
 	}
-	return NewWorkloads(c), nil
+	return NewWorkloads(cc.c), nil
 }
 
 // Update replaces the environment and profile maps, as on a configuration reload. A
-// client is kept only while its cluster's profile is unchanged; others are rebuilt on
-// their next use.
+// client is kept only while its profile and its kubeconfig's content are unchanged;
+// others are rebuilt on their next use.
 func (s *Source) Update(envCluster map[string]string, profiles map[string]map[string]Profile) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for key := range s.clients {
+	for key, cc := range s.clients {
 		cluster, profile, _ := strings.Cut(key, "/")
-		if old, now := s.profiles[cluster][profile], profiles[cluster][profile]; old != now {
+		old, now := s.profiles[cluster][profile], profiles[cluster][profile]
+		if old != now || fileSum(now.Kubeconfig) != cc.sum {
 			delete(s.clients, key)
 		}
 	}
 	s.envCluster, s.profiles = envCluster, profiles
+}
+
+// fileSum returns a hash of the file's content, or "" if it cannot be read.
+func fileSum(path string) string {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the operator's configured kubeconfig
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // FromKubeconfig builds a client from a kubeconfig file. It never falls back to
