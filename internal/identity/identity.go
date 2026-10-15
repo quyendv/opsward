@@ -23,7 +23,8 @@ import (
 const TokenPrefix = "opw_"
 
 const (
-	idLength = 12
+	idLength     = 12
+	secretLength = 52 // two crypto/rand.Text values
 	// touchInterval bounds how often a token's last use is written.
 	touchInterval = time.Minute
 	// base32 is the alphabet of IDs and secrets: lowercase crypto/rand.Text.
@@ -177,6 +178,22 @@ func (a *Authenticator) NewToken(req TokenRequest) (string, store.APIToken, erro
 	return TokenPrefix + id + "_" + secret, t, nil
 }
 
+// TokenID returns the ID that arg names: arg is an ID, or a whole token, whose secret is
+// then dropped. Errors never repeat arg, which may be a secret.
+func TokenID(arg string) (string, error) {
+	if strings.HasPrefix(arg, TokenPrefix) {
+		id, _, ok := parse(arg)
+		if !ok {
+			return "", errors.New("not a well-formed API token")
+		}
+		return id, nil
+	}
+	if len(arg) != idLength || !inAlphabet(arg) {
+		return "", fmt.Errorf("not a token ID: an ID is %d characters from a-z and 2-7", idLength)
+	}
+	return arg, nil
+}
+
 // parse splits opw_<id>_<secret>. The ID has a fixed length, so the split does not
 // depend on the secret's alphabet.
 func parse(token string) (id, secret string, ok bool) {
@@ -185,7 +202,7 @@ func parse(token string) (id, secret string, ok bool) {
 		return "", "", false
 	}
 	id, secret = rest[:idLength], rest[idLength+1:]
-	if !inAlphabet(id) || !inAlphabet(secret) {
+	if len(secret) != secretLength || !inAlphabet(id) || !inAlphabet(secret) {
 		return "", "", false
 	}
 	return id, secret, true

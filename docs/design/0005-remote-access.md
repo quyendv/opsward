@@ -100,7 +100,7 @@ opw_<id>_<secret>
 ```
 
 `id` is 12 random base32 characters and is public: it names the token in listings,
-revocations and audit records. `secret` is 32 random bytes. The store keeps the SHA-256 of
+revocations and audit records. `secret` is 52 random base32 characters, 256 bits. The store keeps the SHA-256 of
 the secret, never the secret: a secret with 256 bits of entropy cannot be guessed from its
 hash, so a slow password hash would add cost without adding safety. Comparison is constant
 time. The `opw_` prefix lets secret scanners recognize a leaked token.
@@ -116,7 +116,11 @@ opsward token list   --config FILE
 opsward token revoke --config FILE <id>
 ```
 
-`create` prints the token once. The command works on the store directly, so it is
+`create` prints the token once, alone on stdout. `revoke` takes the ID or the whole token;
+given the token, it revokes by the ID inside it and never records the secret. Audit records
+of these commands go to stderr when the configured stream is stdout, so that they cannot
+mix with the token; to have them reach the same collector as the server's records, use a
+`file` stream on a path both share. The command works on the store directly, so it is
 available to whoever can open the store, the same people who could already read or rewrite
 it. Creating and revoking a token is written to the audit chain (`create_api_token`,
 `revoke_api_token`, risk `destructive`), with `adapter: cli` and the operating system user

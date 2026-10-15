@@ -111,7 +111,7 @@ func TestAdminTokenLifecycleIsAudited(t *testing.T) {
 	if err := adm.RevokeToken(ctx, "root", rec.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := adm.RevokeToken(ctx, "root", "nonexistent0"); err == nil {
+	if err := adm.RevokeToken(ctx, "root", "aaaaaaaaaaaa"); err == nil {
 		t.Fatal("revoking an unknown token succeeded")
 	}
 	if _, _, err := adm.Identity.Authenticate(ctx, tok); err == nil {
@@ -162,4 +162,69 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// Revoking with the whole token, the obvious mistake after a leak, must revoke it and
+// keep the secret out of the audit chain.
+func TestRevokeWithTheWholeTokenNeverRecordsTheSecret(t *testing.T) {
+	_, path := remoteFixture(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	var stream strings.Builder
+	adm, err := OpenAdmin(ctx, cfg, Options{Stderr: &stream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = adm.Close() }()
+	tok, rec, err := adm.CreateToken(ctx, "root", identity.TokenRequest{Subject: "ci@example.com", TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := strings.TrimPrefix(tok, "opw_"+rec.ID+"_")
+	if err := adm.RevokeToken(ctx, "root", tok); err != nil {
+		t.Fatalf("revoke by token: %v", err)
+	}
+	if _, _, err := adm.Identity.Authenticate(ctx, tok); err == nil {
+		t.Fatal("the token still authenticates")
+	}
+	for _, bad := range []string{"opw_" + rec.ID + "_" + secret[:10] + "XYZ", "not-an-id", ""} {
+		err := adm.RevokeToken(ctx, "root", bad)
+		if err == nil || strings.Contains(err.Error(), secret[:10]) {
+			t.Fatalf("RevokeToken(%q) = %v", bad, err)
+		}
+	}
+	records, _ := audit.Load(ctx, adm.Store, "test")
+	for _, r := range records {
+		if strings.Contains(string(mustJSON(t, r)), secret[:20]) {
+			t.Fatalf("record %s %s holds the secret", r.Phase, r.Tool)
+		}
+	}
+	if strings.Contains(stream.String(), secret[:20]) {
+		t.Fatal("the audit stream holds the secret")
+	}
+}
+
+// The CLI prints the token on stdout; audit records there would corrupt it.
+func TestAdminNeverStreamsToStdout(t *testing.T) {
+	_, path := remoteFixture(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Audit.Stream.Type = "stdout"
+	var stdout, stderr strings.Builder
+	adm, err := OpenAdmin(context.Background(), cfg, Options{Stdout: &stdout, Stderr: &stderr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = adm.Close() }()
+	if _, _, err := adm.CreateToken(context.Background(), "root", identity.TokenRequest{Subject: "a", TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "create_api_token") {
+		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
+	}
 }

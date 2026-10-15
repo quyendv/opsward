@@ -24,7 +24,7 @@ actions:
   create --subject S [--group G]... [--ttl 90d] [--description D]
                      create an API token and print it once
   list               list API tokens, without their secrets
-  revoke ID          revoke an API token
+  revoke ID          revoke an API token, named by its ID or the whole token
 `
 
 // stringList collects a repeated flag.

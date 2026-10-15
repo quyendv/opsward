@@ -35,6 +35,13 @@ type Admin struct {
 
 // OpenAdmin opens the configured store and audit stream.
 func OpenAdmin(ctx context.Context, cfg *config.Config, opt Options) (*Admin, error) {
+	// Commands print their results on stdout, a token among them; records there would
+	// mix with it.
+	if cfg.Audit.Stream.Type == "stdout" {
+		c := *cfg
+		c.Audit.Stream.Type = "stderr"
+		cfg = &c
+	}
 	st, w, closers, err := openAudit(ctx, cfg, opt)
 	if err != nil {
 		return nil, err
@@ -73,8 +80,13 @@ func (a *Admin) CreateToken(ctx context.Context, actor string, req identity.Toke
 	return token, t, nil
 }
 
-// RevokeToken revokes the token with id, as actor.
-func (a *Admin) RevokeToken(ctx context.Context, actor, id string) error {
+// RevokeToken revokes the token that arg names, as actor: its ID, or the whole token,
+// which is never recorded.
+func (a *Admin) RevokeToken(ctx context.Context, actor, arg string) error {
+	id, err := identity.TokenID(arg)
+	if err != nil {
+		return err
+	}
 	return a.audited(ctx, actor, "revoke_api_token", map[string]any{"id": id}, func() error {
 		ok, err := a.Store.RevokeAPIToken(ctx, id, time.Now().UTC())
 		if err == nil && !ok {
