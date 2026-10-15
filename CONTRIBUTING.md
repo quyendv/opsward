@@ -17,6 +17,11 @@ Before pushing, `mise run check` must pass. It is exactly what CI runs.
   note in `docs/design/` and will be discussed before it is reviewed as code.
 - Use Conventional Commits; branch names use the same prefixes (`feat/…`, `fix/…`).
 - Add a `CHANGELOG.md` entry under `Unreleased` for user-visible changes.
+- Pull requests are squash-merged by default, so the PR title becomes the commit on `main`
+  and must follow Conventional Commits. A large PR whose commits each tell part of the story
+  may be merged with a merge commit instead.
+- Builtin knowledge documents (`internal/knowledge/builtin/`) must be generic. Lessons
+  specific to one organization belong in that organization's own knowledge path.
 - Keep examples generic: `example.com`, `cluster-a`, never real hostnames or organization names.
 - Never commit credentials, kubeconfigs or real tokens, even expired ones. The hooks scan for
   them, but they are a safety net, not a process.

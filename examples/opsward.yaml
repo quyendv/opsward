@@ -18,8 +18,9 @@ providers:
     clusters:
       cluster-a:
         profiles:
-          # A kubeconfig whose credential is bound to a read-only role without
-          # secrets, pods/exec or pods/portforward.
+          # A kubeconfig whose credential is bound to a read-only role: get/list on
+          # workloads, pods and events, get on pods/log; no secrets, pods/exec or
+          # pods/portforward.
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
 
 environments:
@@ -34,3 +35,9 @@ policy:
     - name: admin-view
       subjects: { groups: [admin] }
       role: viewer
+
+# Knowledge packs: the generic builtin pack, plus your own runbooks as Markdown with
+# frontmatter (docs/design/0003). Edits are picked up without a restart.
+knowledge:
+  builtin: true
+  # paths: [/etc/opsward/knowledge]
