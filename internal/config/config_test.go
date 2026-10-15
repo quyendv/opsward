@@ -209,3 +209,144 @@ func TestRestartRequiredIgnoresEquivalentForms(t *testing.T) {
 		t.Fatalf("empty vs omitted groups: %v", got)
 	}
 }
+
+const backends = `
+  metrics:
+    type: prometheus
+    url: https://metrics.example.com
+    clusterLabel: cluster
+    auth: { bearerTokenFile: /etc/opsward/metrics-token }
+  logs:
+    type: loki
+    url: https://logs.example.com
+    tenant: team-a
+`
+
+func withBackends(doc, b string) string {
+	return strings.Replace(doc, "providers:\n", "providers:"+b, 1)
+}
+
+func TestBackendsParseWithDefaults(t *testing.T) {
+	c, err := Parse([]byte(withBackends(minimal, backends)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, l := c.Providers.Metrics, c.Providers.Logs
+	if m == nil || m.NamespaceLabel != "namespace" || m.ClusterLabel != "cluster" || m.Auth.BearerTokenFile == "" {
+		t.Fatalf("metrics = %+v", m)
+	}
+	if l == nil || l.Type != "loki" || l.Tenant != "team-a" || l.NamespaceLabel != "namespace" || l.ClusterLabel != "" {
+		t.Fatalf("logs = %+v", l)
+	}
+	if got := c.Environments[0].ClusterLabelValue; got != "cluster-a" {
+		t.Fatalf("clusterLabelValue default = %q, want the cluster name", got)
+	}
+}
+
+func TestBackendsReject(t *testing.T) {
+	for name, tt := range map[string]struct{ b, want string }{
+		"wrong metrics type": {"\n  metrics: { type: graphite, url: https://m.example.com }\n", `metrics.type: "graphite"`},
+		"wrong logs type":    {"\n  logs: { type: elastic, url: https://l.example.com }\n", `logs.type: "elastic"`},
+		"missing url":        {"\n  metrics: { type: prometheus }\n", "metrics.url is required"},
+		"bad scheme":         {"\n  metrics: { type: prometheus, url: ftp://m.example.com }\n", "http or https"},
+		"two auths":          {"\n  metrics: { type: prometheus, url: https://m.example.com, auth: { bearerTokenFile: /t, basic: { username: u, passwordFile: /p } } }\n", "one of bearerTokenFile and basic"},
+		"basic no password":  {"\n  metrics: { type: prometheus, url: https://m.example.com, auth: { basic: { username: u } } }\n", "passwordFile is required"},
+		"tilde token":        {"\n  logs: { type: loki, url: https://l.example.com, auth: { bearerTokenFile: ~/t } }\n", "~ is not expanded"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(withBackends(minimal, tt.b)))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestBackendWarnings(t *testing.T) {
+	c, err := Parse([]byte(withBackends(minimal, "\n  metrics: { type: prometheus, url: http://m.example.com, auth: { bearerTokenFile: /t } }\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := strings.Join(c.Warnings(), "\n"); !strings.Contains(w, "credentials over plain http") {
+		t.Fatalf("warnings = %s", w)
+	}
+}
+
+func TestBackendsAreRestartOnly(t *testing.T) {
+	base, _ := Parse([]byte(withBackends(minimal, backends)))
+	moved, _ := Parse([]byte(withBackends(minimal, strings.Replace(backends, "https://metrics.example.com", "https://metrics2.example.com", 1))))
+	if got := strings.Join(base.RestartRequired(moved), ","); got != "providers.metrics" {
+		t.Fatalf("RestartRequired = %q", got)
+	}
+	relabel, _ := Parse([]byte(withBackends(strings.Replace(minimal, "    cluster: cluster-a\n", "    cluster: cluster-a\n    clusterLabelValue: prod-a\n", 1), backends)))
+	if got := base.RestartRequired(relabel); len(got) != 0 {
+		t.Fatalf("an environment's clusterLabelValue must be reloadable: %v", got)
+	}
+}
+
+const twoClusters = `
+identity:
+  principal: { subject: me }
+storage:
+  path: /var/lib/opsward/o.db
+providers:
+  kubernetes:
+    clusters:
+      cluster-a: { profiles: { reader: { kubeconfig: /a } } }
+      cluster-b: { profiles: { reader: { kubeconfig: /b } } }
+%BACKEND%
+environments:
+  - { name: staging, cluster: cluster-a }
+  - { name: production, cluster: cluster-b }
+`
+
+// A shared backend without clusterLabel cannot tell clusters apart: a caller in one
+// environment would read the other cluster's namespace of the same name.
+func TestBackendNeedsClusterLabelWithSeveralClusters(t *testing.T) {
+	doc := strings.Replace(twoClusters, "%BACKEND%", "  metrics: { type: prometheus, url: https://m.example.com }", 1)
+	if _, err := Parse([]byte(doc)); err == nil || !strings.Contains(err.Error(), "clusterLabel is required") {
+		t.Fatalf("err = %v", err)
+	}
+	ok := strings.Replace(twoClusters, "%BACKEND%", "  metrics: { type: prometheus, url: https://m.example.com, clusterLabel: cluster }", 1)
+	if _, err := Parse([]byte(ok)); err != nil {
+		t.Fatalf("with clusterLabel: %v", err)
+	}
+}
+
+func TestClusterLabelValueWithoutClusterLabelWarns(t *testing.T) {
+	doc := withBackends(strings.Replace(minimal, "    cluster: cluster-a\n", "    cluster: cluster-a\n    clusterLabelValue: prod-a\n", 1), "\n  metrics: { type: prometheus, url: https://m.example.com }\n")
+	c, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := strings.Join(c.Warnings(), "\n"); !strings.Contains(w, "clusterLabelValue") || !strings.Contains(w, "ignored") {
+		t.Fatalf("warnings = %s", w)
+	}
+}
+
+// Credentials are referenced by file, never inline (docs/design/0004).
+func TestBackendURLMustNotCarryCredentialsOrQuery(t *testing.T) {
+	for url, want := range map[string]string{
+		"https://user:pass@m.example.com": "credentials",
+		"https://user@m.example.com":      "credentials",
+		"https://m.example.com/?org=1":    "query",
+	} {
+		_, err := Parse([]byte(withBackends(minimal, "\n  metrics: { type: prometheus, url: \""+url+"\" }\n")))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", url, err, want)
+		}
+	}
+}
+
+// Warnings are logged on every reload; they name a missing credential file by its field,
+// never by its path.
+func TestBackendWarningsDoNotNameCredentialPaths(t *testing.T) {
+	c, err := Parse([]byte(withBackends(minimal, "\n  metrics: { type: prometheus, url: https://m.example.com, auth: { basic: { username: u, passwordFile: /run/secrets/metrics-password } } }\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := strings.Join(c.Warnings(), "\n")
+	if strings.Contains(w, "/run/secrets/metrics-password") || !strings.Contains(w, "auth.basic.passwordFile does not exist") {
+		t.Fatalf("warnings = %s", w)
+	}
+}

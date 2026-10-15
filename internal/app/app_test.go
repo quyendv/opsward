@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -47,23 +50,44 @@ policy:
 `
 
 type fixture struct {
-	t    *testing.T
-	path string
-	db   string
-	app  *App
+	t        *testing.T
+	path     string
+	db       string
+	app      *App
+	extra    string // provider lines inserted under providers:
+	envExtra string // lines appended to the staging environment
+}
+
+func (f *fixture) doc(group string) string {
+	doc := strings.NewReplacer("%DB%", f.db, "%GROUP%", group).Replace(base)
+	doc = strings.Replace(doc, "providers:\n", "providers:\n"+f.extra, 1)
+	return strings.Replace(doc, "    cluster: cluster-a\n", "    cluster: cluster-a\n"+f.envExtra, 1)
 }
 
 func (f *fixture) write(group string, extra string) {
 	f.t.Helper()
-	doc := strings.NewReplacer("%DB%", f.db, "%GROUP%", group).Replace(base) + extra
-	if err := os.WriteFile(f.path, []byte(doc), 0o600); err != nil {
+	if err := os.WriteFile(f.path, []byte(f.doc(group)+extra), 0o600); err != nil {
 		f.t.Fatal(err)
 	}
 }
 
+func (f *fixture) writeAll() { f.write("team-a", "") }
+
+// reopen writes the current fixture configuration and opens a new App on it.
+func (f *fixture) reopen() {
+	f.t.Helper()
+	_ = f.app.Close()
+	f.writeAll()
+	cfg, err := config.Load(f.path)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.app = open(f.t, f, cfg)
+}
+
 func (f *fixture) writeReplacing(group, old, replacement string) {
 	f.t.Helper()
-	doc := strings.NewReplacer("%DB%", f.db, "%GROUP%", group).Replace(base)
+	doc := f.doc(group)
 	if !strings.Contains(doc, old) {
 		f.t.Fatalf("fixture has no %q", old)
 	}
@@ -81,6 +105,12 @@ func newFixture(t *testing.T, group string) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.app = open(t, f, cfg)
+	return f
+}
+
+func open(t *testing.T, f *fixture, cfg *config.Config) *App {
+	t.Helper()
 	cluster := fake.NewClientset(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop"}})
 	a, err := Open(context.Background(), cfg, Options{
 		Stderr:        &strings.Builder{},
@@ -91,8 +121,7 @@ func newFixture(t *testing.T, group string) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	f.app = a
-	return f
+	return a
 }
 
 func (f *fixture) call(tool, args string) error {
@@ -113,7 +142,7 @@ func TestOpenRegistersM2Tools(t *testing.T) {
 	for _, tl := range f.app.Engine.Tools() {
 		names = append(names, tl.Name)
 	}
-	if got := strings.Join(names, ","); got != "get_knowledge,get_workload_status,list_workload_events,list_workload_logs,search_knowledge" {
+	if got := strings.Join(names, ","); got != "diagnose_workload,get_knowledge,get_workload_status,list_workload_events,list_workload_logs,search_knowledge" {
 		t.Fatalf("tools = %s", got)
 	}
 	if err := f.call("search_knowledge", `{"query":"crash"}`); err != nil {
@@ -258,4 +287,90 @@ func TestWatchAppliesAChangeMadeDuringStartUp(t *testing.T) {
 	_, stop := watch(t, f, 20*time.Millisecond)
 	defer stop()
 	eventually(t, func() bool { return f.call("get_workload_status", statusArgs) == nil })
+}
+
+// fakeBackend answers Prometheus and Loki queries and records the queries it received.
+type fakeBackend struct {
+	mu      sync.Mutex
+	queries []string
+}
+
+func (b *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	b.mu.Lock()
+	b.queries = append(b.queries, r.URL.Query().Get("query"))
+	b.mu.Unlock()
+	if strings.HasPrefix(r.URL.Path, "/loki/") {
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"streams","result":[]}}`))
+		return
+	}
+	_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+}
+
+func (b *fakeBackend) last() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.queries[len(b.queries)-1]
+}
+
+func backendsFixture(t *testing.T, clusterValue string) (*fixture, *fakeBackend) {
+	t.Helper()
+	b := &fakeBackend{}
+	srv := httptest.NewServer(b)
+	t.Cleanup(srv.Close)
+	f := newFixture(t, "team-a")
+	f.extra = "  metrics: { type: prometheus, url: " + srv.URL + ", clusterLabel: cluster }\n  logs: { type: loki, url: " + srv.URL + " }\n"
+	f.envExtra = clusterValue
+	f.reopen()
+	return f, b
+}
+
+func TestBackendToolsAreRegisteredOnlyWhenConfigured(t *testing.T) {
+	f, _ := backendsFixture(t, "")
+	var names []string
+	for _, tl := range f.app.Engine.Tools() {
+		names = append(names, tl.Name)
+	}
+	got := strings.Join(names, ",")
+	for _, want := range []string{"get_workload_metrics", "query_metrics", "query_logs", "diagnose_workload"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("tools %s missing %s", got, want)
+		}
+	}
+}
+
+func TestQueriesUseTheEnvironmentsClusterValueAfterReload(t *testing.T) {
+	f, b := backendsFixture(t, "")
+	args := `{"environment":"staging","namespace":"shop","query":"up"}`
+	if err := f.call("query_metrics", args); err != nil {
+		t.Fatal(err)
+	}
+	if q := b.last(); !strings.Contains(q, `cluster="cluster-a"`) || !strings.Contains(q, `namespace="shop"`) {
+		t.Fatalf("query = %s", q)
+	}
+	f.envExtra = "    clusterLabelValue: prod-a\n"
+	f.writeAll()
+	if err := f.app.ReloadFile(f.path); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.call("query_metrics", args); err != nil {
+		t.Fatal(err)
+	}
+	if q := b.last(); !strings.Contains(q, `cluster="prod-a"`) {
+		t.Fatalf("after reload: %s", q)
+	}
+	if err := f.call("diagnose_workload", statusArgs); err != nil {
+		t.Fatalf("diagnose with backends: %v", err)
+	}
+}
+
+func TestCheckDoesNotNeedBackendFiles(t *testing.T) {
+	doc := strings.NewReplacer("%DB%", "/tmp/x.db", "%GROUP%", "team-a").Replace(base)
+	doc = strings.Replace(doc, "providers:\n", "providers:\n  metrics: { type: prometheus, url: https://m.example.com, caFile: /missing/ca.pem }\n", 1)
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Check(cfg); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
 }

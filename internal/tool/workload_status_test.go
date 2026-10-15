@@ -21,6 +21,8 @@ type fakeSource struct {
 	events     []capability.Event
 	logs       *capability.WorkloadLogs
 	logOptions capability.LogOptions
+	eventsErr  error
+	eventLimit int
 }
 
 func (f *fakeSource) Workloads(_, profile string) (capability.Workloads, error) {
@@ -33,8 +35,12 @@ func (f *fakeSource) GetWorkload(context.Context, capability.WorkloadRef) (*capa
 	return f.workload, f.err
 }
 
-func (f *fakeSource) WorkloadEvents(context.Context, capability.WorkloadRef, int) ([]capability.Event, error) {
+func (f *fakeSource) WorkloadEvents(_ context.Context, _ capability.WorkloadRef, limit int) ([]capability.Event, error) {
 	f.calls = append(f.calls, "events")
+	f.eventLimit = limit
+	if f.eventsErr != nil {
+		return nil, f.eventsErr
+	}
 	return f.events, f.err
 }
 
@@ -42,6 +48,14 @@ func (f *fakeSource) WorkloadLogs(_ context.Context, _ capability.WorkloadRef, o
 	f.calls = append(f.calls, "logs")
 	f.logOptions = opt
 	return f.logs, f.err
+}
+
+func (f *fakeSource) PodNamePattern(context.Context, capability.WorkloadRef) (string, error) {
+	f.calls = append(f.calls, "pattern")
+	if f.err != nil {
+		return "", f.err
+	}
+	return `api-7d9f8b6c5-[bcdfghjklmnpqrstvwxz2456789]{5}`, nil
 }
 
 func (f *fakeSource) WorkloadLabels(context.Context, capability.WorkloadRef) (map[string]string, error) {

@@ -342,3 +342,31 @@ func TestAnnotateStopsAtTheCostBudget(t *testing.T) {
 		t.Fatalf("budget 1: %d notes, want only the first document evaluated", n)
 	}
 }
+
+func TestBuiltinNotesOnDiagnosis(t *testing.T) {
+	pack, _, err := Load(Options{Builtin: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := map[string]any{
+		"status": map[string]any{"pods": []any{
+			map[string]any{
+				"name": "a", "phase": "Running", "node": "n1", "waiting": "CrashLoopBackOff",
+				"lastTerminated": map[string]any{"container": "app", "reason": "OOMKilled", "exitCode": float64(137)},
+			},
+		}},
+		"events": []any{map[string]any{"reason": "FailedScheduling"}},
+	}
+	var ids []string
+	for _, n := range pack.Annotate(request("diagnose_workload"), result) {
+		ids = append(ids, n.ID)
+	}
+	slices.Sort(ids)
+	if got := strings.Join(ids, ","); got != "crashloop-backoff,failed-scheduling,oom-killed" {
+		t.Fatalf("diagnosis notes = %q", got)
+	}
+	// The shapes of the other tools still work.
+	if notes := pack.Annotate(request("get_workload_status"), map[string]any{"pods": []any{map[string]any{"phase": "Pending"}}}); len(notes) != 1 {
+		t.Fatalf("status notes = %+v", notes)
+	}
+}

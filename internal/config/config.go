@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -86,6 +87,40 @@ type Stream struct {
 // Providers configures backends.
 type Providers struct {
 	Kubernetes Kubernetes `yaml:"kubernetes"`
+	Metrics    *Backend   `yaml:"metrics"` // optional; restart-only (docs/design/0004)
+	Logs       *Backend   `yaml:"logs"`    // optional; restart-only
+}
+
+// Backend is an HTTP query backend: Prometheus-compatible metrics or Loki logs.
+type Backend struct {
+	Type           string      `yaml:"type"`
+	URL            string      `yaml:"url"`
+	NamespaceLabel string      `yaml:"namespaceLabel"`
+	ClusterLabel   string      `yaml:"clusterLabel"` // empty: one cluster, no matcher added
+	Tenant         string      `yaml:"tenant"`       // sent as X-Scope-OrgID
+	Auth           BackendAuth `yaml:"auth"`
+	CAFile         string      `yaml:"caFile"`
+}
+
+// BackendAuth references credentials for a backend; at most one kind.
+type BackendAuth struct {
+	BearerTokenFile string     `yaml:"bearerTokenFile"`
+	Basic           *BasicAuth `yaml:"basic"`
+}
+
+// BasicAuth references a username and a password file.
+type BasicAuth struct {
+	Username     string `yaml:"username"`
+	PasswordFile string `yaml:"passwordFile"`
+}
+
+// files maps each referenced file's field name to its path.
+func (b *Backend) files() map[string]string {
+	out := map[string]string{"auth.bearerTokenFile": b.Auth.BearerTokenFile, "caFile": b.CAFile}
+	if b.Auth.Basic != nil {
+		out["auth.basic.passwordFile"] = b.Auth.Basic.PasswordFile
+	}
+	return out
 }
 
 // Kubernetes lists clusters and their credential profiles.
@@ -110,6 +145,9 @@ type Environment struct {
 	Cluster    string   `yaml:"cluster"`
 	Namespaces []string `yaml:"namespaces"`
 	Change     Change   `yaml:"change"`
+	// ClusterLabelValue is this environment's value of a backend's clusterLabel; default
+	// the cluster name.
+	ClusterLabelValue string `yaml:"clusterLabelValue"`
 }
 
 // Change selects how changes reach an environment.
@@ -174,6 +212,14 @@ func (c *Config) applyDefaults() {
 		if e.Change.Strategy == "" {
 			e.Change.Strategy = "suggest"
 		}
+		if e.ClusterLabelValue == "" {
+			e.ClusterLabelValue = e.Cluster
+		}
+	}
+	for _, b := range []*Backend{c.Providers.Metrics, c.Providers.Logs} {
+		if b != nil && b.NamespaceLabel == "" {
+			b.NamespaceLabel = "namespace"
+		}
 	}
 }
 
@@ -224,6 +270,9 @@ func (c *Config) validate() error {
 			}
 		}
 	}
+
+	c.validateBackend("metrics", c.Providers.Metrics, "prometheus", fail)
+	c.validateBackend("logs", c.Providers.Logs, "loki", fail)
 
 	for _, p := range c.Knowledge.Paths {
 		switch {
@@ -290,6 +339,33 @@ func (c *Config) Warnings() []string {
 			}
 		}
 	}
+	labelled := false
+	for _, b := range []*Backend{c.Providers.Metrics, c.Providers.Logs} {
+		labelled = labelled || (b != nil && b.ClusterLabel != "")
+	}
+	for _, e := range c.Environments {
+		if !labelled && e.ClusterLabelValue != e.Cluster {
+			out = append(out, fmt.Sprintf("environment %q: clusterLabelValue is ignored, no backend sets clusterLabel", e.Name))
+		}
+	}
+	for name, b := range map[string]*Backend{"metrics": c.Providers.Metrics, "logs": c.Providers.Logs} {
+		if b == nil {
+			continue
+		}
+		if strings.HasPrefix(b.URL, "http://") && (b.Auth.BearerTokenFile != "" || b.Auth.Basic != nil) {
+			out = append(out, fmt.Sprintf("providers.%s sends credentials over plain http", name))
+		}
+		// Warnings are logged on every reload: they name the field, not the path, which
+		// for a credential file is better kept out of logs.
+		for field, f := range b.files() {
+			if f == "" || strings.HasPrefix(f, "~") {
+				continue
+			}
+			if _, err := os.Stat(f); err != nil {
+				out = append(out, fmt.Sprintf("providers.%s.%s does not exist here", name, field))
+			}
+		}
+	}
 	for _, p := range c.Knowledge.Paths {
 		if p != "" && !strings.HasPrefix(p, "~") && !filepath.IsAbs(p) {
 			out = append(out, fmt.Sprintf("knowledge path %q is relative", p))
@@ -312,7 +388,56 @@ func (c *Config) RestartRequired(next *Config) []string {
 	if !reflect.DeepEqual(c.Audit, next.Audit) {
 		out = append(out, "audit")
 	}
+	// Tools that need these backends are registered at start-up.
+	if !reflect.DeepEqual(c.Providers.Metrics, next.Providers.Metrics) {
+		out = append(out, "providers.metrics")
+	}
+	if !reflect.DeepEqual(c.Providers.Logs, next.Providers.Logs) {
+		out = append(out, "providers.logs")
+	}
 	return out
+}
+
+func (c *Config) validateBackend(name string, b *Backend, wantType string, fail func(string, ...any)) {
+	if b == nil {
+		return
+	}
+	if b.Type != wantType {
+		fail("providers.%s.type: %q is not available; use %s", name, b.Type, wantType)
+	}
+	if b.URL == "" {
+		fail("providers.%s.url is required", name)
+	} else if u, err := url.Parse(b.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		fail("providers.%s.url %q must be an http or https URL", name, b.URL)
+	} else {
+		if u.User != nil {
+			// Not echoed: it may hold a password. Credentials are referenced by file.
+			fail("providers.%s.url must not contain credentials; use auth with a file", name)
+		}
+		if u.RawQuery != "" || u.Fragment != "" {
+			fail("providers.%s.url must not have a query or fragment", name)
+		}
+	}
+	if b.ClusterLabel == "" {
+		clusters := map[string]bool{}
+		for _, e := range c.Environments {
+			clusters[e.Cluster] = true
+		}
+		if len(clusters) > 1 {
+			fail("providers.%s.clusterLabel is required when environments use more than one cluster: without it a query cannot be limited to one cluster", name)
+		}
+	}
+	if b.Auth.BearerTokenFile != "" && b.Auth.Basic != nil {
+		fail("providers.%s.auth: set one of bearerTokenFile and basic", name)
+	}
+	if b.Auth.Basic != nil && (b.Auth.Basic.Username == "" || b.Auth.Basic.PasswordFile == "") {
+		fail("providers.%s.auth.basic: username and passwordFile is required", name)
+	}
+	for field, f := range b.files() {
+		if strings.HasPrefix(f, "~") {
+			fail("providers.%s.%s: ~ is not expanded, use an absolute path", name, field)
+		}
+	}
 }
 
 // normalIdentity makes equivalent identities compare equal: groups are a set, and an

@@ -7,8 +7,8 @@ summary: >-
   previous=true); the running one has usually not failed yet. The pod's lastTerminated
   shows how it ended (OOMKilled, or Error with an exit code).
 applies-to:
-  tools: [get_workload_status]
-  when: 'result.pods.exists(p, has(p.waiting) && p.waiting.endsWith("CrashLoopBackOff"))'
+  tools: [get_workload_status, diagnose_workload]
+  when: '(has(result.status) ? result.status : result).pods.exists(p, has(p.waiting) && p.waiting.endsWith("CrashLoopBackOff"))'
 ---
 Kubernetes restarts a failing container with an exponential back-off of up to five
 minutes, and reports the wait as `CrashLoopBackOff`. The state says that the container

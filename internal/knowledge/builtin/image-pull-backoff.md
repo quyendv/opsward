@@ -7,8 +7,8 @@ summary: >-
   tag exists in the registry, and whether the pod has pull credentials for a private
   registry; the pod's events carry the registry's own error.
 applies-to:
-  tools: [get_workload_status]
-  when: 'result.pods.exists(p, has(p.waiting) && p.waiting in ["ErrImagePull", "ImagePullBackOff", "InvalidImageName"])'
+  tools: [get_workload_status, diagnose_workload]
+  when: '(has(result.status) ? result.status : result).pods.exists(p, has(p.waiting) && p.waiting in ["ErrImagePull", "ImagePullBackOff", "InvalidImageName"])'
 ---
 `ErrImagePull` is the first failure; `ImagePullBackOff` is Kubernetes waiting before it
 tries again. `InvalidImageName` means the reference cannot be parsed at all.

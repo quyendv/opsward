@@ -223,9 +223,9 @@ the environment's cluster label. The label names are configured per provider.
 - **PromQL** in `query_metrics` is parsed and every vector selector gets the namespace and
   cluster matchers. A selector that already has a conflicting matcher is rejected rather than
   rewritten.
-- **LogQL** is not parsed yet. Free-form `query_logs` is accepted only when no confinement is
-  needed: the authorizing binding does not restrict namespaces, and the logs provider serves this
-  environment alone. Otherwise the call is denied.
+- **LogQL** is accepted as a log query (one stream selector and a pipeline), whose selector
+  gets the same matchers; metric queries over logs are rejected. See
+  [0004](0004-metrics-logs-diagnosis.md#confining-queries).
 
 ### Evaluation
 

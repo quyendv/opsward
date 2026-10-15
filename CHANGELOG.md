@@ -23,3 +23,7 @@ All notable changes to this project are documented here. The format follows
   condition matches.
 - Configuration reload on file change or `SIGHUP`, all-or-nothing; identity, storage and
   audit changes require a restart.
+- Prometheus-compatible metrics and Loki logs backends: `get_workload_metrics`,
+  `query_metrics` and `query_logs`, with PromQL and LogQL confined to the caller's namespace
+  and cluster before they are sent.
+- `diagnose_workload`: status, events, failing containers' logs and resource use in one call.

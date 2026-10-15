@@ -203,6 +203,54 @@ func (w *workloads) WorkloadEvents(ctx context.Context, ref capability.WorkloadR
 
 // eventTime prefers the newest observation: events.k8s.io/v1 producers, such as the
 // scheduler, set EventTime and Series instead of the core timestamps.
+// Kubernetes generates name suffixes and pod-template hashes from this alphabet, which
+// has no vowels, and truncates a generateName prefix to 58 characters.
+const (
+	nameAlphabet        = "[bcdfghjklmnpqrstvwxz2456789]"
+	maxGenerateNameBase = 58
+)
+
+func generatedPrefix(base string) string {
+	if len(base) > maxGenerateNameBase {
+		base = base[:maxGenerateNameBase]
+	}
+	return regexp.QuoteMeta(base) + nameAlphabet + "{5}"
+}
+
+func (w *workloads) PodNamePattern(ctx context.Context, ref capability.WorkloadRef) (string, error) {
+	meta, sel, err := w.object(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	switch ref.Kind {
+	case "StatefulSet":
+		return regexp.QuoteMeta(ref.Name) + "-[0-9]+", nil
+	case "DaemonSet":
+		return generatedPrefix(ref.Name + "-"), nil
+	}
+	// A Deployment's pods are named after the ReplicaSets it controls, which keep the
+	// revisions the Deployment still remembers.
+	s, err := metav1.LabelSelectorAsSelector(sel)
+	if err != nil {
+		return "", fmt.Errorf("workload selector: %w", err)
+	}
+	rss, err := w.c.AppsV1().ReplicaSets(ref.Namespace).List(ctx, metav1.ListOptions{LabelSelector: s.String()})
+	if err != nil {
+		return "", fmt.Errorf("list replicasets: %w", err)
+	}
+	var alts []string
+	for i := range rss.Items {
+		if metav1.IsControlledBy(&rss.Items[i], meta) {
+			alts = append(alts, generatedPrefix(rss.Items[i].Name+"-"))
+		}
+	}
+	if len(alts) == 0 {
+		return "", fmt.Errorf("%s %s/%s has no ReplicaSets", ref.Kind, ref.Namespace, ref.Name)
+	}
+	slices.Sort(alts)
+	return "(?:" + strings.Join(alts, "|") + ")", nil
+}
+
 // eventPageSize is the page size for listing a namespace's events.
 const eventPageSize = 500
 

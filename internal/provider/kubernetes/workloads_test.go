@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -531,6 +532,59 @@ func TestOwnedPodName(t *testing.T) {
 		m := ownedPodNames(tt.kind, tt.name, []string{tt.rs})
 		if got := m(tt.pod); got != tt.want {
 			t.Errorf("%s %s: %s -> %v, want %v", tt.kind, tt.name, tt.pod, got, tt.want)
+		}
+	}
+}
+
+// The pattern selects exactly the workload's pods in metrics, so that a binding narrowed
+// to one workload cannot read another's: Deployment api must not match DaemonSet
+// api-agent's or Job api-migrate's pods.
+func TestPodNamePattern(t *testing.T) {
+	d := deployment()
+	d.Name, d.UID = "web", "d1"
+	owned := func(name string) *appsv1.ReplicaSet {
+		return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "shop", Labels: map[string]string{"app": "api"},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "d1", Controller: ptr(true)}},
+		}}
+	}
+	long := strings.Repeat("a", 52)
+	ld := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: long, Namespace: "shop", UID: "d2"},
+		Spec:       appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "long"}}},
+	}
+	lrs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+		Name: long + "-5d8f7b9c4", Namespace: "shop", Labels: map[string]string{"app": "long"},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: long, UID: "d2", Controller: ptr(true)}},
+	}}
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "db.main", Namespace: "shop"}, Spec: appsv1.StatefulSetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "db"}}}}
+	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "log", Namespace: "shop"}, Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "log"}}}}
+	w := NewWorkloads(fake.NewClientset(d, owned("web-7d9f8b6c5"), owned("web-5c4b9d8f7"), ld, lrs, sts, ds))
+
+	for _, tt := range []struct {
+		kind, name string
+		match      []string
+		reject     []string
+	}{
+		{"Deployment", "web", []string{"web-7d9f8b6c5-x7k2p", "web-5c4b9d8f7-bcdfg"}, []string{"web-agent-x7k2p", "web-migrate-q8w2z", "web-9z9z9z9z9-x7k2p", "web-7d9f8b6c5-abcde"}},
+		{"Deployment", long, []string{(long + "-5d8f7b9c4-")[:58] + "x7k2p"}, []string{long + "-5d8f7b9c4-x7k2p"}},
+		{"StatefulSet", "db.main", []string{"db.main-0", "db.main-12"}, []string{"dbxmain-0", "db.main-backup-0"}},
+		{"DaemonSet", "log", []string{"log-x7k2p"}, []string{"log-agent", "log-agent-x7k2p"}},
+	} {
+		pat, err := w.PodNamePattern(context.Background(), capability.WorkloadRef{Namespace: "shop", Kind: tt.kind, Name: tt.name})
+		if err != nil {
+			t.Fatalf("%s %s: %v", tt.kind, tt.name, err)
+		}
+		re := regexp.MustCompile("^(?:" + pat + ")$")
+		for _, n := range tt.match {
+			if !re.MatchString(n) {
+				t.Errorf("%s %s: pattern %q does not match its pod %q", tt.kind, tt.name, pat, n)
+			}
+		}
+		for _, n := range tt.reject {
+			if re.MatchString(n) {
+				t.Errorf("%s %s: pattern %q matches foreign pod %q", tt.kind, tt.name, pat, n)
+			}
 		}
 	}
 }
