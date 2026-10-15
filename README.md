@@ -26,9 +26,11 @@ is protocol-agnostic.
 
 ## Try it
 
+Download a binary from [Releases](https://github.com/quyendv/opsward/releases), use the
+container image `ghcr.io/quyendv/opsward`, or build from source with `mise run build`.
+
 ```sh
-mise run build
-./bin/opsward validate --config examples/opsward.yaml
+opsward validate --config examples/opsward.yaml
 ```
 
 Point `providers.kubernetes.clusters.*.profiles.reader.kubeconfig` at a kubeconfig whose
