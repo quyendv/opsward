@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Remote mode (`identity.mode: remote`): MCP over Streamable HTTP at `/mcp`, stateless, with
+  `/healthz` and `/readyz`, optional TLS whose certificate is re-read when it changes.
+- API tokens: `opsward token create|list|revoke`; only a hash of each secret is stored, every
+  token expires, and creating or revoking one is audited.
+- Internal groups (`identity.groups`), applied on reload.
+- Audit records name the credential behind a call (`principal.credential`).
+
 ## [0.1.0] - 2026-10-15
 
 First release: a single-user, read-only gateway over MCP stdio.

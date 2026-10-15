@@ -1,0 +1,51 @@
+# A team deployment: MCP over HTTP, each person or pipeline with an API token.
+# Validate with: opsward validate --config examples/opsward-remote.yaml
+# Create a token with: opsward token create --config FILE --subject alice@example.com
+
+identity:
+  mode: remote
+  apiTokens:
+    maxTTL: 365d
+  # Internal groups. Edits apply without a restart.
+  groups:
+    platform: [alice@example.com]
+    team-a: [bob@example.com, ci-team-a@example.com]
+
+server:
+  http:
+    address: 0.0.0.0:8080
+    # TLS is usually terminated in front of Opsward. To serve it directly:
+    # tls:
+    #   certFile: /etc/opsward/tls/tls.crt
+    #   keyFile: /etc/opsward/tls/tls.key
+
+storage:
+  type: sqlite
+  path: /var/lib/opsward/opsward.db
+
+audit:
+  stream: { type: stdout }
+
+providers:
+  kubernetes:
+    clusters:
+      cluster-a:
+        profiles:
+          reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
+
+environments:
+  - name: staging
+    cluster: cluster-a
+
+policy:
+  roles:
+    viewer: { risk: [read] }
+  bindings:
+    - name: platform-view-everything
+      subjects: { groups: [platform] }
+      role: viewer
+    - name: team-a-view-own-namespaces
+      subjects: { groups: [team-a] }
+      role: viewer
+      scope:
+        namespaces: ["team-a-*"]

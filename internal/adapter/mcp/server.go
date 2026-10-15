@@ -21,6 +21,11 @@ const AdapterStdio = "mcp-stdio"
 
 // NewServer registers every engine tool on a new MCP server. Every call is made as p.
 func NewServer(e *engine.Engine, p core.Principal) *mcp.Server {
+	return newServer(e, func(*mcp.CallToolRequest) (core.Principal, error) { return p, nil })
+}
+
+// newServer registers every engine tool; principal names the caller of each call.
+func newServer(e *engine.Engine, principal func(*mcp.CallToolRequest) (core.Principal, error)) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "opsward", Version: version.Version}, nil)
 	for _, t := range e.Tools() {
 		s.AddTool(&mcp.Tool{
@@ -28,7 +33,7 @@ func NewServer(e *engine.Engine, p core.Principal) *mcp.Server {
 			Description: t.Description,
 			InputSchema: t.InputSchema,
 			Annotations: annotations(t.Risk),
-		}, handler(e, p, t.Name))
+		}, handler(e, principal, t.Name))
 	}
 	return s
 }
@@ -53,8 +58,12 @@ func annotations(r core.Risk) *mcp.ToolAnnotations {
 	}
 }
 
-func handler(e *engine.Engine, p core.Principal, name string) mcp.ToolHandler {
+func handler(e *engine.Engine, principal func(*mcp.CallToolRequest) (core.Principal, error), name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		p, err := principal(req)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
 		res, err := e.Invoke(ctx, p, name, req.Params.Arguments)
 		if err != nil {
 			// Tool-level errors go in the result, so the agent can read them and adjust.

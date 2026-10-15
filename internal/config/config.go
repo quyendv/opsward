@@ -34,6 +34,7 @@ const (
 // Config is the whole configuration file.
 type Config struct {
 	Identity     Identity      `yaml:"identity"`
+	Server       Server        `yaml:"server"`
 	Storage      Storage       `yaml:"storage"`
 	Audit        Audit         `yaml:"audit"`
 	Providers    Providers     `yaml:"providers"`
@@ -51,10 +52,13 @@ type Knowledge struct {
 // BuiltinEnabled reports whether the embedded pack is loaded.
 func (k Knowledge) BuiltinEnabled() bool { return k.Builtin == nil || *k.Builtin }
 
-// Identity configures how callers are identified.
+// Identity configures how callers are identified. docs/design/0005.
 type Identity struct {
-	Mode      string    `yaml:"mode"`
-	Principal Principal `yaml:"principal"`
+	Mode      string    `yaml:"mode"`      // local (stdio, fixed principal) or remote (HTTP, tokens)
+	Principal Principal `yaml:"principal"` // local mode only
+	APITokens APITokens `yaml:"apiTokens"`
+	// Groups are internal groups: group name to member subjects. Reloadable.
+	Groups map[string][]string `yaml:"groups"`
 }
 
 // Principal is the fixed caller in local mode.
@@ -183,7 +187,11 @@ func Parse(b []byte) (*Config, error) {
 
 func (c *Config) applyDefaults() {
 	if c.Identity.Mode == "" {
-		c.Identity.Mode = "local"
+		c.Identity.Mode = ModeLocal
+	}
+	if c.Identity.APITokens.MaxTTL == nil {
+		d := Duration(DefaultAPITokenMaxTTL)
+		c.Identity.APITokens.MaxTTL = &d
 	}
 	if c.Storage.Type == "" {
 		c.Storage.Type = "sqlite"
@@ -228,12 +236,7 @@ func (c *Config) validate() error {
 	var errs []error
 	fail := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
 
-	if c.Identity.Mode != "local" {
-		fail("identity.mode: %q is not available in this version; use local", c.Identity.Mode)
-	}
-	if c.Identity.Principal.Subject == "" {
-		fail("identity.principal.subject is required in local mode")
-	}
+	c.validateIdentity(fail)
 
 	if c.Storage.Type != "sqlite" {
 		fail("storage.type: %q is not available in this version; use sqlite", c.Storage.Type)
@@ -372,6 +375,7 @@ func (c *Config) Warnings() []string {
 			out = append(out, fmt.Sprintf("knowledge path %q is relative", p))
 		}
 	}
+	out = append(out, c.remoteWarnings()...)
 	sort.Strings(out)
 	return out
 }
@@ -382,6 +386,9 @@ func (c *Config) RestartRequired(next *Config) []string {
 	var out []string
 	if !reflect.DeepEqual(normalIdentity(c.Identity), normalIdentity(next.Identity)) {
 		out = append(out, "identity")
+	}
+	if !reflect.DeepEqual(c.Server, next.Server) {
+		out = append(out, "server")
 	}
 	if !reflect.DeepEqual(c.Storage, next.Storage) {
 		out = append(out, "storage")
@@ -450,8 +457,10 @@ func (c *Config) validateBackend(name string, b *Backend, wantType string, fail 
 }
 
 // normalIdentity makes equivalent identities compare equal: groups are a set, and an
-// empty list is the same as an omitted one.
+// empty list is the same as an omitted one. Internal groups are left out: a reload
+// applies them.
 func normalIdentity(i Identity) Identity {
+	i.Groups = nil
 	g := slices.Clone(i.Principal.Groups)
 	slices.Sort(g)
 	g = slices.Compact(g)

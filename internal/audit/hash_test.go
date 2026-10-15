@@ -32,3 +32,21 @@ func TestRecordHashIsStable(t *testing.T) {
 		t.Fatalf("hash = %s, want %s", got, want)
 	}
 }
+
+// A principal's credential joined the record in v0.2. Records without one must keep the
+// hash above, and records with one must cover it.
+func TestRecordHashCoversCredential(t *testing.T) {
+	r := Record{ID: "x", Writer: "opsward", Seq: 1, Principal: core.Principal{Subject: "a", Adapter: "mcp-http"}}
+	without, err := r.hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Principal.Credential = "token:abcdabcdabcd"
+	with, err := r.hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if with == without {
+		t.Fatal("credential is not covered by the hash")
+	}
+}

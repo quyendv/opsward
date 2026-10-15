@@ -57,6 +57,9 @@ type Principal struct {
 	Subject string   `json:"subject"`
 	Groups  []string `json:"groups,omitempty"`
 	Adapter string   `json:"adapter"`
+	// Credential names what the caller authenticated with: "token:<id>" or "oidc".
+	// Empty in local mode, and then absent from the JSON, so older records hash the same.
+	Credential string `json:"credential,omitempty"`
 }
 
 // Scope is what a call targets, extracted from typed arguments.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -28,9 +29,10 @@ const configCheckInterval = 10 * time.Second
 const usage = `usage: opsward <command> [flags]
 
 commands:
-  serve --config FILE          serve MCP over stdio
+  serve --config FILE          serve MCP: over stdio in local mode, over HTTP in remote mode
   validate --config FILE       check a configuration file and its policy
   audit verify --config FILE   check the stored audit chain
+  token create|list|revoke     manage API tokens (opsward token for details)
   version                      print version
 `
 
@@ -61,11 +63,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		err = verify(ctx, args[2:], stdout)
+	case "token":
+		err = token(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	if err != nil {
+	var u usageError
+	switch {
+	case errors.As(err, &u):
+		fmt.Fprint(stderr, u)
+		return 2
+	case err != nil:
 		fmt.Fprintf(stderr, "opsward: %v\n", err)
 		return 1
 	}
@@ -118,7 +127,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Audit.Stream.Type == "stdout" {
+	remote := cfg.Identity.Mode == config.ModeRemote
+	if !remote && cfg.Audit.Stream.Type == "stdout" {
 		return errors.New("audit.stream.type stdout would corrupt MCP over stdio; use stderr or file")
 	}
 	log := slog.New(slog.NewJSONHandler(stderr, nil))
@@ -136,8 +146,21 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	defer signal.Stop(hup)
 	go a.Watch(ctx, configCheckInterval, hup)
 
-	log.Info("serving MCP over stdio", "version", version.Version, "tools", len(a.Engine.Tools()))
-	return mcpadapter.ServeStdio(ctx, a.Engine, a.Principal)
+	if !remote {
+		log.Info("serving MCP over stdio", "version", version.Version, "tools", len(a.Engine.Tools()))
+		return mcpadapter.ServeStdio(ctx, a.Engine, a.Principal)
+	}
+	h := cfg.Server.HTTP
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", h.Address)
+	if err != nil {
+		return err
+	}
+	opt := mcpadapter.HTTPOptions{Authenticate: a.Identity.Authenticate, Ready: a.Ready, Logger: log}
+	if h.TLS != nil {
+		opt.TLS = &mcpadapter.TLSFiles{CertFile: h.TLS.CertFile, KeyFile: h.TLS.KeyFile}
+	}
+	log.Info("serving MCP over HTTP", "version", version.Version, "tools", len(a.Engine.Tools()), "address", ln.Addr().String(), "tls", h.TLS != nil)
+	return mcpadapter.ServeHTTP(ctx, ln, a.Engine, opt)
 }
 
 func verify(ctx context.Context, args []string, stdout io.Writer) error {
