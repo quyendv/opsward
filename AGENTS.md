@@ -11,8 +11,9 @@ per-principal policy, audit, redaction, and a write path that proposes changes i
 making them**.
 
 Status: **pre-alpha, design phase.** Nothing is stable; there are no commands yet.
-The architecture is in [docs/design/0001-architecture.md](docs/design/0001-architecture.md);
-read it before adding a package.
+Read the design notes in [docs/design/](docs/design/) before adding a package:
+[0001](docs/design/0001-architecture.md) for the architecture,
+[0002](docs/design/0002-identity-policy-storage.md) for identity, policy and storage.
 
 ## Layout
 
@@ -61,6 +62,7 @@ These are design decisions, not style preferences. Changing one needs a design n
    declarative source of truth. Direct mutations are narrow, named verbs behind approval.
 8. **Credentials are scoped per profile**, never one administrative credential for everything.
    The backend's own authorization is the real boundary; Opsward's policy is a second layer.
+   Opsward never creates credentials or grants permissions in a backend.
 9. **Tools are named for what they do, not for the backend.** `list_workload_logs`, not
    `loki_query`; swapping a backend must not rename a tool.
 

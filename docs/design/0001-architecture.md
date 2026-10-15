@@ -45,6 +45,8 @@ Which backends exist, and how a change reaches a cluster, are configuration.
 | Environment | A named target: a cluster, a namespace selector, a change strategy and policy scope |
 | Change strategy | How a change reaches an environment: `suggest`, `pull-request` or `direct` |
 | Profile | A backend credential with a fixed permission level, such as `reader` or `operator` |
+| Role, binding | What may be done, and who may do it where; see [0002](0002-identity-policy-storage.md) |
+| Store | Where Opsward keeps its own state: audit, approvals, tokens; SQLite or Postgres |
 | Knowledge pack | A directory of Markdown documents with frontmatter that tools can surface |
 
 ## Architecture
@@ -81,8 +83,8 @@ Every invocation, from every adapter, follows the same sequence. A failure at an
 the call and still produces an audit record.
 
 1. **Identify.** The adapter turns transport credentials into a `Principal`. Local stdio mode
-   yields a fixed principal from configuration. Remote mode validates an OIDC token. A call
-   with no principal is rejected.
+   yields a fixed principal from configuration. Remote mode validates an OIDC token or an API
+   token. A call with no principal is rejected.
 2. **Resolve.** Look up the tool in the registry. An unknown name is denied, not ignored.
 3. **Validate.** Decode arguments into the tool's typed input and check them against its
    schema, including that scope arguments name a configured environment and an allowed
@@ -90,8 +92,10 @@ the call and still produces an audit record.
 4. **Authorize.** `authorize(principal, tool, args)` returns `allow`, `deny` or `approve`.
    No matching rule means `deny`.
 5. **Approve.** For `approve`, the call is parked until a principal who is allowed to approve
-   does so, or it expires. Until v0.3 this is unavailable, so `approve` behaves as `deny`.
-6. **Run.** The tool runs with the backend profile mapped to this principal and environment.
+   does so, or it expires. Under `pull-request` the forge's review is the approval; other calls
+   are approved through the CLI or the web console, and a webhook announces pending requests.
+   Until v0.3 this is unavailable, so `approve` behaves as `deny`.
+6. **Run.** The tool runs with the profile named by the binding that authorized it.
 7. **Redact.** The result passes through redaction before it leaves the engine.
 8. **Audit.** One record per call, written whether the call succeeded, failed or was denied.
 
@@ -104,7 +108,7 @@ type Principal struct {
 
 type Decision struct {
     Effect Effect // Allow, Deny, Approve
-    Rule   string // the rule that decided, or "default-deny"
+    Rule   string // the binding that decided, or "default-deny"
 }
 ```
 
@@ -127,7 +131,8 @@ type Tool struct {
 type Scope struct {
     Environment string
     Namespace   string
-    Kind, Name  string // the resource the call targets, when it has one
+    Kind, Name  string            // the resource the call targets, when it has one
+    Labels      map[string]string // the target's labels, read during validation
 }
 ```
 
@@ -141,6 +146,9 @@ Rules:
   return Secret names and metadata only, and only where the profile allows listing them.
 - **Registration follows capability.** A tool whose required capabilities are not configured
   is not registered, so agents never see a tool that cannot work.
+- **Queries are confined.** Free-form query tools are confined to the caller's scope before
+  they reach the backend; typed tools such as `get_workload_metrics` build their queries from
+  templates. See [0002](0002-identity-policy-storage.md#confining-queries).
 - **Composite tools degrade.** A tool such as `diagnose_workload` uses whatever is available
   and reports each missing part explicitly (`logs: unavailable, no logs provider configured`)
   instead of failing.
@@ -149,7 +157,7 @@ Initial tool set, by group:
 
 | Group | Tools | Risk |
 |---|---|---|
-| Investigate | `get_workload_status`, `list_workload_events`, `list_workload_logs`, `query_metrics`, `query_logs`, `get_trace`, `diagnose_workload` | read |
+| Investigate | `get_workload_status`, `list_workload_events`, `list_workload_logs`, `get_workload_metrics`, `query_metrics`, `query_logs`, `get_trace`, `diagnose_workload` | read |
 | Context | `resolve_source`, `get_change_history`, `get_drift`, `search_knowledge` | read |
 | Change | `propose_change` | depends on strategy |
 | Operate | `restart_workload`, `scale_workload`, `rollback_workload`, `sync_application` | write |
@@ -172,6 +180,16 @@ before authorization.
 | `SourceResolver` | map a live object to the files that declare it | argocd, annotation, static map |
 
 Interfaces are written for all of them, but implementations ship only when someone uses them.
+
+**Providers call each backend's API directly**, through its own client library (client-go, the
+Prometheus HTTP API, a forge's SDK). They do not wrap other MCP servers: those expose
+backend-shaped tools with untyped arguments, often including generic apply or exec, hold their
+own credentials, and return text that composite tools and structural redaction cannot use.
+Wrapping an external MCP server as a provider is out of scope before v1.
+
+**One process reaches every configured cluster** directly, with that cluster's profiles. The
+`Workloads` capability is an interface, so an in-cluster agent that dials out to a central
+Opsward can be added after v1 as another transport, without changing tools.
 
 Each provider is configured with one credential per **profile**. A profile has a fixed level
 (`reader`, `operator`), and the backend's own authorization is the real boundary: a `reader`
@@ -197,7 +215,8 @@ A `Delivery` provider, when configured, adds sync status and history; it is not 
 live object. Resolvers are tried in order and the first answer wins:
 
 1. a `Delivery` provider (an Argo CD Application or Flux object that owns the resource)
-2. an annotation on the object, `opsward/source: <repo>//<path>` (the key is configurable)
+2. an annotation on the object, `opsward/source: <repo>//<path>`. The keys are a configurable
+   list, tried in order, so a new key can be added without breaking objects that use an old one
 3. a static mapping in configuration
 
 If nothing resolves, `propose_change` falls back to `suggest`. It never falls forward to
@@ -218,56 +237,37 @@ properties:
 
 ## Policy
 
-Policy is a list of rules. Each rule matches on principal, environment, namespace, tool and
-risk, and has an effect.
-
-```yaml
-policy:
-  rules:
-    - name: team-a-read
-      principals: { groups: [team-a] }
-      namespaces: ["team-a-*"]
-      risk: [read]
-      effect: allow
-
-    - name: team-a-restart-staging
-      principals: { groups: [team-a] }
-      environments: [staging]
-      namespaces: ["team-a-*"]
-      tools: [restart_workload]
-      effect: allow
-
-    - name: production-writes
-      environments: [production]
-      risk: [write, destructive]
-      effect: approve
-      approvers: { groups: [platform] }
-```
-
-Evaluation:
+Policy is a set of **roles** (which tools, by name or risk class) granted to subjects by
+**bindings** over a scope: environments, namespaces, and optionally individual workloads or
+applications. A binding's effect is `allow`, `approve` or `deny`, and it can carry a CEL
+condition.
 
 - `deny` overrides `approve`, which overrides `allow`. No match is `deny`.
-- `destructive` can never resolve to `allow`. Configuration validation rejects a rule that
+- `destructive` can never resolve to `allow`. Configuration validation rejects a binding that
   would allow it without approval.
 - An approver cannot approve their own call.
-- Policy is loaded at start-up and validated completely. An invalid policy prevents start-up
-  rather than loading partially.
+
+The model, its evaluation and where policy is loaded from are specified in
+[0002](0002-identity-policy-storage.md).
 
 ## Identity
 
 | Mode | Principal comes from | Version |
 |---|---|---|
 | local | configuration (`principal: {subject: local-admin, groups: [admin]}`) | v0.1 |
-| remote | OIDC access token, validated against the issuer; groups from a claim | v0.2 |
+| remote | an OIDC token from any compliant issuer, or an API token | v0.2 |
 
 **Gate:** remote mode, a second user, or any tool above `read` requires identity, policy and
 audit to be complete. These are not features that can follow later.
 
-Backends see a profile credential, not the human: Opsward's audit is the record of who asked.
+Backends see a profile credential, not the person, and the cluster needs no OIDC
+configuration. Groups, profiles and later credential sources are specified in
+[0002](0002-identity-policy-storage.md).
 
 ## Audit
 
-One JSON record per call, written to a configured sink (stdout, file; others later).
+One JSON record per call, written both to the store and to a stream (stdout or a file), and
+hash-chained; see [0002](0002-identity-policy-storage.md#audit).
 
 ```json
 {
@@ -278,14 +278,14 @@ One JSON record per call, written to a configured sink (stdout, file; others lat
   "risk": "write",
   "scope": { "environment": "staging", "namespace": "team-a-api", "kind": "Deployment", "name": "api" },
   "args": { "...": "redacted copy of the input" },
-  "decision": { "effect": "allow", "rule": "team-a-restart-staging" },
+  "decision": { "effect": "allow", "rule": "team-a-operate-staging" },
   "outcome": { "status": "ok", "durationMs": 412 },
   "change": { "strategy": "direct", "diff": "...", "snapshot": "..." }
 }
 ```
 
-Denied and failed calls are recorded too. An audit sink that cannot be written to fails the
-call: an unaudited action is worse than a refused one.
+Denied and failed calls are recorded too. A write that cannot be audited before it runs is
+refused: an unaudited action is worse than a refused one.
 
 ## Redaction
 
@@ -352,18 +352,33 @@ environments:
     namespaces: ["*"]
     change: { strategy: suggest }
 
+sourceResolution:
+  annotations: [opsward/source]
+
+policy:
+  roles:
+    viewer: { risk: [read] }
+  bindings:
+    - name: admin-view
+      subjects: { groups: [admin] }
+      role: viewer
+
 knowledge:
   paths: [/etc/opsward/knowledge]
 
+storage: { type: sqlite, path: /var/lib/opsward/opsward.db }
 audit:
-  sink: { type: file, path: /var/log/opsward/audit.jsonl }
+  stream: { type: stdout }
 ```
+
+The file is watched and reloaded atomically; an invalid file keeps the previous configuration
+in force. See [0002](0002-identity-policy-storage.md#loading-the-file).
 
 ## Adapters
 
 - **MCP**, using the official Go SDK, over stdio (local) and streamable HTTP (remote). Tools map
   to MCP tools, knowledge packs to MCP resources.
-- **REST** (v0.3) for the web console: approvals, audit queries.
+- **REST** (v0.3) for the web console: approvals, audit queries, policy.
 - **Webhook ingress** (v0.4) for alert-driven investigation.
 
 ## Threat model
@@ -376,16 +391,19 @@ audit:
 | An agent combines untrusted input, private data and an exfiltration channel | Opsward cannot see the client's other tools, so it limits its own surface: no generic HTTP or fetch tool, forge writes only to configured repositories, approvals show the full diff |
 | Opsward's own credentials are stolen | per-profile least privilege; no single administrative credential; credentials referenced, never inline |
 | A change bypasses review through a reconciled object | ownership check refuses `direct` on reconciled objects |
-| Silent gaps in audit | an unwritable sink fails the call |
+| Silent gaps in audit | a write is refused unless its intent is recorded; records are hash-chained and streamed outside Opsward |
+| A scoped principal reads other namespaces through a query language | PromQL rewritten with namespace and cluster matchers; unconfinable queries denied |
+| Escalation by editing policy | policy changes go through the same pipeline; file-defined policy is read-only elsewhere; Opsward never writes RBAC |
 
 ## Roadmap
 
 | Version | Scope |
 |---|---|
-| v0.1 | local identity, MCP stdio, read tools for Workloads, Metrics, Logs; `suggest`; knowledge packs; audit to file |
-| v0.2 | OIDC, remote MCP over HTTP, policy engine, multiple principals |
-| v0.3 | `pull-request` and `direct` strategies, narrow write verbs, approvals, minimal web console |
+| v0.1 | local identity, MCP stdio, read tools for Workloads, Metrics, Logs; `suggest`; knowledge packs; roles and bindings with CEL from the file; SQLite store; audit to store and stream |
+| v0.2 | OIDC, API tokens, internal groups, remote MCP over HTTP, multiple principals, Postgres |
+| v0.3 | `pull-request` and `direct` strategies, narrow write verbs, approvals, snapshots, web console (audit, approvals, policy), `opsward rbac render` |
 | v0.4 | Delivery provider depth, alert webhook, optional agent mode |
+| later | impersonation and token passthrough credential sources |
 
 ## Alternatives considered
 
@@ -395,6 +413,9 @@ audit:
 - **Existing Kubernetes and observability MCP servers behind a gateway.** This covers read-only
   use well and should be the recommendation for a team that needs only that. It does not
   provide per-principal backend profiles, a write path through review, ownership checks, or
-  knowledge attached to tool calls.
+  knowledge attached to tool calls. Using those servers as Opsward's providers was rejected for
+  the reasons under [Capabilities and providers](#capabilities-and-providers): policy would
+  depend on a mapping of every upstream tool's arguments, which breaks silently when upstream
+  changes, and a new upstream tool would be reachable until someone blocked it.
 - **Mandating GitOps.** Simpler, but excludes teams without it and does not match how many
   organizations actually run a mix of reconciled and hand-applied workloads.
