@@ -32,6 +32,10 @@ const celCostLimit = 1_000_000
 // maxDocBytes bounds one knowledge file.
 const maxDocBytes = 256 << 10
 
+// annotateBudget is the CEL cost all documents' conditions may spend on one call, so
+// that many documents over a large result cannot add unbounded work to every call.
+var annotateBudget uint64 = 5_000_000
+
 var (
 	validID       = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	severityOrder = map[string]int{"critical": 0, "warning": 1, "info": 2}
@@ -236,7 +240,7 @@ func Load(opt Options) (*Pack, []string, error) {
 				errs = append(errs, fmt.Errorf("knowledge: %s: when must evaluate to bool, not %s", f.name, ast.OutputType()))
 				continue
 			}
-			if d.when, err = env.Program(ast, cel.CostLimit(celCostLimit)); err != nil {
+			if d.when, err = env.Program(ast, cel.CostLimit(celCostLimit), cel.EvalOptions(cel.OptTrackCost)); err != nil {
 				errs = append(errs, fmt.Errorf("knowledge: %s: when: %w", f.name, err))
 				continue
 			}
@@ -266,25 +270,34 @@ func (p *Pack) Get(id string) (Doc, bool) {
 }
 
 // Annotate implements engine.Annotator: the notes of every document whose applies-to
-// matches, most severe first. A condition that fails to evaluate does not attach.
+// matches, most severe first. A condition that fails to evaluate does not attach. Once
+// the conditions have spent annotateBudget, the remaining conditional documents are
+// skipped; documents without a condition still attach.
 func (p *Pack) Annotate(req core.Request, result any) []core.Note {
 	var notes []core.Note
+	var spent uint64
 	for i := range p.docs {
 		d := &p.docs[i]
 		if !slices.Contains(d.Tools, req.Tool) {
 			continue
 		}
 		if d.when != nil {
+			if spent >= annotateBudget {
+				continue
+			}
 			args := req.Args
 			if args == nil {
 				args = map[string]any{}
 			}
-			out, _, err := d.when.Eval(map[string]any{
+			out, details, err := d.when.Eval(map[string]any{
 				"tool":   map[string]any{"name": req.Tool, "risk": string(req.Risk)},
 				"scope":  map[string]any{"environment": req.Scope.Environment, "namespace": req.Scope.Namespace, "kind": req.Scope.Kind, "name": req.Scope.Name},
 				"args":   args,
 				"result": result,
 			})
+			if details != nil && details.ActualCost() != nil {
+				spent += *details.ActualCost()
+			}
 			if err != nil {
 				continue
 			}

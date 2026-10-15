@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -318,5 +319,26 @@ func TestLoadRejectsOversizedFiles(t *testing.T) {
 	_, _, err := Load(Options{Paths: []string{dir}})
 	if err == nil || !strings.Contains(err.Error(), "huge.md") || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Issue #8: conditions share one cost budget per call; once it is spent, the remaining
+// conditional documents are not evaluated.
+func TestAnnotateStopsAtTheCostBudget(t *testing.T) {
+	dir := t.TempDir()
+	for i := range 5 {
+		write(t, dir, fmt.Sprintf("d%d.md", i), fmt.Sprintf("---\nid: d%d\ntitle: t\napplies-to:\n  tools: [x]\n  when: '[1,2,3,4,5,6,7,8,9,10].all(v, v > 0)'\n---\nbody\n", i))
+	}
+	pack, _, err := Load(Options{Paths: []string{dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(pack.Annotate(request("x"), nil)); n != 5 {
+		t.Fatalf("default budget: %d notes, want 5", n)
+	}
+	defer func(b uint64) { annotateBudget = b }(annotateBudget)
+	annotateBudget = 1
+	if n := len(pack.Annotate(request("x"), nil)); n != 1 {
+		t.Fatalf("budget 1: %d notes, want only the first document evaluated", n)
 	}
 }
