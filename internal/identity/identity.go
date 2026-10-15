@@ -43,6 +43,7 @@ type Options struct {
 	Groups map[string][]string // internal groups: group name to member subjects
 	Now    func() time.Time    // default time.Now
 	Logger *slog.Logger
+	OIDC   *OIDCOptions // nil: only API tokens
 }
 
 // Authenticator authenticates bearer tokens. It is safe for concurrent use.
@@ -50,6 +51,7 @@ type Authenticator struct {
 	store store.Store
 	now   func() time.Time
 	log   *slog.Logger
+	oidc  *oidcState // nil without OIDC
 
 	mu       sync.RWMutex
 	memberOf map[string][]string // subject to internal groups
@@ -63,6 +65,9 @@ func New(opt Options) *Authenticator {
 	}
 	if a.log == nil {
 		a.log = slog.New(slog.DiscardHandler)
+	}
+	if opt.OIDC != nil {
+		a.oidc = &oidcState{opt: *opt.OIDC}
 	}
 	a.SetGroups(opt.Groups)
 	return a
@@ -82,10 +87,14 @@ func (a *Authenticator) SetGroups(groups map[string][]string) {
 }
 
 // Authenticate returns the principal a bearer token names, without an adapter, and the
-// time its credential expires.
+// time its credential expires. A token with TokenPrefix is an API token; any other is an
+// OIDC access token when OIDC is configured.
 func (a *Authenticator) Authenticate(ctx context.Context, token string) (core.Principal, time.Time, error) {
 	if !strings.HasPrefix(token, TokenPrefix) {
-		return core.Principal{}, time.Time{}, unauthenticated("not an API token")
+		if a.oidc != nil {
+			return a.authenticateOIDC(ctx, token)
+		}
+		return core.Principal{}, time.Time{}, unauthenticated("not an API token, and OIDC is not configured")
 	}
 	id, secret, ok := parse(token)
 	if !ok {

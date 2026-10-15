@@ -35,10 +35,11 @@ identity:
     maxTTL: 365d               # default; a token can never be created for longer
   oidc:                        # optional, M5
     issuer: https://id.example.com
-    audience: opsward
+    audience: https://opsward.example.com/mcp   # default: publicURL + /mcp
     subjectClaim: email
     groupsClaim: groups
     groupsPrefix: "oidc:"
+    scopes: [opsward]          # optional; advertised to clients
   groups:                      # internal groups, reloadable
     platform: [alice@example.com, bob@example.com]
 
@@ -142,20 +143,29 @@ can be revoked without touching the others.
 ### OIDC
 
 Opsward is an OAuth resource server (MCP authorization, RFC 9728). It validates access
-tokens issued by `identity.oidc.issuer`:
+tokens issued by `identity.oidc.issuer`, which must be JWTs; an issuer that hands out
+opaque access tokens needs a broker in front that issues JWTs:
 
 - signature against the issuer's published keys, found by discovery and refreshed when an
   unknown key ID appears;
-- `iss` equal to the issuer, `aud` containing `audience`, `exp` in the future, with one
-  minute of clock skew;
+- `iss` equal to the issuer, `aud` containing `audience`, `exp` in the future (`nbf` is
+  allowed five minutes of clock skew);
 - when `subjectClaim` is `email`, `email_verified` must be `true`.
 
-The issuer is discovered at start-up. If it cannot be reached, Opsward starts anyway and
-retries in the background; until discovery succeeds OIDC tokens are rejected and API tokens
-work.
+`audience` defaults to the MCP resource URL, `publicURL` + `/mcp`, which MCP clients send
+as the resource indicator (RFC 8707) when they request a token. Binding tokens to that
+audience keeps tokens issued for other applications of the same issuer, ID tokens
+included, from being accepted.
 
-Clients find the issuer through `/.well-known/oauth-protected-resource`, which names
-`publicURL` + `/mcp` as the resource and the issuer as its only authorization server.
+The issuer is discovered at start-up. If it cannot be reached, Opsward starts anyway and
+retries in the background, waiting from one second up to a minute between attempts; until
+discovery succeeds OIDC tokens are rejected and API tokens work.
+
+Clients find the issuer through `/.well-known/oauth-protected-resource/mcp` (also served
+without the `/mcp` suffix), which names `publicURL` + `/mcp` as the resource, the issuer as
+its only authorization server, and `scopes` when set. Every `401` carries
+`WWW-Authenticate: Bearer resource_metadata="…"` pointing there. Without OIDC neither the
+metadata nor the parameter is served.
 Registering the client is between the client and the issuer: a pre-registered client ID,
 Client ID Metadata Documents or Dynamic Client Registration, whichever both support. Opsward
 does not register clients, issue tokens or proxy an authorization server (0002). A client

@@ -57,6 +57,7 @@ type Identity struct {
 	Mode      string    `yaml:"mode"`      // local (stdio, fixed principal) or remote (HTTP, tokens)
 	Principal Principal `yaml:"principal"` // local mode only
 	APITokens APITokens `yaml:"apiTokens"`
+	OIDC      *OIDC     `yaml:"oidc"` // optional; remote mode
 	// Groups are internal groups: group name to member subjects. Reloadable.
 	Groups map[string][]string `yaml:"groups"`
 }
@@ -189,6 +190,7 @@ func (c *Config) applyDefaults() {
 	if c.Identity.Mode == "" {
 		c.Identity.Mode = ModeLocal
 	}
+	c.oidcDefaults()
 	if c.Identity.APITokens.MaxTTL == nil {
 		d := Duration(DefaultAPITokenMaxTTL)
 		c.Identity.APITokens.MaxTTL = &d

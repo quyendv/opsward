@@ -6,6 +6,12 @@ identity:
   mode: remote
   apiTokens:
     maxTTL: 365d
+  # People can also sign in through an OpenID Connect issuer whose access tokens are
+  # JWTs; MCP clients discover it from this server. Needs server.http.publicURL.
+  # oidc:
+  #   issuer: https://id.example.com
+  #   groupsClaim: groups
+  #   groupsPrefix: "oidc:"
   # Internal groups. Edits apply without a restart.
   groups:
     platform: [alice@example.com]
@@ -14,6 +20,8 @@ identity:
 server:
   http:
     address: 0.0.0.0:8080
+    # How clients reach this server; required with oidc.
+    # publicURL: https://opsward.example.com
     # TLS is usually terminated in front of Opsward. To serve it directly:
     # tls:
     #   certFile: /etc/opsward/tls/tls.crt

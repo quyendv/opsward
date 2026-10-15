@@ -159,6 +159,10 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	if h.TLS != nil {
 		opt.TLS = &mcpadapter.TLSFiles{CertFile: h.TLS.CertFile, KeyFile: h.TLS.KeyFile}
 	}
+	if o := cfg.Identity.OIDC; o != nil {
+		opt.Resource = &mcpadapter.Resource{URL: cfg.ResourceURL(), AuthorizationServers: []string{o.Issuer}, Scopes: o.Scopes}
+		go a.Identity.Discover(ctx)
+	}
 	log.Info("serving MCP over HTTP", "version", version.Version, "tools", len(a.Engine.Tools()), "address", ln.Addr().String(), "tls", h.TLS != nil)
 	return mcpadapter.ServeHTTP(ctx, ln, a.Engine, opt)
 }

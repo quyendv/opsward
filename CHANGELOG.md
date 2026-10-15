@@ -12,6 +12,9 @@ All notable changes to this project are documented here. The format follows
   `/healthz` and `/readyz`, optional TLS whose certificate is re-read when it changes.
 - API tokens: `opsward token create|list|revoke`; only a hash of each secret is stored, every
   token expires, and creating or revoking one is audited.
+- OIDC access tokens (`identity.oidc`): JWTs from any compliant issuer, bound to the MCP
+  resource URL as audience, with claim groups optionally prefixed; RFC 9728 protected
+  resource metadata so that MCP clients discover the issuer.
 - Internal groups (`identity.groups`), applied on reload.
 - Audit records name the credential behind a call (`principal.credential`).
 

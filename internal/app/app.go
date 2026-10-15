@@ -187,7 +187,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 		return nil, err
 	}
 	a.Store, a.Audit, a.closers = st, w, closers
-	a.Identity = identity.New(identity.Options{Store: st, Groups: cfg.Identity.Groups, Logger: opt.Logger})
+	a.Identity = identity.New(identity.Options{Store: st, Groups: cfg.Identity.Groups, Logger: opt.Logger, OIDC: oidcOptions(cfg)})
 
 	a.Engine, err = engine.New(engine.Options{
 		Tools: a.tools, Environments: d.envs, Authorizer: d.policy, Auditor: w, Annotator: a.lib, Logger: opt.Logger,
@@ -390,6 +390,16 @@ func (a *App) RunRetention(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+	}
+}
+
+func oidcOptions(cfg *config.Config) *identity.OIDCOptions {
+	o := cfg.Identity.OIDC
+	if o == nil {
+		return nil
+	}
+	return &identity.OIDCOptions{
+		Issuer: o.Issuer, Audience: o.Audience, SubjectClaim: o.SubjectClaim, GroupsClaim: o.GroupsClaim, GroupsPrefix: o.GroupsPrefix,
 	}
 }
 
