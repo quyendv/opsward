@@ -261,6 +261,15 @@ func (s *Store) PruneAudit(ctx context.Context, writer string, throughSeq uint64
 	return res.RowsAffected()
 }
 
+// Ping implements store.Store.
+func (s *Store) Ping(ctx context.Context) error {
+	var one int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1`).Scan(&one); err != nil {
+		return fmt.Errorf("sqlite: ping: %w", err)
+	}
+	return nil
+}
+
 // Close implements store.Store.
 func (s *Store) Close() error { return s.db.Close() }
 

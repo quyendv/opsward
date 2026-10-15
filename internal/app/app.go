@@ -20,6 +20,7 @@ import (
 	"github.com/quyendv/opsward/internal/config"
 	"github.com/quyendv/opsward/internal/core"
 	"github.com/quyendv/opsward/internal/engine"
+	"github.com/quyendv/opsward/internal/identity"
 	"github.com/quyendv/opsward/internal/knowledge"
 	"github.com/quyendv/opsward/internal/policy"
 	"github.com/quyendv/opsward/internal/provider/httpapi"
@@ -51,7 +52,9 @@ type App struct {
 	Principal core.Principal
 	Audit     *audit.Writer
 	Store     store.Store
-	Warnings  []string
+	// Identity authenticates bearer tokens in remote mode.
+	Identity *identity.Authenticator
+	Warnings []string
 
 	retention time.Duration
 	log       *slog.Logger
@@ -179,26 +182,12 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	a.apply(d)
 	a.Warnings = d.warnings
 
-	st, err := sqlite.Open(ctx, cfg.Storage.Path)
+	st, w, closers, err := openAudit(ctx, cfg, opt)
 	if err != nil {
 		return nil, err
 	}
-	a.Store = st
-	a.closers = append(a.closers, st)
-
-	stream, err := a.openStream(cfg.Audit.Stream, opt)
-	if err != nil {
-		_ = a.Close()
-		return nil, err
-	}
-	w, err := audit.NewWriter(ctx, audit.Options{
-		WriterID: cfg.Audit.Writer, Store: st, Stream: stream, Timeout: cfg.Audit.Timeout.Std(),
-	})
-	if err != nil {
-		_ = a.Close()
-		return nil, err
-	}
-	a.Audit = w
+	a.Store, a.Audit, a.closers = st, w, closers
+	a.Identity = identity.New(identity.Options{Store: st, Groups: cfg.Identity.Groups, Logger: opt.Logger})
 
 	a.Engine, err = engine.New(engine.Options{
 		Tools: a.tools, Environments: d.envs, Authorizer: d.policy, Auditor: w, Annotator: a.lib, Logger: opt.Logger,
@@ -228,8 +217,9 @@ func (a *App) ReloadFile(path string) error {
 	return a.Reload(next)
 }
 
-// Reload applies a new configuration: policy, environments, providers and knowledge.
-// Identity, storage and audit cannot change without a restart. On any error nothing
+// Reload applies a new configuration: policy, environments, providers, knowledge and
+// internal groups. The rest of identity, server, storage and audit cannot change
+// without a restart. On any error nothing
 // changes and the previous configuration stays in force.
 func (a *App) Reload(next *config.Config) error {
 	a.mu.Lock()
@@ -243,6 +233,7 @@ func (a *App) Reload(next *config.Config) error {
 	}
 	a.apply(d)
 	a.Engine.Update(d.envs, d.policy, a.lib)
+	a.Identity.SetGroups(next.Identity.Groups)
 	a.cfg, a.Warnings = next, d.warnings
 	return nil
 }
@@ -330,7 +321,35 @@ func hash(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (a *App) openStream(s config.Stream, opt Options) (io.Writer, error) {
+// openAudit opens the store and an audit writer on it. The closers release both, in
+// reverse order.
+func openAudit(ctx context.Context, cfg *config.Config, opt Options) (store.Store, *audit.Writer, []io.Closer, error) {
+	st, err := sqlite.Open(ctx, cfg.Storage.Path)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	closers := []io.Closer{st}
+	closeAll := func() {
+		for _, c := range slices.Backward(closers) {
+			_ = c.Close()
+		}
+	}
+	stream, err := openStream(cfg.Audit.Stream, opt, &closers)
+	if err != nil {
+		closeAll()
+		return nil, nil, nil, err
+	}
+	w, err := audit.NewWriter(ctx, audit.Options{
+		WriterID: cfg.Audit.Writer, Store: st, Stream: stream, Timeout: cfg.Audit.Timeout.Std(),
+	})
+	if err != nil {
+		closeAll()
+		return nil, nil, nil, err
+	}
+	return st, w, closers, nil
+}
+
+func openStream(s config.Stream, opt Options, closers *[]io.Closer) (io.Writer, error) {
 	switch s.Type {
 	case "stdout":
 		return orDefault(opt.Stdout, os.Stdout), nil
@@ -339,7 +358,7 @@ func (a *App) openStream(s config.Stream, opt Options) (io.Writer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("audit stream: %w", err)
 		}
-		a.closers = append(a.closers, f)
+		*closers = append(*closers, f)
 		return f, nil
 	default:
 		return orDefault(opt.Stderr, os.Stderr), nil
@@ -370,6 +389,9 @@ func (a *App) RunRetention(ctx context.Context) {
 		}
 	}
 }
+
+// Ready reports whether the store answers, for a readiness probe.
+func (a *App) Ready(ctx context.Context) error { return a.Store.Ping(ctx) }
 
 // Close releases the store and any stream file.
 func (a *App) Close() error {

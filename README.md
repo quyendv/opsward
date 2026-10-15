@@ -2,7 +2,7 @@
 
 **A guarded gateway that lets AI agents operate your infrastructure, within the permissions you grant.**
 
-> Status: pre-alpha. Read-only workload, metrics and logs tools and knowledge packs work over MCP stdio; nothing is stable.
+> Status: pre-alpha. Read-only workload, metrics and logs tools and knowledge packs work over MCP stdio, or over HTTP for a team with API tokens; nothing is stable.
 
 ## Why
 
@@ -37,6 +37,16 @@ Point `providers.kubernetes.clusters.*.profiles.reader.kubeconfig` at a kubeconf
 credential is bound to a read-only role, then register `opsward serve --config <file>` as a
 stdio MCP server in your agent client. Every call is audited to the SQLite file in
 `storage.path` and to stderr; `opsward audit verify --config <file>` checks the chain.
+
+To share one Opsward with a team, run it in remote mode
+([examples/opsward-remote.yaml](examples/opsward-remote.yaml)): it serves MCP over HTTP at
+`/mcp`, and each person or pipeline authenticates with an API token from
+`opsward token create`, sent as `Authorization: Bearer <token>`. For example, in Claude Code:
+
+```sh
+claude mcp add --transport http opsward https://opsward.example.com/mcp \
+  --header "Authorization: Bearer $OPSWARD_TOKEN"
+```
 
 Tools: `get_workload_status`, `list_workload_events`, `list_workload_logs`,
 `diagnose_workload`, `search_knowledge`, `get_knowledge`; with a Prometheus-compatible

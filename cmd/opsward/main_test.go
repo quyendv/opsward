@@ -137,3 +137,10 @@ func TestValidatePrintsConfigWarnings(t *testing.T) {
 		t.Fatalf("code %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }
+
+func TestValidateRemoteExampleConfig(t *testing.T) {
+	code, out, errOut := runCLI("validate", "--config", "../../examples/opsward-remote.yaml")
+	if code != 0 || !strings.Contains(out, "configuration is valid") {
+		t.Fatalf("code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}

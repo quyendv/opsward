@@ -50,6 +50,8 @@ type Store interface {
 	// TouchAPIToken records that the token was used at at.
 	TouchAPIToken(ctx context.Context, id string, at time.Time) error
 
+	// Ping reports whether the store answers queries.
+	Ping(ctx context.Context) error
 	Close() error
 }
 
