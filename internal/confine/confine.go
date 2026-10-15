@@ -210,10 +210,16 @@ func readString(s string) (literal, value string, n int, err error) {
 }
 
 // hasBraceOutsideStrings reports whether s contains '{' outside string literals, which in
-// a log query's pipeline can only start another stream selector.
+// a log query's pipeline can only start another stream selector. A comment runs from '#'
+// to the end of the line; quotes inside it do not start strings, so that a backtick in a
+// comment cannot hide a selector on the next line.
 func hasBraceOutsideStrings(s string) bool {
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
+		case '#':
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
 		case '{':
 			return true
 		case '"', '`':

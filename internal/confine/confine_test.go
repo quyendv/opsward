@@ -168,3 +168,21 @@ func TestLogQLRejects(t *testing.T) {
 		}
 	}
 }
+
+// A comment (# to end of line) must not hide a second selector from the scanner: a
+// backtick inside a comment is not a string. Loki would reject the result anyway; this
+// keeps confinement from depending on that.
+func TestLogQLCommentsCannotHideASelector(t *testing.T) {
+	for _, q := range []string{
+		"{app=\"x\"} # `\n{namespace=\"other\"}\n# `",
+		"{app=\"x\"} # \"\n{namespace=\"other\"}\n# \"",
+	} {
+		if _, err := LogQL(q, scope); !errors.Is(err, ErrNotLogQuery) {
+			t.Errorf("LogQL(%q) err = %v, want ErrNotLogQuery", q, err)
+		}
+	}
+	// A brace inside a comment is harmless and accepted.
+	if _, err := LogQL("{app=\"x\"} # a comment with { braces }\n|= \"y\"", scope); err != nil {
+		t.Fatalf("brace in a comment: %v", err)
+	}
+}
