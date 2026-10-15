@@ -140,8 +140,9 @@ func (s Subjects) match(p core.Principal) bool {
 	if len(s.Users) == 0 && len(s.Groups) == 0 {
 		return true
 	}
+	subject := core.NormalizeSubject(p.Subject)
 	for _, u := range s.Users {
-		if u == p.Subject {
+		if core.NormalizeSubject(u) == subject {
 			return true
 		}
 	}

@@ -323,3 +323,19 @@ func TestCompileGlobalToolsNeedNoProfiles(t *testing.T) {
 		t.Fatalf("knowledge-only binding: %v", err)
 	}
 }
+
+// Email subjects match whatever case the binding or the issuer wrote them in; opaque
+// subjects stay exact.
+func TestDecideEmailSubjectsIgnoreCase(t *testing.T) {
+	roles := map[string]Role{"viewer": {Risk: []core.Risk{core.RiskRead}}}
+	p := mustCompile(t, Config{Roles: roles, Bindings: []Binding{
+		{Name: "allow", Role: "viewer"},
+		{Name: "deny-mallory", Role: "viewer", Effect: core.EffectDeny, Subjects: Subjects{Users: []string{"Mallory@Example.com"}}},
+		{Name: "deny-id", Role: "viewer", Effect: core.EffectDeny, Subjects: Subjects{Users: []string{"AbC123"}}},
+	}})
+	for subject, want := range map[string]string{"mallory@example.com": "deny-mallory", "MALLORY@EXAMPLE.COM": "deny-mallory", "abc123": "allow", "AbC123": "deny-id"} {
+		if got := p.Decide(request(subject, nil, "get_workload_status", core.RiskRead, apiScope)); got.Rule != want {
+			t.Errorf("%s: rule %s, want %s", subject, got.Rule, want)
+		}
+	}
+}

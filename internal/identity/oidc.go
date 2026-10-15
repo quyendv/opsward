@@ -2,6 +2,8 @@ package identity
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -72,7 +74,14 @@ func (a *Authenticator) Discover(ctx context.Context) {
 				return
 			}
 		}
-		a.log.Warn("OIDC issuer discovery failed; OIDC tokens are rejected until it succeeds", "issuer", o.opt.Issuer, "error", err, "retry", wait)
+		var mismatch *oidc.IssuerMismatchError
+		if errors.As(err, &mismatch) {
+			// Retrying will not fix a configuration that names the issuer differently.
+			a.log.Error("the OIDC issuer names itself differently from identity.oidc.issuer; set it exactly to the advertised value",
+				"configured", mismatch.Provided, "advertised", mismatch.Discovered, "retry", wait)
+		} else {
+			a.log.Warn("OIDC issuer discovery failed; OIDC tokens cannot be checked until it succeeds", "issuer", o.opt.Issuer, "error", err, "retry", wait)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -107,12 +116,21 @@ func (o *oidcState) newVerifier(client *http.Client, jwksURI string, algNames []
 func (a *Authenticator) authenticateOIDC(ctx context.Context, raw string) (core.Principal, time.Time, error) {
 	v := a.oidc.verifier.Load()
 	if v == nil {
-		return core.Principal{}, time.Time{}, unauthenticated("OIDC issuer not discovered yet")
+		// Not a rejection: the token may be valid, and a 401 would send the client back
+		// through sign-in.
+		return core.Principal{}, time.Time{}, errors.New("OIDC issuer not discovered yet")
 	}
 	if strings.Count(raw, ".") != 2 {
 		return core.Principal{}, time.Time{}, unauthenticated("malformed token: neither an API token nor a JWT")
 	}
-	tok, err := v.Verify(ctx, raw)
+	if typ := headerType(raw); !accessTokenType(typ) {
+		return core.Principal{}, time.Time{}, unauthenticated(fmt.Sprintf("OIDC token type %q is not an access token", typ))
+	}
+	var keys keyStatus
+	tok, err := v.Verify(context.WithValue(ctx, keyStatusKey{}, &keys), raw)
+	if err != nil && keys.unavailable != nil {
+		return core.Principal{}, time.Time{}, fmt.Errorf("OIDC token cannot be checked: %w", keys.unavailable)
+	}
 	if err != nil {
 		var expired *oidc.TokenExpiredError
 		if errors.As(err, &expired) {
@@ -124,8 +142,12 @@ func (a *Authenticator) authenticateOIDC(ctx context.Context, raw string) (core.
 	if err := tok.Claims(&claims); err != nil {
 		return core.Principal{}, time.Time{}, unauthenticated("OIDC token claims: " + err.Error())
 	}
+	if typ, ok := claims["typ"].(string); ok && !strings.EqualFold(typ, "Bearer") && !accessTokenType(typ) {
+		return core.Principal{}, time.Time{}, unauthenticated(fmt.Sprintf("OIDC token typ claim %q is not an access token", typ))
+	}
 	opt := a.oidc.opt
 	subject, _ := claims[opt.SubjectClaim].(string)
+	subject = core.NormalizeSubject(subject)
 	if subject == "" {
 		return core.Principal{}, time.Time{}, unauthenticated(fmt.Sprintf("OIDC token has no %q claim", opt.SubjectClaim))
 	}
@@ -137,6 +159,28 @@ func (a *Authenticator) authenticateOIDC(ctx context.Context, raw string) (core.
 		groups[i] = opt.GroupsPrefix + g
 	}
 	return core.Principal{Subject: subject, Groups: a.groups(subject, groups), Credential: "oidc"}, tok.Expiry, nil
+}
+
+// headerType returns the typ of a JWT's header, or "" when it has none or cannot be read.
+func headerType(raw string) string {
+	b, err := base64.RawURLEncoding.DecodeString(raw[:strings.IndexByte(raw, '.')])
+	if err != nil {
+		return ""
+	}
+	var h struct {
+		Typ string `json:"typ"`
+	}
+	_ = json.Unmarshal(b, &h)
+	return h.Typ
+}
+
+// accessTokenType accepts the JWT types an access token can carry (RFC 9068), and none.
+func accessTokenType(typ string) bool {
+	switch strings.ToLower(typ) {
+	case "", "jwt", "at+jwt", "application/at+jwt":
+		return true
+	}
+	return false
 }
 
 // verified accepts true, and the string "true" that some issuers send.

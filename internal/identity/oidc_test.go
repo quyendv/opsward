@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -138,7 +139,8 @@ func TestOIDCDiscoveryRetries(t *testing.T) {
 	is.Down.Store(true)
 	a := oidcAuth(t, is, OIDCOptions{})
 	tok := is.Sign(claims(is, nil))
-	if _, _, err := a.Authenticate(context.Background(), tok); !errors.Is(err, ErrUnauthenticated) || !strings.Contains(err.Error(), "not discovered") {
+	// Undecidable, not rejected: a 401 would send the client back through sign-in.
+	if _, _, err := a.Authenticate(context.Background(), tok); err == nil || errors.Is(err, ErrUnauthenticated) || !strings.Contains(err.Error(), "not discovered") {
 		t.Fatalf("before discovery: %v", err)
 	}
 	apiTok, _ := create(t, a, "ci@example.com", nil)
@@ -196,5 +198,68 @@ func TestOIDCForgedTokensDoNotRefetchKeys(t *testing.T) {
 	}
 	if got := is.KeyFetches.Load() - before; got > 1 {
 		t.Fatalf("60 forged tokens caused %d key set fetches, want at most 1", got)
+	}
+}
+
+// When the issuer's keys cannot be fetched for a new key ID, the token cannot be judged.
+func TestOIDCKeysUnavailableIsNotARejection(t *testing.T) {
+	is := oidctest.New(t)
+	a := oidcAuth(t, is, OIDCOptions{KeyRefreshInterval: time.Nanosecond})
+	ready(t, a)
+	is.Rotate("k2")
+	is.KeysDown.Store(true)
+	_, _, err := a.Authenticate(context.Background(), is.Sign(claims(is, nil)))
+	if err == nil || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("err = %v, want an error that is not a rejection", err)
+	}
+}
+
+// ID tokens and other token types are not access tokens, whatever their audience.
+func TestOIDCRejectsNonAccessTokens(t *testing.T) {
+	is := oidctest.New(t)
+	a := oidcAuth(t, is, OIDCOptions{})
+	ready(t, a)
+	key, kid := is.Current()
+	for name, tok := range map[string]string{
+		"payload typ ID":  is.Sign(claims(is, map[string]any{"typ": "ID"})),
+		"header typ dpop": oidctest.SignTyped(t, key, kid, "dpop+jwt", claims(is, nil)),
+	} {
+		if _, _, err := a.Authenticate(context.Background(), tok); !errors.Is(err, ErrUnauthenticated) {
+			t.Errorf("%s: err = %v, want a rejection", name, err)
+		}
+	}
+	for _, typ := range []string{"at+jwt", "application/at+jwt", "JWT"} {
+		if _, _, err := a.Authenticate(context.Background(), oidctest.SignTyped(t, key, kid, typ, claims(is, nil))); err != nil {
+			t.Errorf("header typ %s: %v", typ, err)
+		}
+	}
+}
+
+// Email subjects are compared without case, so that a deny on alice@ also stops Alice@.
+func TestOIDCEmailSubjectIsLowercased(t *testing.T) {
+	is := oidctest.New(t)
+	a := oidcAuth(t, is, OIDCOptions{})
+	ready(t, a)
+	p, _, err := a.Authenticate(context.Background(), is.Sign(claims(is, map[string]any{"email": "Alice@Example.COM"})))
+	if err != nil || p.Subject != "alice@example.com" || !slices.Contains(p.Groups, "platform") {
+		t.Fatalf("principal = %+v, %v; want the lowercased subject and its internal groups", p, err)
+	}
+}
+
+// An issuer that names itself differently will not change by retrying: say so, loudly,
+// with the value to configure.
+func TestOIDCIssuerMismatchIsAnError(t *testing.T) {
+	is := oidctest.New(t)
+	is.Advertise = is.URL + "/"
+	var logs strings.Builder
+	a := New(Options{Store: openStore(t), Logger: slog.New(slog.NewJSONHandler(&logs, nil)), OIDC: &OIDCOptions{
+		Issuer: is.URL, Audience: audience, SubjectClaim: "email", GroupsClaim: "groups", RetryInterval: time.Hour,
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	a.Discover(ctx)
+	out := logs.String()
+	if !strings.Contains(out, `"level":"ERROR"`) || !strings.Contains(out, is.URL+"/") || !strings.Contains(out, "identity.oidc.issuer") {
+		t.Fatalf("log = %s", out)
 	}
 }
