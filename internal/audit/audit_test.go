@@ -344,3 +344,37 @@ func TestPruneWithZeroRetentionKeepsEverything(t *testing.T) {
 		t.Fatalf("Prune(0) = %d, %v", n, err)
 	}
 }
+
+// Retention applies to every chain in the store, not only the pruning process's own:
+// chains of writers that no longer run would otherwise be kept forever.
+func TestPruneCoversEveryWriter(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	c := newClock(t0)
+	var stream bytes.Buffer
+	old, err := NewWriter(ctx, Options{WriterID: "old-host", Store: s, Stream: &stream, Timeout: time.Second, Now: c.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Write(ctx, outcome("a")); err != nil {
+		t.Fatal(err)
+	}
+	current := newWriter(t, s, &stream, c)
+	if _, err := current.Write(ctx, outcome("b")); err != nil {
+		t.Fatal(err)
+	}
+	c.Set(t0.Add(100 * 24 * time.Hour))
+	n, err := current.Prune(ctx, 90*24*time.Hour)
+	if err != nil || n != 2 {
+		t.Fatalf("Prune = %d, %v; want both chains' old records removed", n, err)
+	}
+	for _, w := range []string{"old-host", "w1"} {
+		records, err := Load(ctx, s, w)
+		if err != nil || len(records) != 1 || records[0].Phase != PhaseCheckpoint {
+			t.Fatalf("%s: records = %+v, %v", w, records, err)
+		}
+		if err := Verify(records); err != nil {
+			t.Fatalf("%s: Verify: %v", w, err)
+		}
+	}
+}

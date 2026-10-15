@@ -344,10 +344,11 @@ Every record is written to two places:
 
 Each record carries a sequence number and a hash chain: `prev` is the hash of the previous
 record from the same writer and `hash` covers the record including `prev`. A deleted or altered
-record breaks the chain. Each replica keeps its own chain, identified by `writer`.
-Processes that share a store and a writer ID, such as one MCP stdio server per client
-session, share one chain in the store; each process's stream then holds only its own
-records, so the store is what `opsward audit verify` checks.
+record breaks the chain. A chain is identified by `writer` (`opsward` unless configured). Processes that share a
+store and a writer ID, such as one MCP stdio server per client session, share one chain:
+the store reads the chain head and appends under one write lock. Each process's stream
+then holds only its own records, so the store is what `opsward audit verify` checks, and
+it checks every chain it holds.
 
 ```json
 {
@@ -371,7 +372,8 @@ For a `read` call the result is withheld instead: output that was not audited do
 leave the engine.
 
 **Retention.** The store keeps records for 90 days by default (`auditRetention`, `0` keeps them
-forever); long-term retention is the stream's job. Pruning first writes a `checkpoint` record
+forever), in every chain the store holds; long-term retention is the stream's job. Pruning
+first writes a `checkpoint` record
 holding the hash of the last record it removes, so the chain stays verifiable from the cut and a
 prune is distinguishable from a deletion.
 

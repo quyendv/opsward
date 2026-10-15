@@ -33,6 +33,8 @@ type Store interface {
 	LastAuditBefore(ctx context.Context, writer string, t time.Time) (AuditRow, bool, error)
 	// ListAudit returns up to limit rows for writer with Seq > afterSeq, by Seq.
 	ListAudit(ctx context.Context, writer string, afterSeq uint64, limit int) ([]AuditRow, error)
+	// AuditWriters returns every writer that has rows, sorted.
+	AuditWriters(ctx context.Context) ([]string, error)
 	// PruneAudit deletes the rows for writer with Seq <= throughSeq.
 	PruneAudit(ctx context.Context, writer string, throughSeq uint64) (int64, error)
 	Close() error

@@ -101,32 +101,45 @@ func (w *Writer) write(ctx context.Context, chain string, r Record) (Record, err
 	return r, nil
 }
 
-// Prune writes a checkpoint and then removes this writer's records older than
-// retention. A retention of zero keeps everything.
+// Prune removes records older than retention from every chain in the store, writing a
+// checkpoint into each chain first. Chains of writers that no longer run are pruned
+// too. A retention of zero keeps everything.
 func (w *Writer) Prune(ctx context.Context, retention time.Duration) (int64, error) {
 	if retention <= 0 {
 		return 0, nil
 	}
 	cutoff := w.opt.Now().Add(-retention)
-	last, ok, err := w.opt.Store.LastAuditBefore(ctx, w.opt.WriterID, cutoff)
+	chains, err := w.opt.Store.AuditWriters(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("audit: prune: %w", err)
 	}
-	if !ok {
-		return 0, nil
+	var total int64
+	for _, chain := range chains {
+		n, err := w.pruneChain(ctx, chain, cutoff)
+		if err != nil {
+			return total, fmt.Errorf("audit: prune %q: %w", chain, err)
+		}
+		total += n
 	}
-	if _, err := w.Write(ctx, Record{
+	return total, nil
+}
+
+func (w *Writer) pruneChain(ctx context.Context, chain string, cutoff time.Time) (int64, error) {
+	last, ok, err := w.opt.Store.LastAuditBefore(ctx, chain, cutoff)
+	if err != nil || !ok {
+		return 0, err
+	}
+	w.mu.Lock()
+	_, err = w.write(ctx, chain, Record{
 		Phase:      PhaseCheckpoint,
 		Principal:  core.Principal{Subject: "opsward", Adapter: "internal"},
 		Checkpoint: &Checkpoint{PrunedThroughSeq: last.Seq, PrunedThroughHash: last.Hash},
-	}); err != nil {
-		return 0, fmt.Errorf("audit: prune: checkpoint: %w", err)
-	}
-	n, err := w.opt.Store.PruneAudit(ctx, w.opt.WriterID, last.Seq)
+	})
+	w.mu.Unlock()
 	if err != nil {
-		return 0, fmt.Errorf("audit: prune: %w", err)
+		return 0, fmt.Errorf("checkpoint: %w", err)
 	}
-	return n, nil
+	return w.opt.Store.PruneAudit(ctx, chain, last.Seq)
 }
 
 // stream writes to an io.Writer that may block, such as stdout behind a slow log

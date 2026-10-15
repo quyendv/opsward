@@ -7,7 +7,7 @@ identity:
 
 storage:
   type: sqlite
-  path: ./opsward.db
+  path: /var/lib/opsward/opsward.db
   auditRetention: 90d
 
 audit:

@@ -153,3 +153,18 @@ func TestConcurrentOpenMigratesOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestAuditWriters(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	for _, w := range []string{"b", "a", "b"} {
+		last, _, _ := s.LastAudit(ctx, w)
+		if err := s.AppendAudit(ctx, row(w, last.Seq+1, t0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.AuditWriters(ctx)
+	if err != nil || strings.Join(got, ",") != "a,b" {
+		t.Fatalf("AuditWriters = %v, %v; want [a b]", got, err)
+	}
+}

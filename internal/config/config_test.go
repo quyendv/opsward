@@ -36,8 +36,8 @@ func TestParseAppliesDefaults(t *testing.T) {
 	if got := c.Audit.Timeout.Std(); got != 2*time.Second {
 		t.Errorf("audit.timeout = %v, want 2s", got)
 	}
-	if c.Audit.Writer == "" {
-		t.Error("audit.writer should default to the host name")
+	if c.Audit.Writer != "opsward" {
+		t.Errorf("audit.writer = %q, want opsward: a host-name default starts a new chain in every container", c.Audit.Writer)
 	}
 	e := c.Environments[0]
 	if len(e.Namespaces) != 1 || e.Namespaces[0] != "*" || e.Change.Strategy != "suggest" {

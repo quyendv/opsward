@@ -125,18 +125,31 @@ func verify(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Opening would create a missing database, and an empty one verifies trivially.
+	if _, err := os.Stat(cfg.Storage.Path); err != nil {
+		return fmt.Errorf("no database at %s: %w", cfg.Storage.Path, err)
+	}
 	st, err := sqlite.Open(ctx, cfg.Storage.Path)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	records, err := audit.Load(ctx, st, cfg.Audit.Writer)
+	writers, err := st.AuditWriters(ctx)
 	if err != nil {
 		return err
 	}
-	if err := audit.Verify(records); err != nil {
-		return err
+	if len(writers) == 0 {
+		return fmt.Errorf("no audit records in %s", cfg.Storage.Path)
 	}
-	fmt.Fprintf(stdout, "audit chain %q: %d records verified\n", cfg.Audit.Writer, len(records))
+	for _, w := range writers {
+		records, err := audit.Load(ctx, st, w)
+		if err != nil {
+			return err
+		}
+		if err := audit.Verify(records); err != nil {
+			return fmt.Errorf("audit chain %q: %w", w, err)
+		}
+		fmt.Fprintf(stdout, "audit chain %q: %d records verified\n", w, len(records))
+	}
 	return nil
 }

@@ -20,6 +20,9 @@ import (
 const (
 	DefaultAuditRetention = 90 * 24 * time.Hour
 	DefaultAuditTimeout   = 2 * time.Second
+	// DefaultAuditWriter is a constant rather than the host name: a host name changes
+	// with every container, and each change would start a new chain.
+	DefaultAuditWriter = "opsward"
 )
 
 // Config is the whole configuration file.
@@ -53,7 +56,8 @@ type Storage struct {
 
 // Audit configures the audit stream.
 type Audit struct {
-	// Writer identifies this process's hash chain. Defaults to the host name.
+	// Writer names the hash chain this process appends to. Processes sharing a store
+	// and a writer share one chain.
 	Writer  string    `yaml:"writer"`
 	Stream  Stream    `yaml:"stream"`
 	Timeout *Duration `yaml:"timeout"`
@@ -143,11 +147,7 @@ func (c *Config) applyDefaults() {
 		c.Audit.Timeout = &d
 	}
 	if c.Audit.Writer == "" {
-		if h, err := os.Hostname(); err == nil {
-			c.Audit.Writer = h
-		} else {
-			c.Audit.Writer = "opsward"
-		}
+		c.Audit.Writer = DefaultAuditWriter
 	}
 	if len(c.Policy.Sources) == 0 {
 		c.Policy.Sources = []string{"file"}

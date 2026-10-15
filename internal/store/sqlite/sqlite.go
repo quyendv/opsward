@@ -229,6 +229,27 @@ func (s *Store) ListAudit(ctx context.Context, writer string, afterSeq uint64, l
 	return out, nil
 }
 
+// AuditWriters implements store.Store.
+func (s *Store) AuditWriters(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT writer FROM audit ORDER BY writer`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list audit writers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var w string
+		if err := rows.Scan(&w); err != nil {
+			return nil, fmt.Errorf("sqlite: list audit writers: %w", err)
+		}
+		out = append(out, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: list audit writers: %w", err)
+	}
+	return out, nil
+}
+
 // PruneAudit implements store.Store.
 func (s *Store) PruneAudit(ctx context.Context, writer string, throughSeq uint64) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM audit WHERE writer = ? AND seq <= ?`, writer, int64(throughSeq)) //nolint:gosec // G115: see AppendAudit
