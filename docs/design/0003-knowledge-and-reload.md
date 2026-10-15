@@ -74,8 +74,9 @@ found, such as a pod in `CrashLoopBackOff`, instead of only to what was asked.
   separate content block after the result.
 
 Both knowledge tools are `read` and **not bound to an environment**. They still go through
-authorization, with an empty scope. A binding restricted to environments or namespaces does
-not match them, so granting them needs a binding without those restrictions.
+authorization, with an empty scope, and need no backend profile. A binding that restricts
+environments, namespaces, workloads or apps matches them only through patterns that accept
+an empty value (`"*"`); granting them is simplest with a binding without those restrictions.
 
 ### Sources
 
