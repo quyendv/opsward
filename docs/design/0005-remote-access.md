@@ -68,18 +68,24 @@ needed for, and without them replicas need no sticky routing.
 - Cross-origin browser requests are rejected (Go's `http.CrossOriginProtection`), and the
   SDK's DNS rebinding protection stays on.
 - Requests are limited to 4 MiB, headers must arrive within 10 seconds, and a response
-  must be written within 2 minutes.
+  must be written within 2 minutes. Each call has a deadline ten seconds shorter, so a
+  slow call ends as an audited error the client can still read.
+- A request carries one JSON-RPC message. Batches, which only the oldest protocol version
+  allows and no client sends, are rejected.
 - TLS is optional, because most deployments terminate it at an ingress. Plain HTTP on a
   non-loopback address is accepted with a warning. Certificate files are re-read when they
   change, so a rotated certificate needs no restart.
 - On `SIGTERM` the listener stops accepting and in-flight calls get 30 seconds to finish.
+  Calls still running then are cancelled and get five seconds to write their outcome
+  records before connections are closed.
 
 ## Authentication
 
 Every `/mcp` request needs `Authorization: Bearer <token>`. A token that starts with `opw_` is
 an API token; any other token is treated as an OIDC access token when OIDC is configured and
 rejected otherwise. A missing or rejected token gets `401` with a `WWW-Authenticate` header,
-which points to the resource metadata when OIDC is configured.
+which points to the resource metadata when OIDC is configured. When the store cannot be
+read to decide, the answer is `503`: the token may be valid.
 
 The reason a token was rejected is logged with the client address, never echoed to the
 client, and never logged with the token itself. A rejected request is not an audit record:
@@ -124,7 +130,14 @@ mix with the token; to have them reach the same collector as the server's record
 available to whoever can open the store, the same people who could already read or rewrite
 it. Creating and revoking a token is written to the audit chain (`create_api_token`,
 `revoke_api_token`, risk `destructive`), with `adapter: cli` and the operating system user
-as subject, so that a token found in a record can be traced to its creation.
+as subject (`os:<user>`), so that a token found in a record can be traced to its creation.
+Inside a container that user is usually the image's, such as `nonroot`; the person is then
+identified by the platform's own record of the session, such as the Kubernetes audit log of
+the `exec`.
+
+A client keeps the token it sends as a header in its own configuration, usually in plain
+text. Give each person and pipeline its own token with a short lifetime, so that one copy
+can be revoked without touching the others.
 
 ### OIDC
 
