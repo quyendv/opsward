@@ -73,22 +73,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 func loadConfig(name string, args []string) (*config.Config, error) {
-	cfg, _, err := loadConfigPath(name, args)
+	cfg, _, _, err := loadConfigFile(name, args)
 	return cfg, err
 }
 
-func loadConfigPath(name string, args []string) (*config.Config, string, error) {
+// loadConfigFile reads the configuration once and returns it with its path and the
+// hash of the bytes that were parsed, which serve hands to the config watcher.
+func loadConfigFile(name string, args []string) (*config.Config, string, string, error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "configuration file")
 	if err := fs.Parse(args); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if *path == "" {
-		return nil, "", errors.New("--config is required")
+		return nil, "", "", errors.New("--config is required")
 	}
-	cfg, err := config.Load(*path)
-	return cfg, *path, err
+	b, err := os.ReadFile(*path)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("config: %w", err)
+	}
+	cfg, err := config.Parse(b)
+	return cfg, *path, app.ContentHash(b), err
 }
 
 func validate(args []string, stdout io.Writer) error {
@@ -108,7 +114,7 @@ func validate(args []string, stdout io.Writer) error {
 }
 
 func serve(ctx context.Context, args []string, stderr io.Writer) error {
-	cfg, path, err := loadConfigPath("serve", args)
+	cfg, path, sum, err := loadConfigFile("serve", args)
 	if err != nil {
 		return err
 	}
@@ -116,7 +122,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return errors.New("audit.stream.type stdout would corrupt MCP over stdio; use stderr or file")
 	}
 	log := slog.New(slog.NewJSONHandler(stderr, nil))
-	a, err := app.Open(ctx, cfg, app.Options{Logger: log, Stderr: stderr, ConfigPath: path})
+	a, err := app.Open(ctx, cfg, app.Options{Logger: log, Stderr: stderr, ConfigPath: path, ConfigHash: sum})
 	if err != nil {
 		return err
 	}

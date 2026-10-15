@@ -37,6 +37,9 @@ type Options struct {
 	ClientFactory kubernetes.ClientFactory
 	// ConfigPath is the file the configuration was loaded from; Watch reloads it.
 	ConfigPath string
+	// ConfigHash is ContentHash of the bytes the configuration was parsed from. Without
+	// it Open hashes the file again, and a change written in between would be missed.
+	ConfigHash string
 }
 
 // App is a running Opsward: an engine and the resources behind it.
@@ -125,7 +128,10 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 		source: kubernetes.NewSource(nil, nil, opt.ClientFactory), lib: knowledge.NewLibrary(nil),
 		configPath: opt.ConfigPath,
 	}
-	if opt.ConfigPath != "" {
+	switch {
+	case opt.ConfigHash != "":
+		a.loadedHash = opt.ConfigHash
+	case opt.ConfigPath != "":
 		a.loadedHash = fileHash(opt.ConfigPath)
 	}
 	var err error
@@ -252,6 +258,9 @@ func fileHash(path string) string {
 	}
 	return hash(b)
 }
+
+// ContentHash identifies configuration content for Watch.
+func ContentHash(b []byte) string { return hash(b) }
 
 func hash(b []byte) string {
 	sum := sha256.Sum256(b)
