@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/quyendv/opsward/internal/store"
+	"github.com/quyendv/opsward/internal/store/storetest"
 )
 
 func open(t *testing.T) (*Store, string) {
@@ -180,4 +181,11 @@ func TestOpenPathWithURISpecialCharacters(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("database not created at the literal path: %v", err)
 	}
+}
+
+func TestAPITokens(t *testing.T) {
+	storetest.APITokens(t, func(t *testing.T) store.Store {
+		s, _ := open(t)
+		return s
+	})
 }

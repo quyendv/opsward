@@ -70,7 +70,7 @@ func TestParseRejects(t *testing.T) {
 		{"unknown field", minimal + "\nunknown: 1\n", "field unknown not found"},
 		{"misspelled nested field", strings.Replace(minimal, "kubeconfig:", "kubeconfg:", 1), "field kubeconfg not found"},
 		{"no subject", strings.Replace(minimal, "subject: local-admin, ", "", 1), "identity.principal.subject is required"},
-		{"oidc not yet", strings.Replace(minimal, "identity:\n", "identity:\n  mode: oidc\n", 1), `identity.mode: "oidc" is not available`},
+		{"unknown mode", strings.Replace(minimal, "identity:\n", "identity:\n  mode: oidc\n", 1), `identity.mode: unknown mode "oidc"`},
 		{"no storage path", strings.Replace(minimal, "  path: /var/lib/opsward/opsward.db\n", "", 1), "storage.path is required"},
 		{"bad retention", strings.Replace(minimal, "  path: /var/lib/opsward/opsward.db", "  path: x\n  auditRetention: soon", 1), `invalid duration "soon"`},
 		{"unknown cluster", strings.Replace(minimal, "cluster: cluster-a", "cluster: cluster-z", 1), `unknown cluster "cluster-z"`},
