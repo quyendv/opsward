@@ -365,3 +365,14 @@ func TestBackendLabelNames(t *testing.T) {
 		t.Fatalf("valid label: %v", err)
 	}
 }
+
+func TestParseDurationRejectsOverflow(t *testing.T) {
+	for _, in := range []string{"213504d", "106752d"} {
+		if got, err := ParseDuration(in); err == nil {
+			t.Errorf("ParseDuration(%q) = %v, want an error", in, got)
+		}
+	}
+	if _, err := ParseDuration("106751d"); err != nil {
+		t.Errorf("the largest representable day count is rejected: %v", err)
+	}
+}

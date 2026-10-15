@@ -13,8 +13,12 @@ const (
 	ModeRemote = "remote"
 )
 
-// DefaultAPITokenMaxTTL is the longest lifetime an API token can be created with.
-const DefaultAPITokenMaxTTL = 365 * 24 * time.Hour
+// DefaultAPITokenMaxTTL is the longest lifetime an API token can be created with, and
+// LimitAPITokenMaxTTL the most it can be configured to.
+const (
+	DefaultAPITokenMaxTTL = 365 * 24 * time.Hour
+	LimitAPITokenMaxTTL   = 3650 * 24 * time.Hour
+)
 
 // APITokens configures API tokens, which are always accepted in remote mode.
 type APITokens struct {
@@ -58,8 +62,8 @@ func (c *Config) validateIdentity(fail func(string, ...any)) {
 	default:
 		fail("identity.mode: unknown mode %q; use %s or %s", id.Mode, ModeLocal, ModeRemote)
 	}
-	if *id.APITokens.MaxTTL <= 0 {
-		fail("identity.apiTokens.maxTTL must be positive")
+	if d := id.APITokens.MaxTTL.Std(); d <= 0 || d > LimitAPITokenMaxTTL {
+		fail("identity.apiTokens.maxTTL must be positive and at most 3650d")
 	}
 	for g, members := range id.Groups {
 		if g == "" {
@@ -95,6 +99,9 @@ func (c *Config) validateHTTP(fail func(string, ...any)) {
 }
 
 func (c *Config) remoteWarnings() []string {
+	if c.Identity.Mode == ModeLocal && len(c.Identity.Groups) > 0 {
+		return []string{"identity.groups has no effect in local mode, where identity.principal.groups applies"}
+	}
 	h := c.Server.HTTP
 	if c.Identity.Mode != ModeRemote || h == nil || h.TLS != nil {
 		return nil
