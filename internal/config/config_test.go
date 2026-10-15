@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +94,40 @@ func TestParseDuration(t *testing.T) {
 		got, err := ParseDuration(in)
 		if err != nil || got != want {
 			t.Errorf("ParseDuration(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+}
+
+func TestWarnings(t *testing.T) {
+	kc := filepath.Join(t.TempDir(), "reader.kubeconfig")
+	if err := os.WriteFile(kc, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clean := strings.Replace(minimal, "/etc/opsward/cluster-a-reader", kc, 1)
+	c, err := Parse([]byte(clean))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := c.Warnings(); len(w) != 0 {
+		t.Fatalf("clean config warnings = %v", w)
+	}
+
+	noisy := strings.Replace(minimal, "/var/lib/opsward/opsward.db", "opsward.db", 1)
+	noisy = strings.Replace(noisy, "/etc/opsward/cluster-a-reader", "kube/reader", 1)
+	noisy += "audit:\n  stream: { type: stdout }\n"
+	c, err = Parse([]byte(noisy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(c.Warnings(), "\n")
+	for _, want := range []string{
+		`storage.path "opsward.db" is relative`,
+		`kubeconfig "kube/reader" is relative`,
+		`kubeconfig "kube/reader" does not exist`,
+		"audit.stream.type stdout cannot be used by opsward serve",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warnings %q missing %q", got, want)
 		}
 	}
 }

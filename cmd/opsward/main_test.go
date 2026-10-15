@@ -129,3 +129,11 @@ func TestAuditVerifyChecksEveryWriter(t *testing.T) {
 		t.Fatalf("code %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }
+
+func TestValidatePrintsConfigWarnings(t *testing.T) {
+	cfg := writeConfig(t, "identity: {principal: {subject: me}}\nstorage: {path: x.db}\naudit: {stream: {type: stdout}}\n")
+	code, out, errOut := runCLI("validate", "--config", cfg)
+	if code != 0 || !strings.Contains(out, "cannot be used by opsward serve") || !strings.Contains(out, "is relative") {
+		t.Fatalf("code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}

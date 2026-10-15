@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -242,5 +244,31 @@ func (c *Config) Profiles(env Environment) []string {
 	for name := range c.Providers.Kubernetes.Clusters[env.Cluster].Profiles {
 		out = append(out, name)
 	}
+	return out
+}
+
+// Warnings describes configuration that is valid but probably not what was meant.
+func (c *Config) Warnings() []string {
+	var out []string
+	if !filepath.IsAbs(c.Storage.Path) {
+		out = append(out, fmt.Sprintf("storage.path %q is relative: it resolves against the working directory of whatever starts opsward, such as an MCP client", c.Storage.Path))
+	}
+	if c.Audit.Stream.Type == "stdout" {
+		out = append(out, "audit.stream.type stdout cannot be used by opsward serve, which speaks MCP on stdout")
+	}
+	for name, cl := range c.Providers.Kubernetes.Clusters {
+		for pn, p := range cl.Profiles {
+			if p.Kubeconfig == "" || strings.HasPrefix(p.Kubeconfig, "~") {
+				continue // already a validation error
+			}
+			if !filepath.IsAbs(p.Kubeconfig) {
+				out = append(out, fmt.Sprintf("cluster %q profile %q: kubeconfig %q is relative", name, pn, p.Kubeconfig))
+			}
+			if _, err := os.Stat(p.Kubeconfig); err != nil {
+				out = append(out, fmt.Sprintf("cluster %q profile %q: kubeconfig %q does not exist here; calls with this profile will fail until it does", name, pn, p.Kubeconfig))
+			}
+		}
+	}
+	sort.Strings(out)
 	return out
 }

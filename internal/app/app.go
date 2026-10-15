@@ -53,7 +53,7 @@ func Check(cfg *config.Config) ([]string, error) {
 		return nil, err
 	}
 	_, warnings, err := policy.Compile(cfg.Policy, catalog(cfg, tools), slog.New(slog.DiscardHandler))
-	return warnings, err
+	return append(cfg.Warnings(), warnings...), err
 }
 
 // Open builds the App: store, audit writer, providers, tools, policy and engine.
@@ -71,7 +71,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.Warnings = warnings
+	a.Warnings = append(cfg.Warnings(), warnings...)
 
 	st, err := sqlite.Open(ctx, cfg.Storage.Path)
 	if err != nil {
