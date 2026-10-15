@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -154,7 +155,7 @@ func TestOIDCDiscoveryRetries(t *testing.T) {
 // A rotated signing key is fetched when a token names a key ID not seen before.
 func TestOIDCKeyRotation(t *testing.T) {
 	is := oidctest.New(t)
-	a := oidcAuth(t, is, OIDCOptions{})
+	a := oidcAuth(t, is, OIDCOptions{KeyRefreshInterval: time.Nanosecond})
 	ready(t, a)
 	if _, _, err := a.Authenticate(context.Background(), is.Sign(claims(is, nil))); err != nil {
 		t.Fatal(err)
@@ -171,5 +172,29 @@ func TestNoOIDCRejectsJWTs(t *testing.T) {
 	a, _, _ := newAuth(t, nil)
 	if _, _, err := a.Authenticate(context.Background(), is.Sign(claims(is, nil))); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Tokens anyone can forge must not make Opsward fetch the issuer's keys on every request:
+// a known key ID with a bad signature never refetches, and unknown key IDs refetch at
+// most once per refresh interval.
+func TestOIDCForgedTokensDoNotRefetchKeys(t *testing.T) {
+	is := oidctest.New(t)
+	a := oidcAuth(t, is, OIDCOptions{})
+	ready(t, a)
+	if _, _, err := a.Authenticate(context.Background(), is.Sign(claims(is, nil))); err != nil {
+		t.Fatal(err)
+	}
+	before := is.KeyFetches.Load()
+	forger := oidctest.Key(t)
+	for i := range 20 {
+		for _, kid := range []string{"k1", fmt.Sprintf("unknown-%d", i), ""} {
+			if _, _, err := a.Authenticate(context.Background(), oidctest.SignWith(t, forger, kid, claims(is, nil))); err == nil {
+				t.Fatalf("a forged token with kid %q was accepted", kid)
+			}
+		}
+	}
+	if got := is.KeyFetches.Load() - before; got > 1 {
+		t.Fatalf("60 forged tokens caused %d key set fetches, want at most 1", got)
 	}
 }

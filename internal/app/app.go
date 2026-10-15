@@ -412,7 +412,7 @@ func oidcOptions(cfg *config.Config) *identity.OIDCOptions {
 		return nil
 	}
 	return &identity.OIDCOptions{
-		Issuer: o.Issuer, Audience: o.Audience, SubjectClaim: o.SubjectClaim, GroupsClaim: o.GroupsClaim, GroupsPrefix: o.GroupsPrefix,
+		Issuer: o.Issuer, Audience: o.Audience, SubjectClaim: o.SubjectClaim, GroupsClaim: o.GroupsClaim, GroupsPrefix: o.GroupsPrefixOrDefault(),
 	}
 }
 

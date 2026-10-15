@@ -146,8 +146,9 @@ Opsward is an OAuth resource server (MCP authorization, RFC 9728). It validates 
 tokens issued by `identity.oidc.issuer`, which must be JWTs; an issuer that hands out
 opaque access tokens needs a broker in front that issues JWTs:
 
-- signature against the issuer's published keys, found by discovery and refreshed when an
-  unknown key ID appears;
+- signature against the issuer's published keys, found by discovery. The keys are fetched
+  again only for a key ID not held yet, and at most once every 30 seconds: a forged token
+  must not make Opsward call the issuer on every request;
 - `iss` equal to the issuer, `aud` containing `audience`, `exp` in the future (`nbf` is
   allowed five minutes of clock skew);
 - when `subjectClaim` is `email`, `email_verified` must be `true`.
@@ -176,8 +177,16 @@ that can do none of these can send an API token as a static header.
 A principal's groups are the union of:
 
 1. the token's groups: those given at `opsward token create`, or the `groupsClaim` values of
-   an OIDC token, each prefixed with `groupsPrefix`;
+   an OIDC token, each prefixed with `groupsPrefix`, `oidc:` unless set. At many issuers
+   people can create groups themselves; without a prefix, a group named `platform` there
+   would be the internal group `platform`. Set `groupsPrefix: ""` only for an issuer whose
+   groups only administrators manage;
 2. the internal groups whose member list contains the subject, from `identity.groups`.
+
+A binding without `subjects` applies to every authenticated principal. With OIDC that is
+everyone the issuer will issue a token for this audience, which at a multi-tenant issuer or
+one that registers clients dynamically can be more people than intended; name subjects or
+groups in such bindings.
 
 Subjects and group names are compared exactly. `identity.groups` is the one part of
 `identity` that a reload applies, because membership changes far more often than how

@@ -11,11 +11,25 @@ type OIDC struct {
 	Issuer string `yaml:"issuer"`
 	// Audience must appear in a token's aud claim; default the MCP resource URL,
 	// publicURL + "/mcp", which clients request as the resource indicator.
-	Audience     string   `yaml:"audience"`
-	SubjectClaim string   `yaml:"subjectClaim"` // default email
-	GroupsClaim  string   `yaml:"groupsClaim"`  // default groups
-	GroupsPrefix string   `yaml:"groupsPrefix"`
+	Audience     string `yaml:"audience"`
+	SubjectClaim string `yaml:"subjectClaim"` // default email
+	GroupsClaim  string `yaml:"groupsClaim"`  // default groups
+	// GroupsPrefix is put before every claim group, "oidc:" unless set, even to "":
+	// without one, a group created at the issuer would be the internal group of the
+	// same name.
+	GroupsPrefix *string  `yaml:"groupsPrefix"`
 	Scopes       []string `yaml:"scopes"` // advertised in the resource metadata
+}
+
+// DefaultGroupsPrefix is put before claim groups when groupsPrefix is not set.
+const DefaultGroupsPrefix = "oidc:"
+
+// GroupsPrefixOrDefault returns the configured prefix or DefaultGroupsPrefix.
+func (o *OIDC) GroupsPrefixOrDefault() string {
+	if o.GroupsPrefix == nil {
+		return DefaultGroupsPrefix
+	}
+	return *o.GroupsPrefix
 }
 
 // ResourceURL is the MCP endpoint as clients reach it, or "" without a publicURL.

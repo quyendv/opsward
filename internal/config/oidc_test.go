@@ -16,7 +16,7 @@ func TestOIDCDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := c.Identity.OIDC
-	if o.Audience != "https://opsward.example.com/mcp" || o.SubjectClaim != "email" || o.GroupsClaim != "groups" || o.GroupsPrefix != "" {
+	if o.Audience != "https://opsward.example.com/mcp" || o.SubjectClaim != "email" || o.GroupsClaim != "groups" || o.GroupsPrefixOrDefault() != "oidc:" {
 		t.Fatalf("defaults = %+v", o)
 	}
 }
@@ -49,5 +49,24 @@ func TestOIDCRejects(t *testing.T) {
 func TestOIDCLoopbackHTTPIssuer(t *testing.T) {
 	if _, err := Parse([]byte(withOIDC("    issuer: http://127.0.0.1:5556/dex\n"))); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Claim groups must not merge with internal groups by name unless the operator says so:
+// at many issuers users create their own groups.
+func TestOIDCGroupsPrefixDefaultsToOIDC(t *testing.T) {
+	c, err := Parse([]byte(withOIDC("    issuer: https://id.example.com\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Identity.OIDC.GroupsPrefixOrDefault(); got != "oidc:" {
+		t.Fatalf("default prefix = %q", got)
+	}
+	c, err = Parse([]byte(withOIDC("    issuer: https://id.example.com\n    groupsPrefix: \"\"\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Identity.OIDC.GroupsPrefixOrDefault(); got != "" {
+		t.Fatalf("explicit empty prefix = %q", got)
 	}
 }

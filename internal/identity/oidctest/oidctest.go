@@ -20,6 +20,8 @@ import (
 type Issuer struct {
 	URL  string
 	Down atomic.Bool // discovery fails while set
+	// KeyFetches counts requests for the key set.
+	KeyFetches atomic.Int64
 
 	t   *testing.T
 	mu  sync.Mutex
@@ -44,6 +46,7 @@ func New(t *testing.T) *Issuer {
 		})
 	})
 	mux.HandleFunc("/keys", func(w http.ResponseWriter, _ *http.Request) {
+		is.KeyFetches.Add(1)
 		is.mu.Lock()
 		set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &is.key.PublicKey, KeyID: is.kid, Algorithm: "RS256", Use: "sig"}}}
 		is.mu.Unlock()
