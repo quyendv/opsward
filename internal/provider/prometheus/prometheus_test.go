@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -69,7 +70,7 @@ func TestInstantVector(t *testing.T) {
 	if f.paths[0] != "/api/v1/query" || !strings.Contains(res.Query, `namespace="shop"`) {
 		t.Fatalf("path %s, query %s", f.paths[0], res.Query)
 	}
-	if len(res.Series) != 2 || res.Series[0].Last != 0.25 || res.Series[0].Labels["pod"] != "api-a" || len(res.Series[1].Points) != 0 {
+	if len(res.Series) != 2 || *res.Series[0].Last != 0.25 || res.Series[0].Labels["pod"] != "api-a" || len(res.Series[1].Points) != 0 {
 		t.Fatalf("series = %+v", res.Series)
 	}
 }
@@ -84,7 +85,7 @@ func TestRangeMatrixWithSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := res.Series[0]
-	if f.paths[0] != "/api/v1/query_range" || len(s.Points) != 3 || s.Min != 1 || s.Max != 3 || s.Last != 2 {
+	if f.paths[0] != "/api/v1/query_range" || len(s.Points) != 3 || *s.Min != 1 || *s.Max != 3 || *s.Last != 2 {
 		t.Fatalf("path %s series %+v", f.paths[0], s)
 	}
 }
@@ -94,7 +95,7 @@ func TestScalarAndSeriesCap(t *testing.T) {
 	src, done := source(t, f)
 	defer done()
 	res, err := query(t, src, capability.MetricsQuery{Query: "scalar(up)", Time: t0})
-	if err != nil || len(res.Series) != 1 || res.Series[0].Last != 7 {
+	if err != nil || len(res.Series) != 1 || *res.Series[0].Last != 7 {
 		t.Fatalf("scalar = %+v, %v", res, err)
 	}
 
@@ -166,7 +167,23 @@ func TestPointsAreCappedForEveryResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := res.Series[0]
-	if len(s.Points) != maxPoints || s.PointsOmitted != 100-maxPoints || s.Last != 99 || s.Points[0].Value != 40 || s.Max != 1000 {
-		t.Fatalf("points %d omitted %d last %v first %v max %v", len(s.Points), s.PointsOmitted, s.Last, s.Points[0].Value, s.Max)
+	if len(s.Points) != maxPoints || s.PointsOmitted != 100-maxPoints || *s.Last != 99 || s.Points[0].Value != 40 || *s.Max != 1000 {
+		t.Fatalf("points %d omitted %d last %v first %v max %v", len(s.Points), s.PointsOmitted, *s.Last, s.Points[0].Value, *s.Max)
+	}
+}
+
+// Issue #14: a series with no finite sample has no summary, rather than zeros that read
+// as real values.
+func TestNonFiniteSeriesHasNoSummary(t *testing.T) {
+	f := &fakeProm{t: t, reply: `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"pod":"a"},"value":[1790000000,"NaN"]}]}}`}
+	src, done := source(t, f)
+	defer done()
+	res, err := query(t, src, capability.MetricsQuery{Query: "up", Time: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(res.Series[0])
+	if strings.Contains(string(b), `"min"`) || strings.Contains(string(b), `"last"`) {
+		t.Fatalf("series = %s", b)
 	}
 }

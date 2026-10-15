@@ -3,6 +3,8 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,10 @@ import (
 type fakeMetrics struct {
 	env, namespace string
 	queries        []capability.MetricsQuery
+	fail           *struct {
+		match string
+		err   error
+	}
 }
 
 func (f *fakeMetrics) Metrics(env string) (capability.Metrics, error) { f.env = env; return f, nil }
@@ -21,7 +27,11 @@ func (f *fakeMetrics) Metrics(env string) (capability.Metrics, error) { f.env = 
 func (f *fakeMetrics) Query(_ context.Context, ns string, q capability.MetricsQuery) (*capability.MetricsResult, error) {
 	f.namespace = ns
 	f.queries = append(f.queries, q)
-	return &capability.MetricsResult{Query: q.Query, Series: []capability.Series{{Labels: map[string]string{"pod": "api-a"}, Last: 1}}}, nil
+	if f.fail != nil && strings.Contains(q.Query, f.fail.match) {
+		return nil, f.fail.err
+	}
+	one := 1.0
+	return &capability.MetricsResult{Query: q.Query, Series: []capability.Series{{Labels: map[string]string{"pod": "api-a"}, Last: &one}}}, nil
 }
 
 type fakeLogs struct {
@@ -141,5 +151,42 @@ func TestGetWorkloadMetrics(t *testing.T) {
 	}
 	if _, _, err := runTool(t, tl, `{"environment":"production","namespace":"shop","kind":"Deployment","name":"api","metric":"disk"}`); err == nil {
 		t.Fatal("unknown metric accepted")
+	}
+}
+
+// Issue #15: the CPU rate window covers the whole step, so spikes between points count.
+func TestCPUWindowFollowsTheStep(t *testing.T) {
+	m := &fakeMetrics{}
+	tl, _ := GetWorkloadMetrics(&fakeSource{workload: &capability.Workload{}}, m)
+	if _, _, err := runTool(t, tl, `{"environment":"production","namespace":"shop","kind":"Deployment","name":"api","metric":"cpu","range":"24h"}`); err != nil {
+		t.Fatal(err)
+	}
+	q := m.queries[0]
+	if want := fmt.Sprintf("[%ds]", int(q.Step.Seconds())); !strings.Contains(q.Query, want) {
+		t.Fatalf("24h CPU query %q lacks window %s", q.Query, want)
+	}
+	m.queries = nil
+	if _, _, err := runTool(t, tl, `{"environment":"production","namespace":"shop","kind":"Deployment","name":"api","metric":"cpu","range":"10m"}`); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(m.queries[0].Query, "[300s]") {
+		t.Fatalf("short-range CPU query %q should keep a 5m window", m.queries[0].Query)
+	}
+}
+
+// Issue #18: a failed requests or limits query says why, unlike an absent one.
+func TestRequestsAndLimitsReportErrors(t *testing.T) {
+	m := &fakeMetrics{fail: &struct {
+		match string
+		err   error
+	}{"kube_pod_container_resource_limits", errors.New("timeout")}}
+	tl, _ := GetWorkloadMetrics(&fakeSource{workload: &capability.Workload{}}, m)
+	_, out, err := runTool(t, tl, `{"environment":"production","namespace":"shop","kind":"Deployment","name":"api","metric":"memory"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := out.(*WorkloadMetricsResult)
+	if r.Requests == nil || r.Limits != nil || !strings.Contains(r.Unavailable["limits"], "timeout") {
+		t.Fatalf("result = %+v", r)
 	}
 }

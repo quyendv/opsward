@@ -170,6 +170,7 @@ func decode(body []byte) ([]capability.Series, error) {
 // series converts samples, leaving out non-finite values, which JSON cannot carry.
 func series(labels map[string]string, samples []sample) capability.Series {
 	s := capability.Series{Labels: labels, Points: []capability.Point{}}
+	var lo, hi, last float64
 	for _, raw := range samples {
 		ts, ok1 := raw[0].(float64)
 		str, ok2 := raw[1].(string)
@@ -182,14 +183,17 @@ func series(labels map[string]string, samples []sample) capability.Series {
 		}
 		sec, frac := math.Modf(ts)
 		p := capability.Point{Time: time.Unix(int64(sec), int64(frac*1e9)).UTC(), Value: v}
-		if len(s.Points) == 0 || v < s.Min {
-			s.Min = v
+		if len(s.Points) == 0 || v < lo {
+			lo = v
 		}
-		if len(s.Points) == 0 || v > s.Max {
-			s.Max = v
+		if len(s.Points) == 0 || v > hi {
+			hi = v
 		}
-		s.Last = v
+		last = v
 		s.Points = append(s.Points, p)
+	}
+	if len(s.Points) > 0 {
+		s.Min, s.Max, s.Last = &lo, &hi, &last
 	}
 	if n := len(s.Points); n > maxPoints {
 		s.PointsOmitted = n - maxPoints

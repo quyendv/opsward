@@ -16,10 +16,11 @@ type Series struct {
 	Labels map[string]string `json:"labels"`
 	Points []Point           `json:"points"` // the newest points, at most 60
 	// PointsOmitted counts older points left out; Min and Max still cover them.
-	PointsOmitted int     `json:"pointsOmitted,omitempty"`
-	Min           float64 `json:"min"`
-	Max           float64 `json:"max"`
-	Last          float64 `json:"last"`
+	PointsOmitted int `json:"pointsOmitted,omitempty"`
+	// The summary is absent when the series has no finite sample (only NaN or Inf).
+	Min  *float64 `json:"min,omitempty"`
+	Max  *float64 `json:"max,omitempty"`
+	Last *float64 `json:"last,omitempty"`
 }
 
 // MetricsQuery is an instant query (Range false, at Time) or a range query.

@@ -178,11 +178,16 @@ type metricTemplate struct {
 	unit, usage, resource string // resource: for requests and limits; empty when they do not apply
 }
 
+// Templates take the pod pattern as %[1]s and the rate window as %[2]s.
 var metricTemplates = map[string]metricTemplate{
-	"cpu":      {"cores", `sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~%s, container!="", container!="POD"}[5m]))`, "cpu"},
-	"memory":   {"bytes", `sum by (pod) (container_memory_working_set_bytes{pod=~%s, container!="", container!="POD"})`, "memory"},
-	"restarts": {"count", `sum by (pod) (kube_pod_container_status_restarts_total{pod=~%s})`, ""},
+	"cpu":      {"cores", `sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~%[1]s, container!="", container!="POD"}[%[2]s]))`, "cpu"},
+	"memory":   {"bytes", `sum by (pod) (container_memory_working_set_bytes{pod=~%[1]s, container!="", container!="POD"})`, "memory"},
+	"restarts": {"count", `sum by (pod) (kube_pod_container_status_restarts_total{pod=~%[1]s})`, ""},
 }
+
+// minRateWindow is the shortest rate window; longer steps widen it so that every interval
+// between two points is covered.
+const minRateWindow = 5 * time.Minute
 
 // WorkloadMetricsResult is get_workload_metrics' result.
 type WorkloadMetricsResult struct {
@@ -191,6 +196,9 @@ type WorkloadMetricsResult struct {
 	Usage    *capability.MetricsResult `json:"usage"`
 	Requests *capability.MetricsResult `json:"requests,omitempty"`
 	Limits   *capability.MetricsResult `json:"limits,omitempty"`
+	// Unavailable says why requests or limits failed; they are simply absent when
+	// kube-state-metrics provides none.
+	Unavailable map[string]string `json:"unavailable,omitempty"`
 }
 
 // GetWorkloadMetrics is get_workload_metrics.
@@ -248,22 +256,29 @@ func workloadMetrics(ctx context.Context, m capability.Metrics, namespace, podPa
 	tpl := metricTemplates[metric]
 	pods := strconv.Quote(podPattern)
 	res := &WorkloadMetricsResult{Metric: metric, Unit: tpl.unit}
+	q := rangeQuery("", d)
+	window := max(q.Step, minRateWindow)
+	q.Query = fmt.Sprintf(tpl.usage, pods, fmt.Sprintf("%ds", int(window.Seconds())))
 	var err error
-	if res.Usage, err = m.Query(ctx, namespace, rangeQuery(fmt.Sprintf(tpl.usage, pods), d)); err != nil {
+	if res.Usage, err = m.Query(ctx, namespace, q); err != nil {
 		return nil, err
 	}
 	if tpl.resource != "" {
-		// kube-state-metrics may be absent; requests and limits are then left out.
-		res.Requests = optional(ctx, m, namespace, fmt.Sprintf(`sum by (pod) (kube_pod_container_resource_requests{pod=~%s, resource=%q})`, pods, tpl.resource))
-		res.Limits = optional(ctx, m, namespace, fmt.Sprintf(`sum by (pod) (kube_pod_container_resource_limits{pod=~%s, resource=%q})`, pods, tpl.resource))
+		for name, dst := range map[string]**capability.MetricsResult{"requests": &res.Requests, "limits": &res.Limits} {
+			r, err := m.Query(ctx, namespace, capability.MetricsQuery{
+				Query: fmt.Sprintf(`sum by (pod) (kube_pod_container_resource_%s{pod=~%s, resource=%q})`, name, pods, tpl.resource),
+				Time:  time.Now().UTC(),
+			})
+			switch {
+			case err != nil:
+				if res.Unavailable == nil {
+					res.Unavailable = map[string]string{}
+				}
+				res.Unavailable[name] = err.Error()
+			case len(r.Series) > 0:
+				*dst = r
+			}
+		}
 	}
 	return res, nil
-}
-
-func optional(ctx context.Context, m capability.Metrics, namespace, query string) *capability.MetricsResult {
-	r, err := m.Query(ctx, namespace, capability.MetricsQuery{Query: query, Time: time.Now().UTC()})
-	if err != nil || len(r.Series) == 0 {
-		return nil
-	}
-	return r
 }
