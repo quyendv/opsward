@@ -175,3 +175,39 @@ current-context: ctx
 		t.Fatal("a missing kubeconfig must be an error")
 	}
 }
+
+// client-go's deferred loader falls back to the pod's own ServiceAccount when a
+// kubeconfig is empty; a profile must never borrow another credential, so an empty or
+// contextless kubeconfig is an error that names the file.
+func TestFromKubeconfigRejectsEmptyAndContextless(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := FromKubeconfig(Profile{Kubeconfig: empty})
+	if err == nil || !strings.Contains(err.Error(), empty) || !strings.Contains(err.Error(), "no contexts") {
+		t.Fatalf("empty kubeconfig: err = %v", err)
+	}
+
+	noCurrent := filepath.Join(dir, "no-current")
+	kc := `apiVersion: v1
+kind: Config
+clusters: [{name: c, cluster: {server: "https://127.0.0.1:6443"}}]
+users: [{name: u, user: {token: placeholder}}]
+contexts: [{name: ctx, context: {cluster: c, user: u}}]
+`
+	if err := os.WriteFile(noCurrent, []byte(kc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = FromKubeconfig(Profile{Kubeconfig: noCurrent})
+	if err == nil || !strings.Contains(err.Error(), "no current-context") {
+		t.Fatalf("no current-context: err = %v", err)
+	}
+	if _, err := FromKubeconfig(Profile{Kubeconfig: noCurrent, Context: "ctx"}); err != nil {
+		t.Fatalf("explicit context: %v", err)
+	}
+	if _, err := FromKubeconfig(Profile{Kubeconfig: noCurrent, Context: "missing"}); err == nil {
+		t.Fatal("a context the file does not define must be an error")
+	}
+}

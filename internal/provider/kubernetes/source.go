@@ -67,14 +67,23 @@ func (s *Source) Workloads(environment, profile string) (capability.Workloads, e
 	return NewWorkloads(c), nil
 }
 
-// FromKubeconfig builds a client from a kubeconfig file.
+// FromKubeconfig builds a client from a kubeconfig file. It never falls back to
+// in-cluster credentials, which client-go's deferred loader does for an empty file:
+// a profile must not silently borrow the pod's own ServiceAccount.
 func FromKubeconfig(p Profile) (kubernetes.Interface, error) {
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: p.Kubeconfig},
-		&clientcmd.ConfigOverrides{CurrentContext: p.Context},
-	).ClientConfig()
+	raw, err := clientcmd.LoadFromFile(p.Kubeconfig)
 	if err != nil {
 		return nil, err
+	}
+	if len(raw.Contexts) == 0 {
+		return nil, fmt.Errorf("kubeconfig %s: no contexts", p.Kubeconfig)
+	}
+	if p.Context == "" && raw.CurrentContext == "" {
+		return nil, fmt.Errorf("kubeconfig %s: no current-context; set the profile's context field", p.Kubeconfig)
+	}
+	cfg, err := clientcmd.NewNonInteractiveClientConfig(*raw, p.Context, &clientcmd.ConfigOverrides{}, nil).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("kubeconfig %s: %w", p.Kubeconfig, err)
 	}
 	cfg.UserAgent = "opsward/" + version.Version
 	return kubernetes.NewForConfig(cfg)

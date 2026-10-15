@@ -118,7 +118,7 @@ func Compile(cfg Config, cat Catalog, log *slog.Logger) (*Policy, []string, erro
 			if b.Profile == "" {
 				for _, need := range defaultProfiles(role, cat) {
 					if !slices.Contains(profiles, need) {
-						fail("%s: needs profile %q in environment %q, or name another with profile:", where, need, envName)
+						fail("%s: needs profile %q in environment %q, or set the binding's profile field", where, need, envName)
 					}
 				}
 			}
