@@ -83,6 +83,14 @@ type Request struct {
 	Now       time.Time
 }
 
+// Note is a knowledge document attached to a tool result because the call matched it.
+type Note struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Severity string `json:"severity"`
+	Summary  string `json:"summary"`
+}
+
 // Decision is the result of authorizing a Request.
 type Decision struct {
 	Effect  Effect `json:"effect"`

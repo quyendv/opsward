@@ -54,12 +54,12 @@ func annotations(r core.Risk) *mcp.ToolAnnotations {
 
 func handler(e *engine.Engine, p core.Principal, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		out, err := e.Invoke(ctx, p, name, req.Params.Arguments)
+		res, err := e.Invoke(ctx, p, name, req.Params.Arguments)
 		if err != nil {
 			// Tool-level errors go in the result, so the agent can read them and adjust.
 			return errorResult(err.Error()), nil
 		}
-		b, err := json.MarshalIndent(out, "", "  ")
+		b, err := json.MarshalIndent(res.Data, "", "  ")
 		if err != nil {
 			return errorResult(fmt.Sprintf("encode result: %v", err)), nil
 		}

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"path"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -33,6 +34,10 @@ type Tool struct {
 	InputSchema *jsonschema.Schema
 	// Args are the top-level argument names, for policy linting.
 	Args []string
+	// Global tools are not bound to an environment, such as knowledge search: the
+	// engine skips scope validation and label lookup, and authorizes them with an empty
+	// scope.
+	Global bool
 	// Prepare decodes and validates arguments without touching any backend.
 	Prepare func(args json.RawMessage) (*Prepared, error)
 }
@@ -61,6 +66,17 @@ type LabelUser interface {
 	NeedsLabels() bool
 }
 
+// Annotator attaches knowledge notes to a tool's redacted result.
+type Annotator interface {
+	Annotate(req core.Request, result any) []core.Note
+}
+
+// Result is a successful call's redacted output and the notes attached to it.
+type Result struct {
+	Data  any
+	Notes []core.Note
+}
+
 // Auditor records calls. audit.Writer implements it.
 type Auditor interface {
 	Write(ctx context.Context, r audit.Record) (audit.Record, error)
@@ -78,6 +94,7 @@ type Options struct {
 	Environments []Environment
 	Authorizer   Authorizer
 	Auditor      Auditor
+	Annotator    Annotator // optional
 	Logger       *slog.Logger
 	Now          func() time.Time
 }
@@ -85,11 +102,18 @@ type Options struct {
 // Engine is the single authorization point. It is safe for concurrent use.
 type Engine struct {
 	tools map[string]Tool
-	envs  map[string]Environment
-	authz Authorizer
+	state atomic.Pointer[state]
 	audit Auditor
 	log   *slog.Logger
 	now   func() time.Time
+}
+
+// state is what a configuration reload replaces. A call reads it once, so it runs
+// entirely under the configuration it started with.
+type state struct {
+	envs  map[string]Environment
+	authz Authorizer
+	ann   Annotator
 }
 
 // Errors returned by Invoke. Tool failures are returned wrapped as they are.
@@ -128,10 +152,7 @@ func New(opt Options) (*Engine, error) {
 	if opt.Authorizer == nil || opt.Auditor == nil {
 		return nil, errors.New("engine: Authorizer and Auditor are required")
 	}
-	e := &Engine{
-		tools: map[string]Tool{}, envs: map[string]Environment{},
-		authz: opt.Authorizer, audit: opt.Auditor, log: opt.Logger, now: opt.Now,
-	}
+	e := &Engine{tools: map[string]Tool{}, audit: opt.Auditor, log: opt.Logger, now: opt.Now}
 	if e.log == nil {
 		e.log = slog.Default()
 	}
@@ -147,10 +168,18 @@ func New(opt Options) (*Engine, error) {
 		}
 		e.tools[t.Name] = t
 	}
-	for _, env := range opt.Environments {
-		e.envs[env.Name] = env
-	}
+	e.Update(opt.Environments, opt.Authorizer, opt.Annotator)
 	return e, nil
+}
+
+// Update replaces the environments, the authorizer and the annotator in one step.
+// Calls already running finish under the previous ones.
+func (e *Engine) Update(envs []Environment, authz Authorizer, ann Annotator) {
+	s := &state{envs: map[string]Environment{}, authz: authz, ann: ann}
+	for _, env := range envs {
+		s.envs[env.Name] = env
+	}
+	e.state.Store(s)
 }
 
 // Tools returns the registered tools sorted by name.
@@ -165,7 +194,8 @@ func (e *Engine) Tools() []Tool {
 
 // Invoke runs one call through the pipeline and returns its redacted result. Every
 // path through it, including denials and failures, writes an audit record.
-func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args json.RawMessage) (any, error) {
+func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args json.RawMessage) (*Result, error) {
+	st := e.state.Load()
 	start := e.now()
 	// A client that cancels or disconnects must not erase the record of what it
 	// asked for; the audit writer's own timeout bounds these writes.
@@ -200,12 +230,14 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	}
 	rec.Scope = prep.Scope
 	rec.Args = redactArgs(prep.Args)
-	if err := e.validateScope(prep.Scope); err != nil {
-		return nil, finish(audit.StatusInvalid, fmt.Errorf("%w: %w", ErrInvalidArguments, err))
+	if !tool.Global {
+		if err := st.validateScope(prep.Scope); err != nil {
+			return nil, finish(audit.StatusInvalid, fmt.Errorf("%w: %w", ErrInvalidArguments, err))
+		}
 	}
 
 	scope := prep.Scope
-	if lu, ok := e.authz.(LabelUser); prep.Resolve != nil && (!ok || lu.NeedsLabels()) {
+	if lu, ok := st.authz.(LabelUser); !tool.Global && prep.Resolve != nil && (!ok || lu.NeedsLabels()) {
 		// A failed lookup is not reported to the caller before authorization, so that
 		// an unauthorized caller cannot probe which objects exist. Policy is told the
 		// labels are unknown, so app-scoped deny and approve bindings still apply; an
@@ -217,9 +249,8 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		scope.Labels, scope.LabelsKnown = labels, err == nil
 	}
 
-	dec := e.authz.Decide(core.Request{
-		Principal: p, Tool: name, Risk: tool.Risk, Scope: scope, Args: prep.Args, Now: start,
-	})
+	req := core.Request{Principal: p, Tool: name, Risk: tool.Risk, Scope: scope, Args: prep.Args, Now: start}
+	dec := st.authz.Decide(req)
 	if dec.Effect == core.EffectAllow && tool.Risk == core.RiskDestructive {
 		// Policy validation already rejects this; the engine refuses it too, so no
 		// Authorizer can let a destructive call through without approval.
@@ -250,30 +281,34 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	if err != nil {
 		return nil, finish(audit.StatusError, err)
 	}
-	result, err := normalize(out)
+	data, err := normalize(out)
 	if err != nil {
 		return nil, finish(audit.StatusError, err)
 	}
 	if err := finish(audit.StatusOK, nil); err != nil {
 		return nil, err
 	}
-	return result, nil
+	res := &Result{Data: data}
+	if st.ann != nil {
+		res.Notes = st.ann.Annotate(req, data)
+	}
+	return res, nil
 }
 
-func (e *Engine) validateScope(s core.Scope) error {
-	env, ok := e.envs[s.Environment]
+func (s *state) validateScope(sc core.Scope) error {
+	env, ok := s.envs[sc.Environment]
 	if !ok {
-		return fmt.Errorf("unknown environment %q", s.Environment)
+		return fmt.Errorf("unknown environment %q", sc.Environment)
 	}
-	if s.Namespace == "" {
+	if sc.Namespace == "" {
 		return nil
 	}
 	for _, pat := range env.Namespaces {
-		if ok, _ := path.Match(pat, s.Namespace); ok {
+		if ok, _ := path.Match(pat, sc.Namespace); ok {
 			return nil
 		}
 	}
-	return fmt.Errorf("namespace %q is not part of environment %q", s.Namespace, s.Environment)
+	return fmt.Errorf("namespace %q is not part of environment %q", sc.Namespace, sc.Environment)
 }
 
 // normalize turns a tool's typed result into plain JSON values and redacts them.
