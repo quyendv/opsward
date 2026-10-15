@@ -229,8 +229,6 @@ func GetWorkloadMetrics(ws capability.WorkloadSource, ms capability.MetricsSourc
 			if err != nil {
 				return nil, err
 			}
-			tpl := metricTemplates[v.Metric]
-			pods := strconv.Quote(podPattern(v.Kind, v.Name))
 			labels := workloadPrepared(ws, v.workloadInput, obj, nil).Resolve
 			return &engine.Prepared{
 				Scope:   core.Scope{Environment: v.Environment, Namespace: v.Namespace, Kind: v.Kind, Name: v.Name},
@@ -241,20 +239,28 @@ func GetWorkloadMetrics(ws capability.WorkloadSource, ms capability.MetricsSourc
 					if err != nil {
 						return nil, err
 					}
-					res := &WorkloadMetricsResult{Metric: v.Metric, Unit: tpl.unit}
-					if res.Usage, err = m.Query(ctx, v.Namespace, rangeQuery(fmt.Sprintf(tpl.usage, pods), d)); err != nil {
-						return nil, err
-					}
-					if tpl.resource != "" {
-						// kube-state-metrics may be absent; requests and limits are then left out.
-						res.Requests = optional(ctx, m, v.Namespace, fmt.Sprintf(`sum by (pod) (kube_pod_container_resource_requests{pod=~%s, resource=%q})`, pods, tpl.resource))
-						res.Limits = optional(ctx, m, v.Namespace, fmt.Sprintf(`sum by (pod) (kube_pod_container_resource_limits{pod=~%s, resource=%q})`, pods, tpl.resource))
-					}
-					return res, nil
+					return workloadMetrics(ctx, m, v.Namespace, v.Kind, v.Name, v.Metric, d)
 				},
 			}, nil
 		},
 	}, nil
+}
+
+// workloadMetrics runs one metric's templates for a workload's pods.
+func workloadMetrics(ctx context.Context, m capability.Metrics, namespace, kind, name, metric string, d time.Duration) (*WorkloadMetricsResult, error) {
+	tpl := metricTemplates[metric]
+	pods := strconv.Quote(podPattern(kind, name))
+	res := &WorkloadMetricsResult{Metric: metric, Unit: tpl.unit}
+	var err error
+	if res.Usage, err = m.Query(ctx, namespace, rangeQuery(fmt.Sprintf(tpl.usage, pods), d)); err != nil {
+		return nil, err
+	}
+	if tpl.resource != "" {
+		// kube-state-metrics may be absent; requests and limits are then left out.
+		res.Requests = optional(ctx, m, namespace, fmt.Sprintf(`sum by (pod) (kube_pod_container_resource_requests{pod=~%s, resource=%q})`, pods, tpl.resource))
+		res.Limits = optional(ctx, m, namespace, fmt.Sprintf(`sum by (pod) (kube_pod_container_resource_limits{pod=~%s, resource=%q})`, pods, tpl.resource))
+	}
+	return res, nil
 }
 
 func optional(ctx context.Context, m capability.Metrics, namespace, query string) *capability.MetricsResult {

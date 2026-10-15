@@ -7,8 +7,8 @@ summary: >-
   Compare the limit with the workload's real peak usage before raising it; a leak only
   takes longer to hit a higher limit.
 applies-to:
-  tools: [get_workload_status]
-  when: 'result.pods.exists(p, has(p.lastTerminated) && p.lastTerminated.reason == "OOMKilled")'
+  tools: [get_workload_status, diagnose_workload]
+  when: '(has(result.status) ? result.status : result).pods.exists(p, has(p.lastTerminated) && p.lastTerminated.reason == "OOMKilled")'
 ---
 `OOMKilled` is reported in the container's last termination state, not as an event, so it
 is easy to miss: the pod only shows restarts.

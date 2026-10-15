@@ -21,6 +21,8 @@ type fakeSource struct {
 	events     []capability.Event
 	logs       *capability.WorkloadLogs
 	logOptions capability.LogOptions
+	eventsErr  error
+	eventLimit int
 }
 
 func (f *fakeSource) Workloads(_, profile string) (capability.Workloads, error) {
@@ -33,8 +35,12 @@ func (f *fakeSource) GetWorkload(context.Context, capability.WorkloadRef) (*capa
 	return f.workload, f.err
 }
 
-func (f *fakeSource) WorkloadEvents(context.Context, capability.WorkloadRef, int) ([]capability.Event, error) {
+func (f *fakeSource) WorkloadEvents(_ context.Context, _ capability.WorkloadRef, limit int) ([]capability.Event, error) {
 	f.calls = append(f.calls, "events")
+	f.eventLimit = limit
+	if f.eventsErr != nil {
+		return nil, f.eventsErr
+	}
 	return f.events, f.err
 }
 

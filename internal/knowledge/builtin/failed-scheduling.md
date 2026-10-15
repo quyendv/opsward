@@ -7,10 +7,11 @@ summary: >-
   for each reason: insufficient CPU or memory, taints, node selectors or affinity, or a
   volume bound to another zone or node.
 applies-to:
-  tools: [list_workload_events, get_workload_status]
+  tools: [list_workload_events, get_workload_status, diagnose_workload]
   when: >-
     (tool.name == "list_workload_events" && result.exists(e, e.reason == "FailedScheduling")) ||
-    (tool.name == "get_workload_status" && result.pods.exists(p, p.phase == "Pending" && !has(p.node)))
+    (tool.name == "diagnose_workload" && has(result.events) && result.events.exists(e, e.reason == "FailedScheduling")) ||
+    (tool.name != "list_workload_events" && (has(result.status) ? result.status : result).pods.exists(p, p.phase == "Pending" && !has(p.node)))
 ---
 A `FailedScheduling` message such as `0/4 nodes are available: 2 Insufficient memory,
 2 node(s) had untolerated taint` lists every reason and how many nodes it excluded.

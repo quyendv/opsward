@@ -245,8 +245,10 @@ func Load(opt Options) (*Pack, []string, error) {
 				continue
 			}
 		}
+		// The builtin pack names tools that some configurations do not register; only
+		// the operator's own documents are worth a warning.
 		for _, t := range d.Tools {
-			if opt.Tools != nil && !slices.Contains(opt.Tools, t) {
+			if opt.Tools != nil && !strings.HasPrefix(f.name, "builtin:") && !slices.Contains(opt.Tools, t) {
 				warnings = append(warnings, fmt.Sprintf("knowledge: %s: applies-to tool %q is not registered", f.name, t))
 			}
 		}
