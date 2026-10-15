@@ -35,7 +35,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "foreign_keys(1)")
-	db, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
+	// The path is URI-escaped: an unescaped "?" or "#" in it would end the path early
+	// and open a different file without any error.
+	db, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?"+q.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: open %s: %w", path, err)
 	}

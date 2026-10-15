@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -166,5 +167,17 @@ func TestAuditWriters(t *testing.T) {
 	got, err := s.AuditWriters(ctx)
 	if err != nil || strings.Join(got, ",") != "a,b" {
 		t.Fatalf("AuditWriters = %v, %v; want [a b]", got, err)
+	}
+}
+
+func TestOpenPathWithURISpecialCharacters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "odd?name#with%25chars.db")
+	s, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = s.Close()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("database not created at the literal path: %v", err)
 	}
 }
