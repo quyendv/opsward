@@ -285,3 +285,22 @@ func TestCompileWarnsWhenAppsCannotBeResolved(t *testing.T) {
 		t.Fatalf("warnings = %v", warnings)
 	}
 }
+
+func TestNeedsLabels(t *testing.T) {
+	viewer := map[string]Role{"viewer": {Risk: []core.Risk{core.RiskRead}}}
+	for name, tt := range map[string]struct {
+		b    Binding
+		want bool
+	}{
+		"plain":           {Binding{Name: "b", Role: "viewer"}, false},
+		"apps":            {Binding{Name: "b", Role: "viewer", Scope: ScopeSelector{Apps: []string{"shop"}}}, true},
+		"labels in when":  {Binding{Name: "b", Role: "viewer", When: `scope.labels["tier"] == "web"`}, true},
+		"other condition": {Binding{Name: "b", Role: "viewer", When: `principal.subject == "a"`}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := mustCompile(t, Config{Roles: viewer, Bindings: []Binding{tt.b}}).NeedsLabels(); got != tt.want {
+				t.Fatalf("NeedsLabels = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

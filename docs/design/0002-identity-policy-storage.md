@@ -202,10 +202,10 @@ Rules that keep this fail-closed:
   workload. A call without one, such as a namespace-wide query, does not match it.
 - `apps` is evaluated against labels that Opsward reads from the live object with its own
   reader profile during validation, on every call, without a cache: a relabelled workload must
-  not keep its old access for a cache lifetime. The tool reuses the object read during
-  validation only when it runs with that same profile; with any other profile it reads the
-  object again, so that the narrower profile's cluster permissions still apply. The labels are
-  not returned to the caller.
+  not keep its old access for a cache lifetime. The lookup reads the labels and nothing else,
+  and it is skipped when no binding uses `apps` or `scope.labels`. The tool reads the object
+  itself only after authorization, with the call's own profile, so a narrower profile's
+  cluster permissions still apply. The labels are not returned to the caller.
 - A failed lookup is not reported before authorization. With the labels unknown, `apps`
   bindings whose effect is `deny` or `approve` still match and `allow` ones do not, so a
   lookup failure cannot lift a restriction; an authorized call then reports the error

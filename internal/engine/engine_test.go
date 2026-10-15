@@ -391,3 +391,30 @@ func TestInvokeNeverRunsDestructiveOnPlainAllow(t *testing.T) {
 		t.Fatalf("audit = %+v", rec)
 	}
 }
+
+type labelBlindAuthorizer struct{ authorizerFunc }
+
+func (labelBlindAuthorizer) NeedsLabels() bool { return false }
+
+// When no binding looks at labels, the engine does not read them: a denied call then
+// costs no backend request at all.
+func TestInvokeSkipsLabelLookupWhenPolicyIgnoresLabels(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskRead}
+	aud := &recordingAuditor{}
+	ft.auditor = aud
+	e, err := New(Options{
+		Tools:        []Tool{ft.tool()},
+		Environments: []Environment{{Name: "staging", Namespaces: []string{"team-a-*"}}},
+		Authorizer:   labelBlindAuthorizer{allowAll},
+		Auditor:      aud,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs)); err != nil {
+		t.Fatal(err)
+	}
+	if ft.resolved {
+		t.Fatal("labels were read although policy never uses them")
+	}
+}

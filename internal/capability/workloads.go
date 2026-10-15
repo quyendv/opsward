@@ -62,6 +62,9 @@ type Pod struct {
 // Workloads reads workloads in one cluster with one profile's credentials.
 type Workloads interface {
 	GetWorkload(ctx context.Context, ref WorkloadRef) (*Workload, error)
+	// WorkloadLabels reads only the workload's labels, in one request. It runs before
+	// authorization, so it must not cost more than that.
+	WorkloadLabels(ctx context.Context, ref WorkloadRef) (map[string]string, error)
 }
 
 // WorkloadSource hands out Workloads for an environment and profile.

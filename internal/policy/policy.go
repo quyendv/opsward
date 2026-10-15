@@ -5,6 +5,7 @@ package policy
 import (
 	"log/slog"
 	"path"
+	"strings"
 
 	"cel.dev/cel-go/cel"
 
@@ -99,6 +100,17 @@ func (p *Policy) Decide(req core.Request) core.Decision {
 		return core.Decision{Effect: core.EffectDeny, Rule: core.DefaultDenyRule}
 	}
 	return core.Decision{Effect: best.Effect, Rule: best.Name, Profile: best.Profile}
+}
+
+// NeedsLabels reports whether any binding looks at target labels, through apps or a
+// condition. When none does, the engine skips reading them.
+func (p *Policy) NeedsLabels() bool {
+	for i := range p.bindings {
+		if len(p.bindings[i].Scope.Apps) > 0 || strings.Contains(p.bindings[i].When, "labels") {
+			return true
+		}
+	}
+	return false
 }
 
 func rank(e core.Effect) int {

@@ -51,32 +51,24 @@ func WorkloadStatus(src capability.WorkloadSource) (engine.Tool, error) {
 			}
 			ref := capability.WorkloadRef{Namespace: v.Namespace, Kind: v.Kind, Name: v.Name}
 
-			// The object read to resolve labels is reused only when the call runs with
-			// the same profile; any other profile reads it again under its own RBAC.
-			var cached *capability.Workload
-			get := func(ctx context.Context, profile string) (*capability.Workload, error) {
-				w, err := src.Workloads(v.Environment, profile)
-				if err != nil {
-					return nil, err
-				}
-				return w.GetWorkload(ctx, ref)
-			}
 			return &engine.Prepared{
 				Scope: core.Scope{Environment: v.Environment, Namespace: v.Namespace, Kind: v.Kind, Name: v.Name},
 				Args:  obj,
+				// Before authorization: labels only, with Opsward's reader profile.
 				Resolve: func(ctx context.Context) (map[string]string, error) {
-					w, err := get(ctx, engine.ProfileReader)
+					w, err := src.Workloads(v.Environment, engine.ProfileReader)
 					if err != nil {
 						return nil, err
 					}
-					cached = w
-					return w.Labels, nil
+					return w.WorkloadLabels(ctx, ref)
 				},
+				// After authorization: the workload, under the call's own profile and RBAC.
 				Run: func(ctx context.Context, profile string) (any, error) {
-					if cached != nil && profile == engine.ProfileReader {
-						return cached, nil
+					w, err := src.Workloads(v.Environment, profile)
+					if err != nil {
+						return nil, err
 					}
-					return get(ctx, profile)
+					return w.GetWorkload(ctx, ref)
 				},
 			}, nil
 		},

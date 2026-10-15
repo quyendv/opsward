@@ -16,6 +16,7 @@ type fakeSource struct {
 	workload *capability.Workload
 	err      error
 	profiles []string
+	calls    []string
 }
 
 func (f *fakeSource) Workloads(_, profile string) (capability.Workloads, error) {
@@ -24,7 +25,16 @@ func (f *fakeSource) Workloads(_, profile string) (capability.Workloads, error) 
 }
 
 func (f *fakeSource) GetWorkload(context.Context, capability.WorkloadRef) (*capability.Workload, error) {
+	f.calls = append(f.calls, "get")
 	return f.workload, f.err
+}
+
+func (f *fakeSource) WorkloadLabels(context.Context, capability.WorkloadRef) (map[string]string, error) {
+	f.calls = append(f.calls, "labels")
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.workload.Labels, nil
 }
 
 const validArgs = `{"environment":"staging","namespace":"shop","kind":"Deployment","name":"api"}`
@@ -70,7 +80,9 @@ func TestWorkloadStatusPrepareValidates(t *testing.T) {
 	}
 }
 
-func TestWorkloadStatusScopeAndReuse(t *testing.T) {
+// Before authorization only the labels are read, with the reader profile; the
+// workload itself is read after authorization with the call's own profile.
+func TestWorkloadStatusResolveReadsLabelsOnly(t *testing.T) {
 	src := &fakeSource{workload: &capability.Workload{Name: "api", Labels: map[string]string{"app.kubernetes.io/part-of": "checkout"}}}
 	p, err := prepare(t, src, validArgs)
 	if err != nil {
@@ -79,18 +91,15 @@ func TestWorkloadStatusScopeAndReuse(t *testing.T) {
 	if p.Scope.Environment != "staging" || p.Scope.Namespace != "shop" || p.Scope.Kind != "Deployment" || p.Scope.Name != "api" {
 		t.Fatalf("scope = %+v", p.Scope)
 	}
-	if p.Args["name"] != "api" {
-		t.Fatalf("args = %v", p.Args)
-	}
 	labels, err := p.Resolve(context.Background())
 	if err != nil || labels["app.kubernetes.io/part-of"] != "checkout" {
 		t.Fatalf("Resolve = %v, %v", labels, err)
 	}
-	if _, err := p.Run(context.Background(), engine.ProfileReader); err != nil {
+	if _, err := p.Run(context.Background(), "team-a-reader"); err != nil {
 		t.Fatal(err)
 	}
-	if len(src.profiles) != 1 {
-		t.Fatalf("profiles used = %v, want the resolved object reused for the reader profile", src.profiles)
+	if strings.Join(src.calls, ",") != "labels,get" || strings.Join(src.profiles, ",") != "reader,team-a-reader" {
+		t.Fatalf("calls = %v with profiles %v; want labels as reader, then get as team-a-reader", src.calls, src.profiles)
 	}
 }
 

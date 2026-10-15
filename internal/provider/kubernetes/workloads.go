@@ -87,6 +87,28 @@ func (w *workloads) GetWorkload(ctx context.Context, ref capability.WorkloadRef)
 	return out, nil
 }
 
+func (w *workloads) WorkloadLabels(ctx context.Context, ref capability.WorkloadRef) (map[string]string, error) {
+	var meta metav1.Object
+	var err error
+	switch ref.Kind {
+	case "Deployment":
+		meta, err = w.c.AppsV1().Deployments(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	case "StatefulSet":
+		meta, err = w.c.AppsV1().StatefulSets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	case "DaemonSet":
+		meta, err = w.c.AppsV1().DaemonSets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	default:
+		return nil, fmt.Errorf("unsupported workload kind %q", ref.Kind)
+	}
+	if apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("%s %s/%s: %w", ref.Kind, ref.Namespace, ref.Name, capability.ErrNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get %s %s/%s: %w", ref.Kind, ref.Namespace, ref.Name, err)
+	}
+	return meta.GetLabels(), nil
+}
+
 func (w *workloads) pods(ctx context.Context, namespace string, selector *metav1.LabelSelector) ([]capability.Pod, error) {
 	sel, err := metav1.LabelSelectorAsSelector(selector)
 	if err != nil {

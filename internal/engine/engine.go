@@ -54,6 +54,13 @@ type Authorizer interface {
 	Decide(core.Request) core.Decision
 }
 
+// LabelUser is implemented by an Authorizer that can tell whether it ever looks at
+// target labels. When it does not, the engine skips reading them, so a denied call
+// costs no backend request. An Authorizer without it always gets labels.
+type LabelUser interface {
+	NeedsLabels() bool
+}
+
 // Auditor records calls. audit.Writer implements it.
 type Auditor interface {
 	Write(ctx context.Context, r audit.Record) (audit.Record, error)
@@ -198,7 +205,7 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	}
 
 	scope := prep.Scope
-	if prep.Resolve != nil {
+	if lu, ok := e.authz.(LabelUser); prep.Resolve != nil && (!ok || lu.NeedsLabels()) {
 		// A failed lookup is not reported to the caller before authorization, so that
 		// an unauthorized caller cannot probe which objects exist. Policy is told the
 		// labels are unknown, so app-scoped deny and approve bindings still apply; an

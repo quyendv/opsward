@@ -211,3 +211,20 @@ contexts: [{name: ctx, context: {cluster: c, user: u}}]
 		t.Fatal("a context the file does not define must be an error")
 	}
 }
+
+// Label lookup runs before authorization, so it must cost one GET and nothing else.
+func TestWorkloadLabelsIsOneGet(t *testing.T) {
+	c := fake.NewClientset(deployment(), pod("api-a", map[string]string{"app": "api"}, true, 0, ""))
+	c.ClearActions()
+	labels, err := NewWorkloads(c).WorkloadLabels(context.Background(), capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"})
+	if err != nil || labels["app.kubernetes.io/part-of"] != "checkout" {
+		t.Fatalf("WorkloadLabels = %v, %v", labels, err)
+	}
+	if a := c.Actions(); len(a) != 1 || a[0].GetVerb() != "get" {
+		t.Fatalf("actions = %v, want a single get", a)
+	}
+	_, err = NewWorkloads(c).WorkloadLabels(context.Background(), capability.WorkloadRef{Namespace: "shop", Kind: "StatefulSet", Name: "api"})
+	if !errors.Is(err, capability.ErrNotFound) {
+		t.Fatalf("missing workload: err = %v", err)
+	}
+}
