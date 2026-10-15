@@ -115,3 +115,20 @@ func TestWhenWarnings(t *testing.T) {
 		}
 	}
 }
+
+func TestWhenApproveThatErrorsStillApplies(t *testing.T) {
+	p := mustCompile(t, Config{
+		Roles: map[string]Role{"viewer": {Risk: []core.Risk{core.RiskRead}}},
+		Bindings: []Binding{
+			{Name: "allow", Role: "viewer"},
+			{
+				Name: "critical-needs-approval", Role: "viewer", Effect: core.EffectApprove,
+				Approvers: Subjects{Groups: []string{"platform"}}, When: `scope.labels["tier"] == "critical"`,
+			},
+		},
+	})
+	got := p.Decide(request("a@example.com", nil, "get_workload_status", core.RiskRead, apiScope))
+	if got.Effect != core.EffectApprove {
+		t.Fatalf("got %+v: an approval whose condition cannot be evaluated must not be skipped in favour of allow", got)
+	}
+}

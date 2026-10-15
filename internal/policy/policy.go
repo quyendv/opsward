@@ -116,7 +116,7 @@ func rank(e core.Effect) int {
 func (b *compiled) matches(req core.Request, appLabel string) bool {
 	return b.Subjects.match(req.Principal) &&
 		b.role.contains(req.Tool, req.Risk) &&
-		b.Scope.match(req.Scope, appLabel)
+		b.Scope.match(req.Scope, appLabel, b.Effect != core.EffectAllow)
 }
 
 func (s Subjects) match(p core.Principal) bool {
@@ -155,7 +155,10 @@ func (r Role) contains(tool string, risk core.Risk) bool {
 	return false
 }
 
-func (s ScopeSelector) match(sc core.Scope, appLabel string) bool {
+// match reports whether the selector covers sc. strict is set for bindings whose effect
+// is stricter than allow: when the target's labels are unknown, such a binding still
+// matches on apps, so a failed lookup cannot lift a deny or an approval.
+func (s ScopeSelector) match(sc core.Scope, appLabel string, strict bool) bool {
 	if !anyGlob(s.Environments, sc.Environment) || !anyGlob(s.Namespaces, sc.Namespace) {
 		return false
 	}
@@ -167,6 +170,9 @@ func (s ScopeSelector) match(sc core.Scope, appLabel string) bool {
 		return false
 	}
 	if len(s.Apps) > 0 {
+		if !sc.LabelsKnown {
+			return strict
+		}
 		v, ok := sc.Labels[appLabel]
 		if !ok || !anyGlob(s.Apps, v) {
 			return false

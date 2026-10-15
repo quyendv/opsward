@@ -196,8 +196,9 @@ func lintWhen(where, expr string, role Role, cat Catalog) []string {
 	return out
 }
 
-// conditionHolds evaluates a binding's condition. A deny binding whose condition fails
-// to evaluate applies; any other binding whose condition fails to evaluate does not.
+// conditionHolds evaluates a binding's condition. A deny or approve binding whose
+// condition fails to evaluate applies; an allow binding whose condition fails does not.
+// Either way the stricter outcome wins.
 func (p *Policy) conditionHolds(b *compiled, req core.Request) bool {
 	if b.when == nil {
 		return true
@@ -222,12 +223,12 @@ func (p *Policy) conditionHolds(b *compiled, req core.Request) bool {
 	})
 	if err != nil {
 		p.log.Warn("policy condition failed to evaluate", "binding", b.Name, "error", err)
-		return b.Effect == core.EffectDeny
+		return b.Effect != core.EffectAllow
 	}
 	v, ok := out.Value().(bool)
 	if !ok {
 		p.log.Warn("policy condition did not return a bool", "binding", b.Name)
-		return b.Effect == core.EffectDeny
+		return b.Effect != core.EffectAllow
 	}
 	return v
 }

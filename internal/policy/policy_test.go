@@ -122,8 +122,10 @@ func TestDecideWorkloadAndAppScope(t *testing.T) {
 	noTarget := core.Scope{Environment: "staging", Namespace: "team-a-api"}
 	labelled := core.Scope{
 		Environment: "staging", Namespace: "shop", Kind: "Deployment", Name: "cart",
-		Labels: map[string]string{DefaultAppLabel: "checkout"},
+		Labels: map[string]string{DefaultAppLabel: "checkout"}, LabelsKnown: true,
 	}
+	unlabelled := apiScope
+	unlabelled.LabelsKnown = true
 	tests := []struct {
 		name   string
 		req    core.Request
@@ -133,7 +135,11 @@ func TestDecideWorkloadAndAppScope(t *testing.T) {
 		{"other workload", request("a@example.com", teamA, "get_workload_status", core.RiskRead, worker), core.EffectDeny},
 		{"call without a target never matches a workload binding", request("a@example.com", teamA, "get_workload_status", core.RiskRead, noTarget), core.EffectDeny},
 		{"app label matches", request("c@example.com", []string{"team-c"}, "get_workload_status", core.RiskRead, labelled), core.EffectAllow},
-		{"app label missing", request("c@example.com", []string{"team-c"}, "get_workload_status", core.RiskRead, apiScope), core.EffectDeny},
+		{"app label missing", request("c@example.com", []string{"team-c"}, "get_workload_status", core.RiskRead, unlabelled), core.EffectDeny},
+		{"labels unknown", request("c@example.com", []string{"team-c"}, "get_workload_status", core.RiskRead, core.Scope{
+			Environment: "staging", Namespace: "shop", Kind: "Deployment", Name: "cart",
+			Labels: map[string]string{DefaultAppLabel: "checkout"},
+		}), core.EffectDeny},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -215,5 +221,32 @@ func TestCompileReportsEveryError(t *testing.T) {
 	_, _, err := Compile(Config{Bindings: []Binding{{Name: "a", Role: "x"}, {Name: "b", Role: "y"}}}, testCatalog, nil)
 	if err == nil || !strings.Contains(err.Error(), `"x"`) || !strings.Contains(err.Error(), `"y"`) {
 		t.Fatalf("err = %v, want both bindings reported", err)
+	}
+}
+
+// When labels could not be read, an app-scoped binding with a stricter effect than
+// allow still applies, so a lookup failure cannot lift a deny or an approval.
+func TestDecideUnknownLabelsFailClosed(t *testing.T) {
+	viewer := map[string]Role{"viewer": {Risk: []core.Risk{core.RiskRead}}}
+	for _, effect := range []core.Effect{core.EffectDeny, core.EffectApprove} {
+		t.Run(string(effect), func(t *testing.T) {
+			p := mustCompile(t, Config{Roles: viewer, Bindings: []Binding{
+				{Name: "all", Role: "viewer"},
+				{
+					Name: "payments", Role: "viewer", Effect: effect, Approvers: Subjects{Groups: []string{"platform"}},
+					Scope: ScopeSelector{Apps: []string{"payments"}},
+				},
+			}})
+			unknown := request("a@example.com", nil, "get_workload_status", core.RiskRead, apiScope)
+			if got := p.Decide(unknown); got.Rule != "payments" {
+				t.Fatalf("labels unknown: got %+v, want the %s binding to apply", got, effect)
+			}
+			known := unknown
+			known.Scope.LabelsKnown = true
+			known.Scope.Labels = map[string]string{DefaultAppLabel: "shop"}
+			if got := p.Decide(known); got.Rule != "all" {
+				t.Fatalf("labels known and not payments: got %+v, want allow", got)
+			}
+		})
 	}
 }

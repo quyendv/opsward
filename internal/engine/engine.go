@@ -200,13 +200,14 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	scope := prep.Scope
 	if prep.Resolve != nil {
 		// A failed lookup is not reported to the caller before authorization, so that
-		// an unauthorized caller cannot probe which objects exist. Without labels, app
-		// bindings simply do not match; an authorized call reports the error from Run.
+		// an unauthorized caller cannot probe which objects exist. Policy is told the
+		// labels are unknown, so app-scoped deny and approve bindings still apply; an
+		// authorized call reports the error from Run.
 		labels, err := prep.Resolve(ctx)
 		if err != nil {
 			e.log.Debug("resolving target labels failed", "tool", name, "error", err)
 		}
-		scope.Labels = labels
+		scope.Labels, scope.LabelsKnown = labels, err == nil
 	}
 
 	dec := e.authz.Decide(core.Request{

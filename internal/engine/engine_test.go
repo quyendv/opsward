@@ -215,8 +215,18 @@ func TestInvokePassesLabelsToPolicy(t *testing.T) {
 	if _, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs)); err != nil {
 		t.Fatal(err)
 	}
-	if seen.Scope.Labels["app.kubernetes.io/part-of"] != "checkout" || seen.Args["name"] != "api" {
+	if seen.Scope.Labels["app.kubernetes.io/part-of"] != "checkout" || !seen.Scope.LabelsKnown || seen.Args["name"] != "api" {
 		t.Fatalf("policy saw %+v", seen)
+	}
+}
+
+func TestInvokeTellsPolicyWhenLabelsAreUnknown(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskRead, resolveErr: errors.New("forbidden")}
+	var seen core.Request
+	e := newEngine(t, ft, func(r core.Request) core.Decision { seen = r; return allowAll(r) }, &recordingAuditor{})
+	_, _ = e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs))
+	if seen.Scope.LabelsKnown {
+		t.Fatal("LabelsKnown = true after a failed lookup")
 	}
 }
 

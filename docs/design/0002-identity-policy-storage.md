@@ -206,9 +206,10 @@ Rules that keep this fail-closed:
   validation only when it runs with that same profile; with any other profile it reads the
   object again, so that the narrower profile's cluster permissions still apply. The labels are
   not returned to the caller.
-- A failed lookup is not reported before authorization. Without labels, app bindings do not
-  match; an authorized call then reports the error itself. An unauthorized caller cannot use
-  error messages to learn which objects exist.
+- A failed lookup is not reported before authorization. With the labels unknown, `apps`
+  bindings whose effect is `deny` or `approve` still match and `allow` ones do not, so a
+  lookup failure cannot lift a restriction; an authorized call then reports the error
+  itself. An unauthorized caller cannot use error messages to learn which objects exist.
 
 ### Confining queries
 
@@ -229,9 +230,9 @@ the environment's cluster label. The label names are configured per provider.
 ### Evaluation
 
 1. Collect the bindings whose subjects, role and scope match the call.
-2. Evaluate each binding's `when`. A binding with `effect: deny` whose condition fails to
-   evaluate counts as matching; any other binding whose condition fails to evaluate does not.
-   Both cases are logged.
+2. Evaluate each binding's `when`. A binding with `effect: deny` or `effect: approve` whose
+   condition fails to evaluate counts as matching; an `allow` binding whose condition fails
+   to evaluate does not. Either way the stricter outcome wins, and the failure is logged.
 3. `deny` overrides `approve`, which overrides `allow`. No matching binding is `deny`.
 
 Validation at load time rejects:

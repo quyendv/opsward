@@ -60,6 +60,9 @@ type Scope struct {
 	// Labels of the target, read by Opsward during validation. Used by policy, never
 	// returned to the caller and not audited.
 	Labels map[string]string `json:"-"`
+	// LabelsKnown is false when the target's labels could not be read. Policy then
+	// treats app-scoped bindings stricter than allow as matching.
+	LabelsKnown bool `json:"-"`
 }
 
 // Request is everything policy sees about one call.
