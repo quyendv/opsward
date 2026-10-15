@@ -90,3 +90,21 @@ func TestRejectedQueriesNeverReachTheBackend(t *testing.T) {
 		t.Fatal("unknown environment accepted")
 	}
 }
+
+// Issue #16: streams come with the most recent activity first.
+func TestStreamsAreSortedByNewestLine(t *testing.T) {
+	f := &fakeLoki{t: t, reply: `{"status":"success","data":{"resultType":"streams","result":[
+		{"stream":{"pod":"old"},"values":[["1790000001000000000","a"]]},
+		{"stream":{"pod":"new"},"values":[["1790000009000000000","b"],["1790000000000000000","c"]]}]}}`}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	src, _ := NewSource(Options{HTTP: httpapi.Options{URL: srv.URL}, NamespaceLabel: "namespace"}, map[string]string{"production": "prod-a"})
+	l, _ := src.Logs("production")
+	res, err := l.Query(context.Background(), "shop", capability.LogsQuery{Query: `{app="api"}`, Since: time.Hour, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Streams[0].Labels["pod"] != "new" {
+		t.Fatalf("first stream = %v", res.Streams[0].Labels)
+	}
+}

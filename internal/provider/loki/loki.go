@@ -2,6 +2,7 @@
 package loki
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -117,17 +118,29 @@ func decode(body []byte) ([]capability.LogStream, error) {
 	if r.Data.ResultType != "streams" {
 		return nil, fmt.Errorf("unexpected result type %q", r.Data.ResultType)
 	}
-	out := make([]capability.LogStream, 0, len(r.Data.Result))
+	type stream struct {
+		capability.LogStream
+		newest int64
+	}
+	streams := make([]stream, 0, len(r.Data.Result))
 	for _, s := range r.Data.Result {
-		lines := make([]string, 0, len(s.Values))
+		st := stream{LogStream: capability.LogStream{Labels: s.Stream, Lines: make([]string, 0, len(s.Values))}}
 		for _, v := range slices.Backward(s.Values) {
 			ns, err := strconv.ParseInt(v[0], 10, 64)
 			if err != nil {
 				continue
 			}
-			lines = append(lines, time.Unix(0, ns).UTC().Format(time.RFC3339Nano)+" "+v[1])
+			st.newest = max(st.newest, ns)
+			st.Lines = append(st.Lines, time.Unix(0, ns).UTC().Format(time.RFC3339Nano)+" "+v[1])
 		}
-		out = append(out, capability.LogStream{Labels: s.Stream, Lines: lines})
+		streams = append(streams, st)
+	}
+	// Most recent activity first; within a stream, oldest first, so that multi-line
+	// content stays in order.
+	slices.SortStableFunc(streams, func(a, b stream) int { return cmp.Compare(b.newest, a.newest) })
+	out := make([]capability.LogStream, len(streams))
+	for i, s := range streams {
+		out[i] = s.LogStream
 	}
 	return out, nil
 }

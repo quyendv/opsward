@@ -135,7 +135,8 @@ func QueryLogs(src capability.LogsSource) (engine.Tool, error) {
 	}
 	return engine.Tool{
 		Name: "query_logs",
-		Description: "Search a namespace's logs with a LogQL log query, newest lines first, grouped by stream. " +
+		Description: "Search a namespace's logs with a LogQL log query. Returns the newest matching lines, grouped by " +
+			"stream (pod, container): the most recently active stream first, lines oldest first within a stream. " +
 			"Metric queries over logs (rate, count_over_time) are not supported.",
 		Risk:        core.RiskRead,
 		InputSchema: in.schema,
