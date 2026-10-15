@@ -10,7 +10,7 @@ is not raw API access, which many MCP servers already offer, but **typed operati
 per-principal policy, audit, redaction, and a write path that proposes changes instead of
 making them**.
 
-Status: **pre-alpha, design phase.** Nothing is stable; there are no commands yet.
+Status: **pre-alpha.** Nothing is stable. One tool works end to end over MCP stdio.
 Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0001](docs/design/0001-architecture.md) for the architecture,
 [0002](docs/design/0002-identity-policy-storage.md) for identity, policy and storage.
@@ -18,14 +18,20 @@ Read the design notes in [docs/design/](docs/design/) before adding a package:
 ## Layout
 
 ```
-cmd/opsward/        entrypoint
-internal/version/   build metadata, set via -ldflags
-scripts/            repository tooling
+cmd/opsward/                 CLI: serve, validate, audit verify, version
+internal/core/               vocabulary shared by engine, policy and audit
+internal/engine/             the pipeline: validate, authorize, run, redact, audit
+internal/policy/             roles, bindings, CEL conditions
+internal/audit/              hash-chained records, stream, verification, retention
+internal/store/              persistence interface; sqlite/ implements it
+internal/redact/             credential-shaped content removal
+internal/capability/         backend-neutral interfaces tools depend on
+internal/provider/<name>/    backend implementations (kubernetes)
+internal/tool/               the agent's vocabulary
+internal/adapter/<protocol>/ the only place protocol SDKs appear (mcp)
+internal/app/                wiring from configuration
+examples/                    configuration examples
 ```
-
-Planned, not yet present: `internal/engine` (tool registry, authorize, audit, redact),
-`internal/provider/<kind>` (Kubernetes, GitOps, metrics, logs, traces, git forge, CI),
-`internal/adapter/<protocol>` (MCP, REST, chat; the only place protocol SDKs appear).
 
 ## Commands
 

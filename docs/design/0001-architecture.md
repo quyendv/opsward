@@ -368,7 +368,7 @@ knowledge:
 
 storage: { type: sqlite, path: /var/lib/opsward/opsward.db }
 audit:
-  stream: { type: stdout }
+  stream: { type: stderr }
 ```
 
 The file is watched and reloaded atomically; an invalid file keeps the previous configuration

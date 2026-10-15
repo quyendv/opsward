@@ -206,6 +206,9 @@ Rules that keep this fail-closed:
   validation only when it runs with that same profile; with any other profile it reads the
   object again, so that the narrower profile's cluster permissions still apply. The labels are
   not returned to the caller.
+- A failed lookup is not reported before authorization. Without labels, app bindings do not
+  match; an authorized call then reports the error itself. An unauthorized caller cannot use
+  error messages to learn which objects exist.
 
 ### Confining queries
 
@@ -334,12 +337,16 @@ Credentials are never stored; configuration references them by file or environme
 Every record is written to two places:
 
 - the **store**, so the console and API can query it;
-- a **stream** (stdout or a file), for the operator's log pipeline. The stream is the copy meant
-  for long-term, tamper-resistant retention outside Opsward.
+- a **stream** (stdout, stderr or a file), for the operator's log pipeline. The stream is the
+  copy meant for long-term, tamper-resistant retention outside Opsward. Under MCP over stdio,
+  stdout carries the protocol, so the stream must be stderr or a file there.
 
 Each record carries a sequence number and a hash chain: `prev` is the hash of the previous
 record from the same writer and `hash` covers the record including `prev`. A deleted or altered
 record breaks the chain. Each replica keeps its own chain, identified by `writer`.
+Processes that share a store and a writer ID, such as one MCP stdio server per client
+session, share one chain in the store; each process's stream then holds only its own
+records, so the store is what `opsward audit verify` checks.
 
 ```json
 {
@@ -359,6 +366,8 @@ written to both destinations within a timeout, the call is refused. The timeout 
 stdout, which rarely fails but can block when a log collector applies backpressure. If the
 outcome record then fails, the action has already happened: the failure is logged and counted,
 and the intent record still shows the attempt.
+For a `read` call the result is withheld instead: output that was not audited does not
+leave the engine.
 
 **Retention.** The store keeps records for 90 days by default (`auditRetention`, `0` keeps them
 forever); long-term retention is the stream's job. Pruning first writes a `checkpoint` record
@@ -386,7 +395,7 @@ storage:
   # dsn: { file: /etc/opsward/postgres-dsn }
 
 audit:
-  stream: { type: stdout }
+  stream: { type: stderr }
 
 policy:
   sources: [file]
