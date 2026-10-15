@@ -39,8 +39,8 @@ func WorkloadStatus(src capability.WorkloadSource) (engine.Tool, error) {
 	return engine.Tool{
 		Name: "get_workload_status",
 		Description: "Show a workload's rollout state: desired, ready, updated and available replicas, " +
-			"status conditions, and each pod's phase, readiness, restart count and waiting reason. " +
-			"Start here when a workload is unhealthy.",
+			"status conditions, and each pod's phase, readiness, restart count, waiting reason and last termination " +
+			"(reason such as OOMKilled, and exit code). Start here when a workload is unhealthy.",
 		Risk:        core.RiskRead,
 		InputSchema: in.schema,
 		Args:        in.names,

@@ -250,3 +250,32 @@ func TestParseToleratesBOMAndClosingAtEOF(t *testing.T) {
 		t.Fatalf("closing --- at end of file: %v", err)
 	}
 }
+
+func TestBuiltinNotesOnStatusDetails(t *testing.T) {
+	pack, _, err := Load(Options{Builtin: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := func(result any) string {
+		var out []string
+		for _, n := range pack.Annotate(request("get_workload_status"), result) {
+			out = append(out, n.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	oom := map[string]any{"pods": []any{map[string]any{
+		"name": "a", "phase": "Running", "node": "n1",
+		"lastTerminated": map[string]any{"container": "app", "reason": "OOMKilled", "exitCode": float64(137)},
+	}}}
+	if got := ids(oom); got != "oom-killed" {
+		t.Fatalf("OOM notes = %q", got)
+	}
+	initLoop := map[string]any{"pods": []any{map[string]any{"name": "a", "phase": "Pending", "node": "n1", "waiting": "Init:CrashLoopBackOff"}}}
+	if got := ids(initLoop); got != "crashloop-backoff" {
+		t.Fatalf("init crash loop notes = %q", got)
+	}
+	unscheduled := map[string]any{"pods": []any{map[string]any{"name": "a", "phase": "Pending"}}}
+	if got := ids(unscheduled); got != "failed-scheduling" {
+		t.Fatalf("unscheduled notes = %q", got)
+	}
+}

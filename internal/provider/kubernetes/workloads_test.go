@@ -421,3 +421,29 @@ func TestWorkloadEventsSeries(t *testing.T) {
 		t.Fatalf("series event = %+v", got[0])
 	}
 }
+
+// An OOM kill is not an event; it is the restarted container's last termination.
+func TestPodStatusLastTerminationAndInitContainers(t *testing.T) {
+	finished := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	oom := pod("api-a", map[string]string{"app": "api"}, false, 3, "CrashLoopBackOff")
+	oom.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{
+		Reason: "OOMKilled", ExitCode: 137, FinishedAt: metav1.NewTime(finished),
+	}
+	initFail := pod("api-b", map[string]string{"app": "api"}, false, 0, "")
+	initFail.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+		Name: "migrate", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+	}}
+	initFail.Status.ContainerStatuses[0].State.Waiting = &corev1.ContainerStateWaiting{Reason: "PodInitializing"}
+	w, err := NewWorkloads(fake.NewClientset(deployment(), oom, initFail)).GetWorkload(context.Background(),
+		capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lt := w.Pods[0].LastTerminated
+	if lt == nil || lt.Container != "app" || lt.Reason != "OOMKilled" || lt.ExitCode != 137 || !lt.FinishedAt.Equal(finished) {
+		t.Fatalf("lastTerminated = %+v", lt)
+	}
+	if w.Pods[1].Waiting != "Init:CrashLoopBackOff" {
+		t.Fatalf("init waiting = %q", w.Pods[1].Waiting)
+	}
+}

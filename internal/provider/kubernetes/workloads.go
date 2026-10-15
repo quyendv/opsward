@@ -349,13 +349,30 @@ func podStatus(p *corev1.Pod) capability.Pod {
 			out.Ready = c.Status == corev1.ConditionTrue
 		}
 	}
+	// A waiting init container blocks the pod, so it is reported before the others.
+	for _, cs := range p.Status.InitContainerStatuses {
+		if cs.State.Waiting != nil && out.Waiting == "" {
+			out.Waiting = "Init:" + cs.State.Waiting.Reason
+		}
+		out.LastTerminated = later(out.LastTerminated, cs)
+	}
 	for _, cs := range p.Status.ContainerStatuses {
 		out.Restarts += cs.RestartCount
 		if cs.State.Waiting != nil && out.Waiting == "" {
 			out.Waiting = cs.State.Waiting.Reason
 		}
+		out.LastTerminated = later(out.LastTerminated, cs)
 	}
 	return out
+}
+
+// later returns whichever of cur and cs's last termination finished most recently.
+func later(cur *capability.Termination, cs corev1.ContainerStatus) *capability.Termination {
+	t := cs.LastTerminationState.Terminated
+	if t == nil || (cur != nil && !t.FinishedAt.After(cur.FinishedAt)) {
+		return cur
+	}
+	return &capability.Termination{Container: cs.Name, Reason: t.Reason, ExitCode: t.ExitCode, FinishedAt: t.FinishedAt.UTC()}
 }
 
 func replicasOrOne(r *int32) int32 {

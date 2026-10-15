@@ -40,7 +40,8 @@ func WorkloadEvents(src capability.WorkloadSource) (engine.Tool, error) {
 	return engine.Tool{
 		Name: "list_workload_events",
 		Description: "List recent Kubernetes events of a workload, of the ReplicaSets a Deployment owns, and of its pods, " +
-			"newest first. Scheduling failures, image pull errors, failed probes and OOM kills appear here.",
+			"newest first. Scheduling failures, image pull errors, failed probes and failed pod creation appear here; " +
+			"OOM kills do not (see lastTerminated in get_workload_status).",
 		Risk:        core.RiskRead,
 		InputSchema: in.schema,
 		Args:        in.names,

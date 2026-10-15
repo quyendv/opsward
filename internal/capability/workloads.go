@@ -56,8 +56,21 @@ type Pod struct {
 	Node     string `json:"node,omitempty"`
 	Ready    bool   `json:"ready"`
 	Restarts int32  `json:"restarts"`
-	// Waiting is the reason a container is waiting, such as CrashLoopBackOff.
+	// Waiting is the reason a container is waiting, such as CrashLoopBackOff; for an init
+	// container it is prefixed "Init:", as kubectl shows it.
 	Waiting string `json:"waiting,omitempty"`
+	// LastTerminated is the most recent termination of a container that has restarted:
+	// how it ended (OOMKilled, Error) and with which exit code. OOM kills are reported
+	// only here, never as events.
+	LastTerminated *Termination `json:"lastTerminated,omitempty"`
+}
+
+// Termination is how a container instance ended.
+type Termination struct {
+	Container  string    `json:"container"`
+	Reason     string    `json:"reason,omitempty"`
+	ExitCode   int32     `json:"exitCode"`
+	FinishedAt time.Time `json:"finishedAt,omitzero"`
 }
 
 // Event is a Kubernetes event about a workload or one of its children.
