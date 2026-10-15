@@ -58,6 +58,7 @@ func (a *recordingAuditor) last() audit.Record {
 // fakeTool records what the engine did with it.
 type fakeTool struct {
 	risk       core.Risk
+	global     bool
 	result     any
 	runErr     error
 	labels     map[string]string
@@ -72,7 +73,7 @@ type fakeTool struct {
 
 func (f *fakeTool) tool() Tool {
 	return Tool{
-		Name: "do_thing", Risk: f.risk,
+		Name: "do_thing", Risk: f.risk, Global: f.global,
 		Prepare: func(raw json.RawMessage) (*Prepared, error) {
 			var in struct {
 				Environment string `json:"environment"`
@@ -137,7 +138,7 @@ func TestInvokeAllowedRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if got.(map[string]any)["ready"] != float64(2) {
+	if got.Data.(map[string]any)["ready"] != float64(2) {
 		t.Fatalf("result = %#v", got)
 	}
 	if ft.ranProfile != ProfileReader {
@@ -314,7 +315,7 @@ func TestInvokeRedactsResultArgsAndErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal(got)
+	b, _ := json.Marshal(got.Data)
 	if strings.Contains(string(b), secret) {
 		t.Fatalf("result leaked a secret: %s", b)
 	}
@@ -417,4 +418,105 @@ func TestInvokeSkipsLabelLookupWhenPolicyIgnoresLabels(t *testing.T) {
 	if ft.resolved {
 		t.Fatal("labels were read although policy never uses them")
 	}
+}
+
+type annotatorFunc func(core.Request, any) []core.Note
+
+func (f annotatorFunc) Annotate(r core.Request, result any) []core.Note { return f(r, result) }
+
+func TestInvokeAttachesNotesFromTheAnnotator(t *testing.T) {
+	secret := strings.Join([]string{"hunter2", "hunter2"}, "")
+	ft := &fakeTool{risk: core.RiskRead, result: map[string]any{"state": "CrashLoopBackOff", "env": "DB_PASSWORD=" + secret}}
+	var seen any
+	ann := annotatorFunc(func(r core.Request, result any) []core.Note {
+		seen = result
+		if result.(map[string]any)["state"] == "CrashLoopBackOff" && r.Tool == "do_thing" {
+			return []core.Note{{ID: "crashloop", Title: "Crash loop", Severity: "warning", Summary: "read previous logs"}}
+		}
+		return nil
+	})
+	aud := &recordingAuditor{}
+	ft.auditor = aud
+	e, err := New(Options{
+		Tools:        []Tool{ft.tool()},
+		Environments: []Environment{{Name: "staging", Namespaces: []string{"team-a-*"}}},
+		Authorizer:   authorizerFunc(allowAll), Auditor: aud, Annotator: ann,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Notes) != 1 || got.Notes[0].ID != "crashloop" {
+		t.Fatalf("notes = %+v", got.Notes)
+	}
+	b, _ := json.Marshal(seen)
+	if strings.Contains(string(b), secret) {
+		t.Fatalf("annotator saw an unredacted result: %s", b)
+	}
+}
+
+// Tools that are not bound to an environment (knowledge search) skip scope validation
+// and label lookup, but are still authorized.
+func TestInvokeGlobalTool(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskRead, global: true, result: "ok"}
+	var seen core.Request
+	e := newEngine(t, ft, func(r core.Request) core.Decision { seen = r; return allowAll(r) }, &recordingAuditor{})
+	got, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(`{"name":"q"}`))
+	if err != nil || got.Data != "ok" {
+		t.Fatalf("Invoke = %+v, %v", got, err)
+	}
+	if ft.resolved {
+		t.Fatal("a global tool must not resolve labels")
+	}
+	if seen.Tool != "do_thing" {
+		t.Fatal("a global tool must still be authorized")
+	}
+
+	deny := newEngine(t, &fakeTool{risk: core.RiskRead, global: true}, func(core.Request) core.Decision {
+		return core.Decision{Effect: core.EffectDeny, Rule: core.DefaultDenyRule}
+	}, &recordingAuditor{})
+	var denied *DeniedError
+	if _, err := deny.Invoke(context.Background(), alice, "do_thing", json.RawMessage(`{"name":"q"}`)); !errors.As(err, &denied) {
+		t.Fatalf("err = %v, want DeniedError", err)
+	}
+}
+
+func TestUpdateSwapsEnvironmentsPolicyAndAnnotator(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskRead, result: "ok"}
+	e := newEngine(t, ft, func(core.Request) core.Decision {
+		return core.Decision{Effect: core.EffectDeny, Rule: core.DefaultDenyRule}
+	}, &recordingAuditor{})
+	prod := `{"environment":"production","namespace":"shop","name":"api"}`
+	if _, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(prod)); !errors.Is(err, ErrInvalidArguments) {
+		t.Fatalf("before Update: err = %v, want unknown environment", err)
+	}
+	e.Update([]Environment{{Name: "production", Namespaces: []string{"*"}}}, authorizerFunc(allowAll),
+		annotatorFunc(func(core.Request, any) []core.Note { return []core.Note{{ID: "n"}} }))
+	got, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(prod))
+	if err != nil || len(got.Notes) != 1 {
+		t.Fatalf("after Update: %+v, %v", got, err)
+	}
+}
+
+func TestUpdateIsRaceFree(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskRead, result: "ok"}
+	e := newEngine(t, ft, allowAll, &recordingAuditor{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 200 {
+			_, _ = e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 200 {
+			e.Update([]Environment{{Name: "staging", Namespaces: []string{"team-a-*"}}}, authorizerFunc(allowAll), nil)
+		}
+	}()
+	wg.Wait()
 }

@@ -5,6 +5,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrNotFound is wrapped by providers when the requested object does not exist.
@@ -55,8 +56,58 @@ type Pod struct {
 	Node     string `json:"node,omitempty"`
 	Ready    bool   `json:"ready"`
 	Restarts int32  `json:"restarts"`
-	// Waiting is the reason a container is waiting, such as CrashLoopBackOff.
+	// Waiting is the reason a container is waiting, such as CrashLoopBackOff; for an init
+	// container it is prefixed "Init:", as kubectl shows it.
 	Waiting string `json:"waiting,omitempty"`
+	// LastTerminated is the most recent termination of a container that has restarted:
+	// how it ended (OOMKilled, Error) and with which exit code. OOM kills are reported
+	// only here, never as events.
+	LastTerminated *Termination `json:"lastTerminated,omitempty"`
+}
+
+// Termination is how a container instance ended.
+type Termination struct {
+	Container  string    `json:"container"`
+	Reason     string    `json:"reason,omitempty"`
+	ExitCode   int32     `json:"exitCode"`
+	FinishedAt time.Time `json:"finishedAt,omitzero"`
+}
+
+// Event is a Kubernetes event about a workload or one of its children.
+type Event struct {
+	Time    time.Time `json:"time"`
+	Type    string    `json:"type"`
+	Reason  string    `json:"reason"`
+	Object  string    `json:"object"` // Kind/name
+	Message string    `json:"message"`
+	Count   int32     `json:"count,omitempty"`
+}
+
+// LogOptions selects which logs WorkloadLogs reads.
+type LogOptions struct {
+	Pod        string // empty: every pod of the workload, up to MaxPods
+	Container  string // empty: every init and regular container
+	TailLines  int64
+	Previous   bool // the container instance before the last restart
+	MaxPods    int  // pods are read in name order; the rest are counted, not read
+	MaxBytes   int  // per container; the newest output is kept, cut at a line boundary
+	TotalBytes int  // across containers; containers past it are counted, not read
+}
+
+// ContainerLog is one container's recent output, or why it could not be read.
+type ContainerLog struct {
+	Pod       string   `json:"pod"`
+	Container string   `json:"container"`
+	Lines     []string `json:"lines,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"` // older lines were dropped to fit MaxBytes
+	Error     string   `json:"error,omitempty"`
+}
+
+// WorkloadLogs is the recent output of a workload's containers.
+type WorkloadLogs struct {
+	Logs              []ContainerLog `json:"logs"`
+	PodsOmitted       int            `json:"podsOmitted,omitempty"`
+	ContainersOmitted int            `json:"containersOmitted,omitempty"` // not read: TotalBytes reached
 }
 
 // Workloads reads workloads in one cluster with one profile's credentials.
@@ -65,6 +116,11 @@ type Workloads interface {
 	// WorkloadLabels reads only the workload's labels, in one request. It runs before
 	// authorization, so it must not cost more than that.
 	WorkloadLabels(ctx context.Context, ref WorkloadRef) (map[string]string, error)
+	// WorkloadEvents returns events of the workload, of ReplicaSets it controls and of
+	// its pods, newest first, at most limit.
+	WorkloadEvents(ctx context.Context, ref WorkloadRef, limit int) ([]Event, error)
+	// WorkloadLogs returns recent output of the workload's pods' containers.
+	WorkloadLogs(ctx context.Context, ref WorkloadRef, opt LogOptions) (*WorkloadLogs, error)
 }
 
 // WorkloadSource hands out Workloads for an environment and profile.

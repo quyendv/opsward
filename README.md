@@ -2,7 +2,7 @@
 
 **A guarded gateway that lets AI agents operate your infrastructure, within the permissions you grant.**
 
-> Status: pre-alpha. One read-only tool works over MCP stdio; nothing is stable.
+> Status: pre-alpha. Read-only workload tools and knowledge packs work over MCP stdio; nothing is stable.
 
 ## Why
 
@@ -35,6 +35,11 @@ Point `providers.kubernetes.clusters.*.profiles.reader.kubeconfig` at a kubeconf
 credential is bound to a read-only role, then register `opsward serve --config <file>` as a
 stdio MCP server in your agent client. Every call is audited to the SQLite file in
 `storage.path` and to stderr; `opsward audit verify --config <file>` checks the chain.
+
+Tools: `get_workload_status`, `list_workload_events`, `list_workload_logs`,
+`search_knowledge`, `get_knowledge`. Results that match a knowledge document carry its
+summary as a note. Edits to the configuration file apply without a restart; after editing
+knowledge documents, send `SIGHUP`.
 
 ## Development
 

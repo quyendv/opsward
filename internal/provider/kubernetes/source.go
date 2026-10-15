@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"k8s.io/client-go/kubernetes"
@@ -45,6 +46,8 @@ func NewSource(envCluster map[string]string, profiles map[string]map[string]Prof
 // Workloads implements capability.WorkloadSource. An unknown environment or a profile
 // the cluster does not declare is an error, never a fallback to another credential.
 func (s *Source) Workloads(environment, profile string) (capability.Workloads, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	cluster, ok := s.envCluster[environment]
 	if !ok {
 		return nil, fmt.Errorf("kubernetes: unknown environment %q", environment)
@@ -54,8 +57,6 @@ func (s *Source) Workloads(environment, profile string) (capability.Workloads, e
 		return nil, fmt.Errorf("kubernetes: cluster %q has no profile %q", cluster, profile)
 	}
 	key := cluster + "/" + profile
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	c, ok := s.clients[key]
 	if !ok {
 		var err error
@@ -65,6 +66,21 @@ func (s *Source) Workloads(environment, profile string) (capability.Workloads, e
 		s.clients[key] = c
 	}
 	return NewWorkloads(c), nil
+}
+
+// Update replaces the environment and profile maps, as on a configuration reload. A
+// client is kept only while its cluster's profile is unchanged; others are rebuilt on
+// their next use.
+func (s *Source) Update(envCluster map[string]string, profiles map[string]map[string]Profile) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.clients {
+		cluster, profile, _ := strings.Cut(key, "/")
+		if old, now := s.profiles[cluster][profile], profiles[cluster][profile]; old != now {
+			delete(s.clients, key)
+		}
+	}
+	s.envCluster, s.profiles = envCluster, profiles
 }
 
 // FromKubeconfig builds a client from a kubeconfig file. It never falls back to

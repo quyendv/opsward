@@ -68,6 +68,8 @@ type Catalog struct {
 type ToolInfo struct {
 	Risk core.Risk
 	Args []string
+	// Global tools are not bound to an environment and use no backend profile.
+	Global bool
 }
 
 // Policy is a compiled, validated policy. It is safe for concurrent use.

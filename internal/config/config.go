@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -35,7 +36,17 @@ type Config struct {
 	Providers    Providers     `yaml:"providers"`
 	Environments []Environment `yaml:"environments"`
 	Policy       policy.Config `yaml:"policy"`
+	Knowledge    Knowledge     `yaml:"knowledge"`
 }
+
+// Knowledge selects knowledge packs.
+type Knowledge struct {
+	Builtin *bool    `yaml:"builtin"` // the pack embedded in the binary; default true
+	Paths   []string `yaml:"paths"`
+}
+
+// BuiltinEnabled reports whether the embedded pack is loaded.
+func (k Knowledge) BuiltinEnabled() bool { return k.Builtin == nil || *k.Builtin }
 
 // Identity configures how callers are identified.
 type Identity struct {
@@ -213,6 +224,15 @@ func (c *Config) validate() error {
 		}
 	}
 
+	for _, p := range c.Knowledge.Paths {
+		switch {
+		case p == "":
+			fail("knowledge.paths: empty path")
+		case strings.HasPrefix(p, "~"):
+			fail("knowledge path %q: ~ is not expanded, use an absolute path", p)
+		}
+	}
+
 	seen := map[string]bool{}
 	for i, e := range c.Environments {
 		if e.Name == "" {
@@ -269,6 +289,27 @@ func (c *Config) Warnings() []string {
 			}
 		}
 	}
+	for _, p := range c.Knowledge.Paths {
+		if p != "" && !strings.HasPrefix(p, "~") && !filepath.IsAbs(p) {
+			out = append(out, fmt.Sprintf("knowledge path %q is relative", p))
+		}
+	}
 	sort.Strings(out)
+	return out
+}
+
+// RestartRequired lists the sections that differ between c and next and that a running
+// process cannot apply: identity, storage and audit. docs/design/0003.
+func (c *Config) RestartRequired(next *Config) []string {
+	var out []string
+	if !reflect.DeepEqual(c.Identity, next.Identity) {
+		out = append(out, "identity")
+	}
+	if !reflect.DeepEqual(c.Storage, next.Storage) {
+		out = append(out, "storage")
+	}
+	if !reflect.DeepEqual(c.Audit, next.Audit) {
+		out = append(out, "audit")
+	}
 	return out
 }

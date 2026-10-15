@@ -131,3 +131,52 @@ func TestWarnings(t *testing.T) {
 		}
 	}
 }
+
+func TestKnowledgeSection(t *testing.T) {
+	c, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Knowledge.BuiltinEnabled() || len(c.Knowledge.Paths) != 0 {
+		t.Fatalf("knowledge defaults = %+v", c.Knowledge)
+	}
+	c, err = Parse([]byte(minimal + "knowledge:\n  builtin: false\n  paths: [/etc/opsward/knowledge]\n"))
+	if err != nil || c.Knowledge.BuiltinEnabled() || c.Knowledge.Paths[0] != "/etc/opsward/knowledge" {
+		t.Fatalf("knowledge = %+v, %v", c.Knowledge, err)
+	}
+	if _, err := Parse([]byte(minimal + "knowledge:\n  paths: [~/knowledge]\n")); err == nil || !strings.Contains(err.Error(), "~ is not expanded") {
+		t.Fatalf("tilde path: err = %v", err)
+	}
+	c, _ = Parse([]byte(minimal + "knowledge:\n  paths: [kb]\n"))
+	if !strings.Contains(strings.Join(c.Warnings(), "\n"), `knowledge path "kb" is relative`) {
+		t.Fatalf("warnings = %v", c.Warnings())
+	}
+}
+
+func TestRestartRequired(t *testing.T) {
+	base, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tt := range map[string]struct {
+		doc  string
+		want string
+	}{
+		"policy only":   {minimal + "policy:\n  roles: {viewer: {risk: [read]}}\n", ""},
+		"environments":  {strings.Replace(minimal, "    cluster: cluster-a\n", "    cluster: cluster-a\n    namespaces: [shop]\n", 1), ""},
+		"knowledge":     {minimal + "knowledge:\n  builtin: false\n", ""},
+		"storage path":  {strings.Replace(minimal, "/var/lib/opsward/opsward.db", "/var/lib/opsward/other.db", 1), "storage"},
+		"identity":      {strings.Replace(minimal, "groups: [admin]", "groups: [admin, ops]", 1), "identity"},
+		"audit timeout": {minimal + "audit:\n  timeout: 5s\n", "audit"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			next, err := Parse([]byte(tt.doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(base.RestartRequired(next), ","); got != tt.want {
+				t.Fatalf("RestartRequired = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

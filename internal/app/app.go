@@ -3,12 +3,16 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/quyendv/opsward/internal/audit"
@@ -16,6 +20,7 @@ import (
 	"github.com/quyendv/opsward/internal/config"
 	"github.com/quyendv/opsward/internal/core"
 	"github.com/quyendv/opsward/internal/engine"
+	"github.com/quyendv/opsward/internal/knowledge"
 	"github.com/quyendv/opsward/internal/policy"
 	"github.com/quyendv/opsward/internal/provider/kubernetes"
 	"github.com/quyendv/opsward/internal/store"
@@ -30,6 +35,8 @@ type Options struct {
 	Stderr, Stdout io.Writer
 	// ClientFactory replaces kubeconfig-based clients, for tests.
 	ClientFactory kubernetes.ClientFactory
+	// ConfigPath is the file the configuration was loaded from; Watch reloads it.
+	ConfigPath string
 }
 
 // App is a running Opsward: an engine and the resources behind it.
@@ -43,35 +50,95 @@ type App struct {
 	retention time.Duration
 	log       *slog.Logger
 	closers   []io.Closer
+
+	// What a reload replaces. mu serializes reloads and guards loadedHash, the hash of
+	// the configuration content last loaded or rejected, which Watch compares against.
+	mu         sync.Mutex
+	configPath string
+	loadedHash string
+	cfg        *config.Config
+	source     *kubernetes.Source
+	lib        *knowledge.Library
+	tools      []engine.Tool
+}
+
+// derived is everything a configuration determines that a reload replaces. It is built
+// completely before anything is swapped, so a rejected configuration changes nothing.
+type derived struct {
+	policy     *policy.Policy
+	pack       *knowledge.Pack
+	envs       []engine.Environment
+	envCluster map[string]string
+	profiles   map[string]map[string]kubernetes.Profile
+	warnings   []string
+}
+
+func derive(cfg *config.Config, tools []engine.Tool, log *slog.Logger) (*derived, error) {
+	d := &derived{envCluster: map[string]string{}, profiles: map[string]map[string]kubernetes.Profile{}}
+	pol, pw, perr := policy.Compile(cfg.Policy, catalog(cfg, tools), log)
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name)
+	}
+	pack, kw, kerr := knowledge.Load(knowledge.Options{
+		Builtin: cfg.Knowledge.BuiltinEnabled(), Paths: cfg.Knowledge.Paths, Tools: names,
+	})
+	if err := errors.Join(perr, kerr); err != nil {
+		return nil, err
+	}
+	d.policy, d.pack = pol, pack
+	d.warnings = append(append(cfg.Warnings(), pw...), kw...)
+	for _, e := range cfg.Environments {
+		d.envs = append(d.envs, engine.Environment{Name: e.Name, Namespaces: e.Namespaces})
+		d.envCluster[e.Name] = e.Cluster
+	}
+	for name, cl := range cfg.Providers.Kubernetes.Clusters {
+		d.profiles[name] = map[string]kubernetes.Profile{}
+		for pn, p := range cl.Profiles {
+			d.profiles[name][pn] = kubernetes.Profile{Kubeconfig: p.Kubeconfig, Context: p.Context}
+		}
+	}
+	return d, nil
 }
 
 // Check validates everything that can be validated without opening the store or
-// reaching a backend, and returns policy warnings.
+// reaching a backend, and returns warnings.
 func Check(cfg *config.Config) ([]string, error) {
-	tools, err := buildTools(workloadSource(cfg, nil))
+	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil))
 	if err != nil {
 		return nil, err
 	}
-	_, warnings, err := policy.Compile(cfg.Policy, catalog(cfg, tools), slog.New(slog.DiscardHandler))
-	return append(cfg.Warnings(), warnings...), err
+	d, err := derive(cfg, tools, slog.New(slog.DiscardHandler))
+	if err != nil {
+		return nil, err
+	}
+	return d.warnings, nil
 }
 
-// Open builds the App: store, audit writer, providers, tools, policy and engine.
+// Open builds the App: store, audit writer, providers, tools, policy, knowledge and engine.
 func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	a := &App{retention: cfg.Storage.AuditRetention.Std(), log: opt.Logger}
-
-	tools, err := buildTools(workloadSource(cfg, opt.ClientFactory))
+	a := &App{
+		retention: cfg.Storage.AuditRetention.Std(), log: opt.Logger, cfg: cfg,
+		source: kubernetes.NewSource(nil, nil, opt.ClientFactory), lib: knowledge.NewLibrary(nil),
+		configPath: opt.ConfigPath,
+	}
+	if opt.ConfigPath != "" {
+		a.loadedHash = fileHash(opt.ConfigPath)
+	}
+	var err error
+	if a.tools, err = buildTools(a.source, a.lib); err != nil {
+		return nil, err
+	}
+	d, err := derive(cfg, a.tools, opt.Logger)
 	if err != nil {
 		return nil, err
 	}
-	pol, warnings, err := policy.Compile(cfg.Policy, catalog(cfg, tools), opt.Logger)
-	if err != nil {
-		return nil, err
-	}
-	a.Warnings = append(cfg.Warnings(), warnings...)
+	a.source.Update(d.envCluster, d.profiles)
+	a.lib.Set(d.pack)
+	a.Warnings = d.warnings
 
 	st, err := sqlite.Open(ctx, cfg.Storage.Path)
 	if err != nil {
@@ -94,12 +161,8 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	}
 	a.Audit = w
 
-	envs := make([]engine.Environment, 0, len(cfg.Environments))
-	for _, e := range cfg.Environments {
-		envs = append(envs, engine.Environment{Name: e.Name, Namespaces: e.Namespaces})
-	}
 	a.Engine, err = engine.New(engine.Options{
-		Tools: tools, Environments: envs, Authorizer: pol, Auditor: w, Logger: opt.Logger,
+		Tools: a.tools, Environments: d.envs, Authorizer: d.policy, Auditor: w, Annotator: a.lib, Logger: opt.Logger,
 	})
 	if err != nil {
 		_ = a.Close()
@@ -107,6 +170,92 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	}
 	a.Principal = core.Principal{Subject: cfg.Identity.Principal.Subject, Groups: cfg.Identity.Principal.Groups}
 	return a, nil
+}
+
+// ReloadFile loads the configuration at path and applies it with Reload. The content
+// is read once, so the hash Watch compares against is that of what was parsed.
+func (a *App) ReloadFile(path string) error {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the operator's own configuration file
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	a.mu.Lock()
+	a.loadedHash = hash(b)
+	a.mu.Unlock()
+	next, err := config.Parse(b)
+	if err != nil {
+		return err
+	}
+	return a.Reload(next)
+}
+
+// Reload applies a new configuration: policy, environments, providers and knowledge.
+// Identity, storage and audit cannot change without a restart. On any error nothing
+// changes and the previous configuration stays in force.
+func (a *App) Reload(next *config.Config) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if r := a.cfg.RestartRequired(next); len(r) > 0 {
+		return fmt.Errorf("restart required to change %s", strings.Join(r, ", "))
+	}
+	d, err := derive(next, a.tools, a.log)
+	if err != nil {
+		return err
+	}
+	a.source.Update(d.envCluster, d.profiles)
+	a.lib.Set(d.pack)
+	a.Engine.Update(d.envs, d.policy, a.lib)
+	a.cfg, a.Warnings = next, d.warnings
+	return nil
+}
+
+// Watch reloads the configuration file (Options.ConfigPath) when its content differs
+// from what was last loaded, checked every interval, and whenever hup receives a
+// signal. A rejected content is not retried until it changes. It returns when ctx is
+// done.
+func (a *App) Watch(ctx context.Context, interval time.Duration, hup <-chan os.Signal) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hup:
+			a.reload(a.configPath, "signal")
+		case <-t.C:
+			a.mu.Lock()
+			last := a.loadedHash
+			a.mu.Unlock()
+			if h := fileHash(a.configPath); h != "" && h != last {
+				a.reload(a.configPath, "file changed")
+			}
+		}
+	}
+}
+
+func (a *App) reload(path, trigger string) {
+	if err := a.ReloadFile(path); err != nil {
+		a.log.Error("configuration reload rejected; the previous configuration stays in force", "trigger", trigger, "error", err)
+		return
+	}
+	a.log.Info("configuration reloaded", "trigger", trigger)
+	for _, w := range a.Warnings {
+		a.log.Warn("configuration", "warning", w)
+	}
+}
+
+// fileHash returns the hash of the file's content, or "" if it cannot be read.
+func fileHash(path string) string {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the operator's own configuration file
+	if err != nil {
+		return ""
+	}
+	return hash(b)
+}
+
+func hash(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 func (a *App) openStream(s config.Stream, opt Options) (io.Writer, error) {
@@ -159,33 +308,29 @@ func (a *App) Close() error {
 	return errors.Join(errs...)
 }
 
-func workloadSource(cfg *config.Config, f kubernetes.ClientFactory) capability.WorkloadSource {
-	envCluster := map[string]string{}
-	for _, e := range cfg.Environments {
-		envCluster[e.Name] = e.Cluster
+func buildTools(src capability.WorkloadSource, lib *knowledge.Library) ([]engine.Tool, error) {
+	builders := []func() (engine.Tool, error){
+		func() (engine.Tool, error) { return tool.WorkloadStatus(src) },
+		func() (engine.Tool, error) { return tool.WorkloadEvents(src) },
+		func() (engine.Tool, error) { return tool.WorkloadLogs(src) },
+		func() (engine.Tool, error) { return tool.SearchKnowledge(lib) },
+		func() (engine.Tool, error) { return tool.GetKnowledge(lib) },
 	}
-	profiles := map[string]map[string]kubernetes.Profile{}
-	for name, cl := range cfg.Providers.Kubernetes.Clusters {
-		profiles[name] = map[string]kubernetes.Profile{}
-		for pn, p := range cl.Profiles {
-			profiles[name][pn] = kubernetes.Profile{Kubeconfig: p.Kubeconfig, Context: p.Context}
+	tools := make([]engine.Tool, 0, len(builders))
+	for _, b := range builders {
+		t, err := b()
+		if err != nil {
+			return nil, fmt.Errorf("tool %s: %w", t.Name, err)
 		}
+		tools = append(tools, t)
 	}
-	return kubernetes.NewSource(envCluster, profiles, f)
-}
-
-func buildTools(src capability.WorkloadSource) ([]engine.Tool, error) {
-	status, err := tool.WorkloadStatus(src)
-	if err != nil {
-		return nil, fmt.Errorf("tool get_workload_status: %w", err)
-	}
-	return []engine.Tool{status}, nil
+	return tools, nil
 }
 
 func catalog(cfg *config.Config, tools []engine.Tool) policy.Catalog {
 	cat := policy.Catalog{Tools: map[string]policy.ToolInfo{}, Environments: map[string][]string{}}
 	for _, t := range tools {
-		cat.Tools[t.Name] = policy.ToolInfo{Risk: t.Risk, Args: t.Args}
+		cat.Tools[t.Name] = policy.ToolInfo{Risk: t.Risk, Args: t.Args, Global: t.Global}
 	}
 	for _, e := range cfg.Environments {
 		cat.Environments[e.Name] = cfg.Profiles(e)

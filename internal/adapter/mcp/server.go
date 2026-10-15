@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -54,17 +55,33 @@ func annotations(r core.Risk) *mcp.ToolAnnotations {
 
 func handler(e *engine.Engine, p core.Principal, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		out, err := e.Invoke(ctx, p, name, req.Params.Arguments)
+		res, err := e.Invoke(ctx, p, name, req.Params.Arguments)
 		if err != nil {
 			// Tool-level errors go in the result, so the agent can read them and adjust.
 			return errorResult(err.Error()), nil
 		}
-		b, err := json.MarshalIndent(out, "", "  ")
+		b, err := json.MarshalIndent(res.Data, "", "  ")
 		if err != nil {
 			return errorResult(fmt.Sprintf("encode result: %v", err)), nil
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}, nil
+		content := []mcp.Content{&mcp.TextContent{Text: string(b)}}
+		if len(res.Notes) > 0 {
+			content = append(content, &mcp.TextContent{Text: notesText(res.Notes)})
+		}
+		return &mcp.CallToolResult{Content: content}, nil
 	}
+}
+
+// notesText renders attached knowledge after the result, in a separate block so that the
+// result itself stays plain JSON.
+func notesText(notes []core.Note) string {
+	var b strings.Builder
+	b.WriteString("Knowledge that may apply to this result:\n")
+	for _, n := range notes {
+		fmt.Fprintf(&b, "- [%s] %s (id: %s): %s\n", n.Severity, n.Title, n.ID, n.Summary)
+	}
+	b.WriteString("Read a document in full with get_knowledge.")
+	return b.String()
 }
 
 func errorResult(msg string) *mcp.CallToolResult {

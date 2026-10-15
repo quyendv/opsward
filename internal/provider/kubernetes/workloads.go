@@ -2,14 +2,20 @@
 package kubernetes
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"slices"
 	"sort"
+	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/quyendv/opsward/internal/capability"
@@ -88,46 +94,252 @@ func (w *workloads) GetWorkload(ctx context.Context, ref capability.WorkloadRef)
 }
 
 func (w *workloads) WorkloadLabels(ctx context.Context, ref capability.WorkloadRef) (map[string]string, error) {
-	var meta metav1.Object
-	var err error
-	switch ref.Kind {
-	case "Deployment":
-		meta, err = w.c.AppsV1().Deployments(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
-	case "StatefulSet":
-		meta, err = w.c.AppsV1().StatefulSets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
-	case "DaemonSet":
-		meta, err = w.c.AppsV1().DaemonSets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
-	default:
-		return nil, fmt.Errorf("unsupported workload kind %q", ref.Kind)
-	}
-	if apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("%s %s/%s: %w", ref.Kind, ref.Namespace, ref.Name, capability.ErrNotFound)
-	}
+	meta, _, err := w.object(ctx, ref)
 	if err != nil {
-		return nil, fmt.Errorf("get %s %s/%s: %w", ref.Kind, ref.Namespace, ref.Name, err)
+		return nil, err
 	}
 	return meta.GetLabels(), nil
 }
 
+// object reads the workload once and returns its metadata and pod selector.
+func (w *workloads) object(ctx context.Context, ref capability.WorkloadRef) (metav1.Object, *metav1.LabelSelector, error) {
+	var meta metav1.Object
+	var sel *metav1.LabelSelector
+	var err error
+	switch ref.Kind {
+	case "Deployment":
+		var d *appsv1.Deployment
+		if d, err = w.c.AppsV1().Deployments(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{}); err == nil {
+			meta, sel = d, d.Spec.Selector
+		}
+	case "StatefulSet":
+		var s *appsv1.StatefulSet
+		if s, err = w.c.AppsV1().StatefulSets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{}); err == nil {
+			meta, sel = s, s.Spec.Selector
+		}
+	case "DaemonSet":
+		var d *appsv1.DaemonSet
+		if d, err = w.c.AppsV1().DaemonSets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{}); err == nil {
+			meta, sel = d, d.Spec.Selector
+		}
+	default:
+		return nil, nil, fmt.Errorf("unsupported workload kind %q", ref.Kind)
+	}
+	if apierrors.IsNotFound(err) {
+		return nil, nil, fmt.Errorf("%s %s/%s: %w", ref.Kind, ref.Namespace, ref.Name, capability.ErrNotFound)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("get %s %s/%s: %w", ref.Kind, ref.Namespace, ref.Name, err)
+	}
+	return meta, sel, nil
+}
+
+func (w *workloads) WorkloadEvents(ctx context.Context, ref capability.WorkloadRef, limit int) ([]capability.Event, error) {
+	meta, sel, err := w.object(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	uids := map[types.UID]bool{meta.GetUID(): true}
+	if ref.Kind == "Deployment" {
+		// FailedCreate (quota, admission) is reported on the ReplicaSet.
+		s, err := metav1.LabelSelectorAsSelector(sel)
+		if err != nil {
+			return nil, fmt.Errorf("workload selector: %w", err)
+		}
+		rss, err := w.c.AppsV1().ReplicaSets(ref.Namespace).List(ctx, metav1.ListOptions{LabelSelector: s.String()})
+		if err != nil {
+			return nil, fmt.Errorf("list replicasets: %w", err)
+		}
+		for i := range rss.Items {
+			if metav1.IsControlledBy(&rss.Items[i], meta) {
+				uids[rss.Items[i].UID] = true
+			}
+		}
+	}
+	pods, err := w.listPods(ctx, ref.Namespace, sel)
+	if err != nil {
+		return nil, err
+	}
+	for i := range pods {
+		uids[pods[i].UID] = true
+	}
+	list, err := w.c.CoreV1().Events(ref.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list events: %w", err)
+	}
+	out := []capability.Event{}
+	for i := range list.Items {
+		e := &list.Items[i]
+		if !uids[e.InvolvedObject.UID] {
+			continue
+		}
+		out = append(out, capability.Event{
+			Time: eventTime(e), Type: e.Type, Reason: e.Reason,
+			Object:  e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name,
+			Message: e.Message, Count: eventCount(e),
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// eventTime prefers the newest observation: events.k8s.io/v1 producers, such as the
+// scheduler, set EventTime and Series instead of the core timestamps.
+func eventCount(e *corev1.Event) int32 {
+	if e.Series != nil && e.Series.Count > 0 {
+		return e.Series.Count
+	}
+	return e.Count
+}
+
+func eventTime(e *corev1.Event) time.Time {
+	switch {
+	case e.Series != nil && !e.Series.LastObservedTime.IsZero():
+		return e.Series.LastObservedTime.UTC()
+	case !e.LastTimestamp.IsZero():
+		return e.LastTimestamp.UTC()
+	case !e.EventTime.IsZero():
+		return e.EventTime.UTC()
+	default:
+		return e.FirstTimestamp.UTC()
+	}
+}
+
+// maxLogRead bounds what is read from the kubelet for one container before MaxBytes is
+// applied, in case a tail window holds a few enormous lines.
+const maxLogRead = 8 << 20
+
+func (w *workloads) WorkloadLogs(ctx context.Context, ref capability.WorkloadRef, opt capability.LogOptions) (*capability.WorkloadLogs, error) {
+	_, sel, err := w.object(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	pods, err := w.listPods(ctx, ref.Namespace, sel)
+	if err != nil {
+		return nil, err
+	}
+	if opt.Pod != "" {
+		i := slices.IndexFunc(pods, func(p corev1.Pod) bool { return p.Name == opt.Pod })
+		if i < 0 {
+			return nil, fmt.Errorf("pod %q is not one of %s %s/%s's pods", opt.Pod, ref.Kind, ref.Namespace, ref.Name)
+		}
+		pods = pods[i : i+1]
+	}
+	out := &capability.WorkloadLogs{Logs: []capability.ContainerLog{}}
+	if opt.MaxPods > 0 && len(pods) > opt.MaxPods {
+		out.PodsOmitted = len(pods) - opt.MaxPods
+		pods = pods[:opt.MaxPods]
+	}
+	used := 0
+	for i := range pods {
+		p := &pods[i]
+		names := []string{opt.Container}
+		if opt.Container == "" {
+			names = containerNames(p)
+		}
+		for _, name := range names {
+			if opt.TotalBytes > 0 && used >= opt.TotalBytes {
+				out.ContainersOmitted++
+				continue
+			}
+			entry, n := w.containerLog(ctx, p, name, opt)
+			used += n
+			out.Logs = append(out.Logs, entry)
+		}
+	}
+	return out, nil
+}
+
+// containerNames lists init containers first, in the order they run, then the others.
+func containerNames(p *corev1.Pod) []string {
+	var names []string
+	for _, c := range p.Spec.InitContainers {
+		names = append(names, c.Name)
+	}
+	for _, c := range p.Spec.Containers {
+		names = append(names, c.Name)
+	}
+	return names
+}
+
+// containerLog reads one container's tail and returns it with the bytes it kept.
+func (w *workloads) containerLog(ctx context.Context, p *corev1.Pod, container string, opt capability.LogOptions) (capability.ContainerLog, int) {
+	entry := capability.ContainerLog{Pod: p.Name, Container: container}
+	if !slices.Contains(containerNames(p), container) {
+		entry.Error = fmt.Sprintf("pod %s has no container %q", p.Name, container)
+		return entry, 0
+	}
+	// No LimitBytes here: the kubelet applies it from the start of the tail window,
+	// which would keep the oldest lines and drop the ones just before a crash.
+	po := &corev1.PodLogOptions{Container: container, Previous: opt.Previous, Timestamps: true}
+	if opt.TailLines > 0 {
+		po.TailLines = &opt.TailLines
+	}
+	stream, err := w.c.CoreV1().Pods(p.Namespace).GetLogs(p.Name, po).Stream(ctx)
+	if err != nil {
+		entry.Error = err.Error()
+		return entry, 0
+	}
+	defer func() { _ = stream.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(stream, maxLogRead))
+	if err != nil {
+		entry.Error = err.Error()
+		return entry, 0
+	}
+	text, truncated := string(raw), false
+	if opt.MaxBytes > 0 {
+		text, truncated = keepTail(raw, opt.MaxBytes)
+	}
+	entry.Truncated = truncated
+	if t := strings.TrimRight(text, "\n"); t != "" {
+		entry.Lines = strings.Split(t, "\n")
+	}
+	return entry, len(text)
+}
+
+// keepTail returns at most max bytes from the end of b, starting at a line boundary.
+func keepTail(b []byte, max int) (string, bool) {
+	if len(b) <= max {
+		return string(b), false
+	}
+	tail := b[len(b)-max:]
+	if i := bytes.IndexByte(tail, '\n'); i >= 0 {
+		tail = tail[i+1:]
+	}
+	return string(tail), true
+}
+
 func (w *workloads) pods(ctx context.Context, namespace string, selector *metav1.LabelSelector) ([]capability.Pod, error) {
+	list, err := w.listPods(ctx, namespace, selector)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]capability.Pod, 0, len(list))
+	for i := range list {
+		out = append(out, podStatus(&list[i]))
+	}
+	return out, nil
+}
+
+// listPods returns the pods a selector matches, sorted by name.
+func (w *workloads) listPods(ctx context.Context, namespace string, selector *metav1.LabelSelector) ([]corev1.Pod, error) {
 	sel, err := metav1.LabelSelectorAsSelector(selector)
 	if err != nil {
 		return nil, fmt.Errorf("workload selector: %w", err)
 	}
 	// An empty selector would match every pod in the namespace.
 	if sel.Empty() {
-		return []capability.Pod{}, nil
+		return nil, nil
 	}
 	list, err := w.c.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
 	if err != nil {
 		return nil, fmt.Errorf("list pods: %w", err)
 	}
-	out := make([]capability.Pod, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, podStatus(&list.Items[i]))
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
+	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
+	return list.Items, nil
 }
 
 func podStatus(p *corev1.Pod) capability.Pod {
@@ -137,13 +349,30 @@ func podStatus(p *corev1.Pod) capability.Pod {
 			out.Ready = c.Status == corev1.ConditionTrue
 		}
 	}
+	// A waiting init container blocks the pod, so it is reported before the others.
+	for _, cs := range p.Status.InitContainerStatuses {
+		if cs.State.Waiting != nil && out.Waiting == "" {
+			out.Waiting = "Init:" + cs.State.Waiting.Reason
+		}
+		out.LastTerminated = later(out.LastTerminated, cs)
+	}
 	for _, cs := range p.Status.ContainerStatuses {
 		out.Restarts += cs.RestartCount
 		if cs.State.Waiting != nil && out.Waiting == "" {
 			out.Waiting = cs.State.Waiting.Reason
 		}
+		out.LastTerminated = later(out.LastTerminated, cs)
 	}
 	return out
+}
+
+// later returns whichever of cur and cs's last termination finished most recently.
+func later(cur *capability.Termination, cs corev1.ContainerStatus) *capability.Termination {
+	t := cs.LastTerminationState.Terminated
+	if t == nil || (cur != nil && !t.FinishedAt.After(cur.FinishedAt)) {
+		return cur
+	}
+	return &capability.Termination{Container: cs.Name, Reason: t.Reason, ExitCode: t.ExitCode, FinishedAt: t.FinishedAt.UTC()}
 }
 
 func replicasOrOne(r *int32) int32 {

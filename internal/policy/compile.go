@@ -152,7 +152,7 @@ func Compile(cfg Config, cat Catalog, log *slog.Logger) (*Policy, []string, erro
 func defaultProfiles(r Role, cat Catalog) []string {
 	var out []string
 	for name, t := range cat.Tools {
-		if !r.contains(name, t.Risk) {
+		if t.Global || !r.contains(name, t.Risk) {
 			continue
 		}
 		need := core.ProfileOperator

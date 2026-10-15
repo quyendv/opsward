@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -129,5 +130,69 @@ func TestEndToEnd(t *testing.T) {
 	var first audit.Record
 	if err := json.Unmarshal([]byte(strings.SplitN(stream.String(), "\n", 2)[0]), &first); err != nil || first.Principal.Adapter != mcpadapter.AdapterStdio {
 		t.Fatalf("first streamed record = %+v, %v", first, err)
+	}
+}
+
+// TestEndToEndKnowledge: a crash-looping pod gets the builtin note attached through the
+// real pipeline, and knowledge search works under a binding without scope restrictions.
+func TestEndToEndKnowledge(t *testing.T) {
+	ctx := context.Background()
+	doc := strings.Replace(e2eConfig, "%DB%", filepath.Join(t.TempDir(), "opsward.db"), 1)
+	doc = strings.Replace(doc, "    viewer: { risk: [read] }\n", "    viewer: { risk: [read] }\n    kb: { tools: [search_knowledge, get_knowledge] }\n", 1)
+	doc += "    - name: knowledge\n      subjects: { groups: [team-a] }\n      role: kb\n"
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicas := int32(1)
+	crashing := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-a", Namespace: "team-a-shop", Labels: map[string]string{"app": "api"}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "app", RestartCount: 9, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		}}},
+	}
+	cluster := fake.NewClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "team-a-shop"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}},
+	}, crashing)
+	a, err := app.Open(ctx, cfg, app.Options{
+		Stderr:        &bytes.Buffer{},
+		ClientFactory: func(kubernetes.Profile) (k8s.Interface, error) { return cluster, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close() }()
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := mcpadapter.NewServer(a.Engine, a.Principal).Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "e2e", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cs.Close() }()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "get_workload_status", Arguments: map[string]any{
+		"environment": "staging", "namespace": "team-a-shop", "kind": "Deployment", "name": "api",
+	}})
+	if err != nil || res.IsError || len(res.Content) != 2 {
+		t.Fatalf("status = %+v, %v", res, err)
+	}
+	if notes := res.Content[1].(*mcp.TextContent).Text; !strings.Contains(notes, "crashloop-backoff") {
+		t.Fatalf("notes = %q", notes)
+	}
+
+	res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "search_knowledge", Arguments: map[string]any{"query": "image pull"}})
+	if err != nil || res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, "image-pull-backoff") {
+		t.Fatalf("search = %+v, %v", res, err)
+	}
+
+	res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "list_workload_logs", Arguments: map[string]any{
+		"environment": "staging", "namespace": "team-a-shop", "kind": "Deployment", "name": "api", "previous": true,
+	}})
+	if err != nil || res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, "fake logs") {
+		t.Fatalf("logs = %+v, %v", res, err)
 	}
 }

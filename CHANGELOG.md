@@ -16,3 +16,10 @@ All notable changes to this project are documented here. The format follows
   and `opsward audit verify`.
 - `get_workload_status` over MCP stdio, with output redaction.
 - `opsward validate` for configuration and policy.
+- `list_workload_events` (workload, its ReplicaSets and pods) and `list_workload_logs`
+  (recent lines per container, including the previous instance).
+- Knowledge packs: a builtin generic pack and operator paths, searchable with
+  `search_knowledge` and `get_knowledge`, and attached to results as notes when their CEL
+  condition matches.
+- Configuration reload on file change or `SIGHUP`, all-or-nothing; identity, storage and
+  audit changes require a restart.

@@ -39,8 +39,8 @@ func WorkloadStatus(src capability.WorkloadSource) (engine.Tool, error) {
 	return engine.Tool{
 		Name: "get_workload_status",
 		Description: "Show a workload's rollout state: desired, ready, updated and available replicas, " +
-			"status conditions, and each pod's phase, readiness, restart count and waiting reason. " +
-			"Start here when a workload is unhealthy.",
+			"status conditions, and each pod's phase, readiness, restart count, waiting reason and last termination " +
+			"(reason such as OOMKilled, and exit code). Start here when a workload is unhealthy.",
 		Risk:        core.RiskRead,
 		InputSchema: in.schema,
 		Args:        in.names,
@@ -49,28 +49,36 @@ func WorkloadStatus(src capability.WorkloadSource) (engine.Tool, error) {
 			if err != nil {
 				return nil, err
 			}
-			ref := capability.WorkloadRef{Namespace: v.Namespace, Kind: v.Kind, Name: v.Name}
-
-			return &engine.Prepared{
-				Scope: core.Scope{Environment: v.Environment, Namespace: v.Namespace, Kind: v.Kind, Name: v.Name},
-				Args:  obj,
-				// Before authorization: labels only, with Opsward's reader profile.
-				Resolve: func(ctx context.Context) (map[string]string, error) {
-					w, err := src.Workloads(v.Environment, engine.ProfileReader)
-					if err != nil {
-						return nil, err
-					}
-					return w.WorkloadLabels(ctx, ref)
-				},
-				// After authorization: the workload, under the call's own profile and RBAC.
-				Run: func(ctx context.Context, profile string) (any, error) {
-					w, err := src.Workloads(v.Environment, profile)
-					if err != nil {
-						return nil, err
-					}
-					return w.GetWorkload(ctx, ref)
-				},
-			}, nil
+			return workloadPrepared(src, v, obj, func(ctx context.Context, w capability.Workloads, ref capability.WorkloadRef) (any, error) {
+				return w.GetWorkload(ctx, ref)
+			}), nil
 		},
 	}, nil
+}
+
+// workloadPrepared builds the call for a tool that targets one workload. Before
+// authorization it reads only the labels, with Opsward's reader profile; after it, run
+// reads what the tool needs under the call's own profile and RBAC.
+func workloadPrepared(src capability.WorkloadSource, v workloadInput, obj map[string]any,
+	run func(context.Context, capability.Workloads, capability.WorkloadRef) (any, error),
+) *engine.Prepared {
+	ref := capability.WorkloadRef{Namespace: v.Namespace, Kind: v.Kind, Name: v.Name}
+	return &engine.Prepared{
+		Scope: core.Scope{Environment: v.Environment, Namespace: v.Namespace, Kind: v.Kind, Name: v.Name},
+		Args:  obj,
+		Resolve: func(ctx context.Context) (map[string]string, error) {
+			w, err := src.Workloads(v.Environment, engine.ProfileReader)
+			if err != nil {
+				return nil, err
+			}
+			return w.WorkloadLabels(ctx, ref)
+		},
+		Run: func(ctx context.Context, profile string) (any, error) {
+			w, err := src.Workloads(v.Environment, profile)
+			if err != nil {
+				return nil, err
+			}
+			return run(ctx, w, ref)
+		},
+	}
 }

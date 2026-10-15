@@ -158,7 +158,7 @@ Initial tool set, by group:
 | Group | Tools | Risk |
 |---|---|---|
 | Investigate | `get_workload_status`, `list_workload_events`, `list_workload_logs`, `get_workload_metrics`, `query_metrics`, `query_logs`, `get_trace`, `diagnose_workload` | read |
-| Context | `resolve_source`, `get_change_history`, `get_drift`, `search_knowledge` | read |
+| Context | `resolve_source`, `get_change_history`, `get_drift`, `search_knowledge`, `get_knowledge` | read |
 | Change | `propose_change` | depends on strategy |
 | Operate | `restart_workload`, `scale_workload`, `rollback_workload`, `sync_application` | write |
 
@@ -303,29 +303,14 @@ and tools do not ask for them.
 
 ## Knowledge packs
 
-A pack is a directory of Markdown files with frontmatter:
+A pack is a directory of Markdown files with frontmatter. Documents are **searched** by
+agents through `search_knowledge` and `get_knowledge`, and **attached** to a tool's result
+when the call matches the document's `applies-to`, which can test the result itself with a
+CEL condition. This is how hard-won lessons reach an agent that did not think to ask.
 
-```markdown
----
-id: rwo-rolling-update-deadlock
-title: Single-replica RWO workloads deadlock under RollingUpdate
-applies-to:
-  tools: [restart_workload, rollback_workload]
-  match: { kind: Deployment, replicas: 1, volumeAccessMode: ReadWriteOnce }
-severity: warning
----
-The new pod cannot attach the volume while the old pod holds it ...
-```
-
-Packs are used in two ways:
-
-- **Searched.** `search_knowledge` and MCP resources expose them to agents on request.
-- **Attached.** When a tool's call matches a document's `applies-to`, the document's summary is
-  added to the tool result as a warning. This is how hard-won lessons reach an agent that did
-  not think to ask.
-
-Opsward ships a small set of generic packs. Organization-specific packs live in the
-operator's own repository and are loaded by path.
+Opsward ships a small generic pack. Organization-specific packs live in the operator's own
+repository and are loaded by path. The format and rules are in
+[0003](0003-knowledge-and-reload.md).
 
 ## Configuration
 
@@ -377,7 +362,8 @@ in force. See [0002](0002-identity-policy-storage.md#loading-the-file).
 ## Adapters
 
 - **MCP**, using the official Go SDK, over stdio (local) and streamable HTTP (remote). Tools map
-  to MCP tools, knowledge packs to MCP resources.
+  to MCP tools; knowledge reaches agents through tools (`search_knowledge`, `get_knowledge`)
+  and as notes attached to results.
 - **REST** (v0.3) for the web console: approvals, audit queries, policy.
 - **Webhook ingress** (v0.4) for alert-driven investigation.
 

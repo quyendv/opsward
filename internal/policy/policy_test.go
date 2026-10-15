@@ -304,3 +304,22 @@ func TestNeedsLabels(t *testing.T) {
 		})
 	}
 }
+
+// Global tools (knowledge) run with no environment and need no backend profile, so a
+// binding that grants only them must not require profiles.
+func TestCompileGlobalToolsNeedNoProfiles(t *testing.T) {
+	cat := Catalog{
+		Tools: map[string]ToolInfo{
+			"get_workload_status": {Risk: core.RiskRead},
+			"search_knowledge":    {Risk: core.RiskRead, Global: true},
+		},
+		Environments: map[string][]string{"dev": {"viewer"}},
+	}
+	_, _, err := Compile(Config{
+		Roles:    map[string]Role{"kb": {Tools: []string{"search_knowledge"}}},
+		Bindings: []Binding{{Name: "b", Role: "kb"}},
+	}, cat, nil)
+	if err != nil {
+		t.Fatalf("knowledge-only binding: %v", err)
+	}
+}
