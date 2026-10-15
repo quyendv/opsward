@@ -94,8 +94,10 @@ Organization-specific packs live in the operator's repository and are loaded by 
 
 **`list_workload_events`** returns the Kubernetes events of the workload, of the ReplicaSets a
 Deployment owns, and of the workload's pods. The pods matter most: `FailedScheduling`,
-`ImagePullBackOff` and failed probes are reported on the pod, not the Deployment. Events come
-newest first, 50 by default, at most 200.
+`ImagePullBackOff` and failed probes are reported on the pod, not the Deployment. Pods that
+no longer exist, such as the old pods of a failed rollout, are recognized by their
+controller's naming scheme, so their events are kept. Events come newest first, 50 by
+default, at most 200; the namespace's events are listed in pages.
 
 **`list_workload_logs`** returns the last lines of each container of the workload's pods:
 

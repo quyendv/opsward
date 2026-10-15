@@ -12,9 +12,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/quyendv/opsward/internal/capability"
 )
@@ -481,5 +483,54 @@ func TestSourceUpdateRebuildsRotatedKubeconfig(t *testing.T) {
 	use()
 	if built != 2 {
 		t.Fatalf("rotated kubeconfig not rebuilt: %d builds", built)
+	}
+}
+
+// Issue #9: events of pods that no longer exist (the old pods of a failed rollout) are kept,
+// matched by the controller's naming scheme, and the namespace listing is paginated.
+func TestWorkloadEventsOfDeletedPodsAndPagination(t *testing.T) {
+	d := deployment()
+	d.UID = "d1"
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+		Name: "api-7d9f", Namespace: "shop", UID: "r1", Labels: map[string]string{"app": "api"},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "api", UID: "d1", Controller: ptr(true)}},
+	}}
+	t0 := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	gone := ev("e1", "gone", "Pod", "api-7d9f-x2k9q", "BackOff", t0)
+	other := ev("e2", "o1", "Pod", "api-7d9fx-abcde", "Unrelated", t0.Add(time.Minute))
+	c := fake.NewClientset(d, rs)
+	pages := [][]corev1.Event{{*gone}, {*other}}
+	c.PrependReactor("list", "events", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		opts := a.(k8stesting.ListActionImpl).ListOptions
+		if opts.Continue == "" {
+			return true, &corev1.EventList{Items: pages[0], ListMeta: metav1.ListMeta{Continue: "page-2"}}, nil
+		}
+		return true, &corev1.EventList{Items: pages[1]}, nil
+	})
+	got, err := NewWorkloads(c).WorkloadEvents(context.Background(), capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"}, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Object != "Pod/api-7d9f-x2k9q" {
+		t.Fatalf("events = %+v; want only the deleted pod's event", got)
+	}
+}
+
+func TestOwnedPodName(t *testing.T) {
+	for _, tt := range []struct {
+		kind, name, rs, pod string
+		want                bool
+	}{
+		{"Deployment", "web", "web-7d9f", "web-7d9f-x2k9q", true},
+		{"Deployment", "web", "web-7d9f", "web-7d9fx-abcde", false},
+		{"StatefulSet", "db", "", "db-3", true},
+		{"StatefulSet", "db", "", "db-backup-0", false},
+		{"DaemonSet", "agent", "", "agent-k2x9q", true},
+		{"DaemonSet", "agent", "", "agent-extra-k2x9q", false},
+	} {
+		m := ownedPodNames(tt.kind, tt.name, []string{tt.rs})
+		if got := m(tt.pod); got != tt.want {
+			t.Errorf("%s %s: %s -> %v, want %v", tt.kind, tt.name, tt.pod, got, tt.want)
+		}
 	}
 }
