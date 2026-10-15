@@ -58,16 +58,23 @@ type frontmatter struct {
 	} `yaml:"applies-to"`
 }
 
+// errNoFrontmatter marks Markdown that is not a knowledge document, such as a README in
+// a pack repository. Load skips such files with a warning.
+var errNoFrontmatter = errors.New("must start with a --- frontmatter block")
+
 // parse reads one document: YAML frontmatter between "---" lines, then Markdown.
 func parse(name string, b []byte) (Doc, error) {
+	b = bytes.TrimPrefix(b, []byte("\ufeff"))
 	b = bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
 	rest, ok := bytes.CutPrefix(b, []byte("---\n"))
 	if !ok {
-		return Doc{}, fmt.Errorf("%s: must start with a --- frontmatter block", name)
+		return Doc{}, fmt.Errorf("%s: %w", name, errNoFrontmatter)
 	}
 	head, body, ok := bytes.Cut(rest, []byte("\n---\n"))
 	if !ok {
-		return Doc{}, fmt.Errorf("%s: frontmatter block is not closed with ---", name)
+		if head, ok = bytes.CutSuffix(rest, []byte("\n---")); !ok {
+			return Doc{}, fmt.Errorf("%s: frontmatter block is not closed with ---", name)
+		}
 	}
 	var fm frontmatter
 	dec := yaml.NewDecoder(bytes.NewReader(head))
@@ -149,10 +156,28 @@ func Load(opt Options) (*Pack, []string, error) {
 			files = append(files, file{"builtin:" + strings.TrimPrefix(n, "builtin/"), b})
 		}
 	}
-	for _, root := range opt.Paths {
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	var warnings []string
+	for _, configured := range opt.Paths {
+		// A root that is itself a symlink (git-sync's "current") is followed; WalkDir
+		// would otherwise stop at it.
+		root, err := filepath.EvalSymlinks(configured)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("knowledge: %w", err))
+			continue
+		}
+		before := len(files)
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			// Hidden entries are skipped: a ConfigMap volume keeps its real files in a
+			// hidden "..<timestamp>" directory behind "..data", and the visible names are
+			// symlinks into it, so walking both would load every document twice.
+			if path != root && strings.HasPrefix(d.Name(), ".") {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 			if d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".md") {
 				return nil
@@ -166,13 +191,18 @@ func Load(opt Options) (*Pack, []string, error) {
 		})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("knowledge: %w", err))
+		} else if len(files) == before {
+			warnings = append(warnings, fmt.Sprintf("knowledge path %q: no knowledge documents (*.md) found", configured))
 		}
 	}
 
 	p := &Pack{byID: map[string]int{}}
-	var warnings []string
 	for _, f := range files {
 		d, err := parse(f.name, f.body)
+		if errors.Is(err, errNoFrontmatter) {
+			warnings = append(warnings, fmt.Sprintf("knowledge: %s: no frontmatter, skipped", f.name))
+			continue
+		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("knowledge: %w", err))
 			continue

@@ -184,3 +184,69 @@ func TestLibrarySwap(t *testing.T) {
 		t.Fatalf("notes after swap = %+v", notes)
 	}
 }
+
+// Kubernetes mounts a ConfigMap as a directory of symlinks into a hidden timestamped
+// directory (..2026_10_15_…/doc.md, ..data -> it, doc.md -> ..data/doc.md).
+func TestLoadConfigMapLayout(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "..2026_10_15_10_00_00.123/crash.md", crashDoc)
+	if err := os.Symlink("..2026_10_15_10_00_00.123", filepath.Join(dir, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("..data/crash.md", filepath.Join(dir, "crash.md")); err != nil {
+		t.Fatal(err)
+	}
+	pack, _, err := Load(Options{Paths: []string{dir}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := pack.Get("my-crash"); !ok {
+		t.Fatal("document not loaded")
+	}
+}
+
+// A configured path that is itself a symlink (git-sync "current -> rev") is followed.
+func TestLoadSymlinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	write(t, base, "rev-abc/crash.md", crashDoc)
+	root := filepath.Join(base, "current")
+	if err := os.Symlink(filepath.Join(base, "rev-abc"), root); err != nil {
+		t.Fatal(err)
+	}
+	pack, _, err := Load(Options{Paths: []string{root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := pack.Get("my-crash"); !ok {
+		t.Fatal("document behind a symlinked root not loaded")
+	}
+}
+
+func TestLoadWarnsAboutEmptyPathsAndSkipsPlainMarkdown(t *testing.T) {
+	empty := t.TempDir()
+	repo := t.TempDir()
+	write(t, repo, "README.md", "# Our runbooks\n\nHow to add one.\n")
+	write(t, repo, "crash.md", crashDoc)
+	pack, warnings, err := Load(Options{Paths: []string{empty, repo}})
+	if err != nil {
+		t.Fatalf("a pack repository with a README must load: %v", err)
+	}
+	if _, ok := pack.Get("my-crash"); !ok {
+		t.Fatal("document not loaded")
+	}
+	joined := strings.Join(warnings, "\n")
+	for _, want := range []string{"README.md: no frontmatter, skipped", "no knowledge documents"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("warnings %q missing %q", joined, want)
+		}
+	}
+}
+
+func TestParseToleratesBOMAndClosingAtEOF(t *testing.T) {
+	if _, err := parse("bom.md", append([]byte{0xEF, 0xBB, 0xBF}, []byte(crashDoc)...)); err != nil {
+		t.Fatalf("BOM: %v", err)
+	}
+	if _, err := parse("eof.md", []byte("---\nid: a\ntitle: b\n---")); err != nil {
+		t.Fatalf("closing --- at end of file: %v", err)
+	}
+}
