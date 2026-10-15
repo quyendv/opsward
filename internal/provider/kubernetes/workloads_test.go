@@ -447,3 +447,39 @@ func TestPodStatusLastTerminationAndInitContainers(t *testing.T) {
 		t.Fatalf("init waiting = %q", w.Pods[1].Waiting)
 	}
 }
+
+// Issue #4: credentials rotated in place (same path, new content) are picked up on the
+// next reload, such as one triggered by SIGHUP.
+func TestSourceUpdateRebuildsRotatedKubeconfig(t *testing.T) {
+	kc := filepath.Join(t.TempDir(), "reader")
+	if err := os.WriteFile(kc, []byte("token: old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	built := 0
+	envs := map[string]string{"staging": "cluster-a"}
+	profiles := map[string]map[string]Profile{"cluster-a": {"reader": {Kubeconfig: kc}}}
+	src := NewSource(envs, profiles, func(Profile) (kubernetes.Interface, error) {
+		built++
+		return fake.NewClientset(), nil
+	})
+	use := func() {
+		t.Helper()
+		if _, err := src.Workloads("staging", "reader"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	use()
+	src.Update(envs, profiles)
+	use()
+	if built != 1 {
+		t.Fatalf("unchanged kubeconfig rebuilt: %d builds", built)
+	}
+	if err := os.WriteFile(kc, []byte("token: new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src.Update(envs, profiles)
+	use()
+	if built != 2 {
+		t.Fatalf("rotated kubeconfig not rebuilt: %d builds", built)
+	}
+}

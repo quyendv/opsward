@@ -134,8 +134,9 @@ being replaced, is retried with `SIGHUP`.
 | `identity`, `storage`, `audit` | must be unchanged; a change rejects the whole reload and needs a restart |
 
 A rejected reload is logged with its reason and the previous configuration stays in force. A
-Kubernetes client whose profile changed (kubeconfig path or context) is rebuilt on its next
-use.
+Kubernetes client whose profile changed (kubeconfig path or context) or whose kubeconfig
+content changed is rebuilt on its next use; after rotating credentials in place, send
+`SIGHUP`.
 
 The `opsward_config_last_reload_successful` metric in 0002 arrives with the HTTP adapter.
 Until then the log is the only signal.
