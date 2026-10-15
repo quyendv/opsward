@@ -37,7 +37,8 @@ policy:
       role: viewer
 
 # Knowledge packs: the generic builtin pack, plus your own runbooks as Markdown with
-# frontmatter (docs/design/0003). Edits are picked up without a restart.
+# frontmatter (docs/design/0003). Changes to this file apply without a restart; after
+# editing documents in a knowledge path, send SIGHUP.
 knowledge:
   builtin: true
   # paths: [/etc/opsward/knowledge]

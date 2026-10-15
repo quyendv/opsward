@@ -38,7 +38,8 @@ stdio MCP server in your agent client. Every call is audited to the SQLite file 
 
 Tools: `get_workload_status`, `list_workload_events`, `list_workload_logs`,
 `search_knowledge`, `get_knowledge`. Results that match a knowledge document carry its
-summary as a note. Edits to the configuration file apply without a restart.
+summary as a note. Edits to the configuration file apply without a restart; after editing
+knowledge documents, send `SIGHUP`.
 
 ## Development
 

@@ -118,9 +118,15 @@ Both tools are `read`, resolve the workload's pods with the call's own profile, 
 Opsward checks its configuration file every 10 seconds and on `SIGHUP`. A changed file is
 loaded completely: configuration, policy, environments, providers and knowledge packs. Only
 when all of it is valid is anything replaced. Providers and packs are swapped first, then
-policy and environments together; a call already running during that instant may see the new
-providers with the previous policy, but never a partially loaded configuration. Content that
-was rejected is not retried until the file changes again.
+policy and environments together. A call keeps the policy and environments it was authorized
+under; its backend requests use the provider settings in force when they are made, which
+after a reload may already be the new ones. No call ever sees a partially loaded
+configuration.
+
+Only the configuration file is watched. After editing documents in a knowledge path, send
+`SIGHUP`. Content that was rejected is not retried until the file changes again or a
+`SIGHUP` arrives, so a reload that failed for a passing reason, such as a pack directory
+being replaced, is retried with `SIGHUP`.
 
 | Section | On reload |
 |---|---|
@@ -128,8 +134,8 @@ was rejected is not retried until the file changes again.
 | `identity`, `storage`, `audit` | must be unchanged; a change rejects the whole reload and needs a restart |
 
 A rejected reload is logged with its reason and the previous configuration stays in force. A
-Kubernetes client whose profile changed is rebuilt on its next use. Calls already running
-finish under the configuration they started with.
+Kubernetes client whose profile changed (kubeconfig path or context) is rebuilt on its next
+use.
 
 The `opsward_config_last_reload_successful` metric in 0002 arrives with the HTTP adapter.
 Until then the log is the only signal.
