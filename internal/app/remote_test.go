@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -226,5 +227,50 @@ func TestAdminNeverStreamsToStdout(t *testing.T) {
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "create_api_token") {
 		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
+	}
+}
+
+// failAfter accepts n writes, then fails every write.
+type failAfter struct{ n int }
+
+func (f *failAfter) Write(p []byte) (int, error) {
+	if f.n == 0 {
+		return 0, errors.New("stream closed")
+	}
+	f.n--
+	return len(p), nil
+}
+
+// An interrupt after the intent record must not lose the outcome record.
+func TestAdminOutcomeSurvivesCancellation(t *testing.T) {
+	_, path := remoteFixture(t)
+	cfg, _ := config.Load(path)
+	adm, err := OpenAdmin(context.Background(), cfg, Options{Stderr: &strings.Builder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = adm.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = adm.audited(ctx, "root", "revoke_api_token", map[string]any{"id": "aaaaaaaaaaaa"}, func() error { cancel(); return ctx.Err() })
+	records, _ := audit.Load(context.Background(), adm.Store, "test")
+	if len(records) != 2 || records[1].Phase != audit.PhaseOutcome {
+		t.Fatalf("records = %d, want intent and outcome", len(records))
+	}
+}
+
+// When the outcome of a create cannot be audited, the operator must learn which stored
+// token to revoke: its secret is gone.
+func TestAdminCreateWhoseOutcomeFailsNamesTheToken(t *testing.T) {
+	_, path := remoteFixture(t)
+	cfg, _ := config.Load(path)
+	adm, err := OpenAdmin(context.Background(), cfg, Options{Stderr: &failAfter{n: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = adm.Close() }()
+	_, _, err = adm.CreateToken(context.Background(), "root", identity.TokenRequest{Subject: "a", TTL: time.Hour})
+	list, _ := adm.Store.ListAPITokens(context.Background())
+	if err == nil || len(list) != 1 || !strings.Contains(err.Error(), list[0].ID) || !strings.Contains(err.Error(), "revoke") {
+		t.Fatalf("err = %v, tokens %d", err, len(list))
 	}
 }

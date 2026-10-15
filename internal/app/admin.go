@@ -73,8 +73,17 @@ func (a *Admin) CreateToken(ctx context.Context, actor string, req identity.Toke
 		"id": t.ID, "subject": t.Subject, "groups": anySlice(t.Groups),
 		"description": t.Description, "expiresAt": t.ExpiresAt.Format(time.RFC3339),
 	}
-	err = a.audited(ctx, actor, "create_api_token", args, func() error { return a.Store.CreateAPIToken(ctx, t) })
+	stored := false
+	err = a.audited(ctx, actor, "create_api_token", args, func() error {
+		err := a.Store.CreateAPIToken(ctx, t)
+		stored = err == nil
+		return err
+	})
 	if err != nil {
+		if stored {
+			// The secret is gone, so the token is unusable but valid: say which to revoke.
+			return "", store.APIToken{}, fmt.Errorf("%w; token %s was stored, revoke it with: opsward token revoke %s", err, t.ID, t.ID)
+		}
 		return "", store.APIToken{}, err
 	}
 	return token, t, nil
@@ -115,7 +124,8 @@ func (a *Admin) audited(ctx context.Context, actor, action string, args map[stri
 	if runErr != nil {
 		rec.Outcome.Status, rec.Outcome.Error = audit.StatusError, runErr.Error()
 	}
-	if _, err := a.Audit.Write(ctx, rec); err != nil {
+	// The action has happened: an interrupt must not lose its record.
+	if _, err := a.Audit.Write(context.WithoutCancel(ctx), rec); err != nil {
 		return errors.Join(runErr, fmt.Errorf("%s: outcome not audited: %w", action, err))
 	}
 	return runErr

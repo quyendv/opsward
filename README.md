@@ -48,6 +48,8 @@ claude mcp add --transport http opsward https://opsward.example.com/mcp \
   --header "Authorization: Bearer $OPSWARD_TOKEN"
 ```
 
+The client stores that header in its configuration; give each person their own token.
+
 Tools: `get_workload_status`, `list_workload_events`, `list_workload_logs`,
 `diagnose_workload`, `search_knowledge`, `get_knowledge`; with a Prometheus-compatible
 metrics backend also `get_workload_metrics` and `query_metrics`, and with Loki `query_logs`.

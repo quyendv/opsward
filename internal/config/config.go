@@ -457,10 +457,11 @@ func (c *Config) validateBackend(name string, b *Backend, wantType string, fail 
 }
 
 // normalIdentity makes equivalent identities compare equal: groups are a set, and an
-// empty list is the same as an omitted one. Internal groups are left out: a reload
-// applies them.
+// empty list is the same as an omitted one. Internal groups are left out, because a
+// reload applies them, and so is apiTokens, which only the token commands read.
 func normalIdentity(i Identity) Identity {
 	i.Groups = nil
+	i.APITokens = APITokens{}
 	g := slices.Clone(i.Principal.Groups)
 	slices.Sort(g)
 	g = slices.Compact(g)

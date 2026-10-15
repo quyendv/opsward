@@ -232,6 +232,9 @@ func (a *App) Reload(next *config.Config) error {
 		return err
 	}
 	a.apply(d)
+	// Policy and membership are swapped one after the other, not together: a request in
+	// between is decided by the new policy with the groups its token was resolved with,
+	// which a request authenticated just before the reload sees anyway.
 	a.Engine.Update(d.envs, d.policy, a.lib)
 	a.Identity.SetGroups(next.Identity.Groups)
 	a.cfg, a.Warnings = next, d.warnings

@@ -81,7 +81,6 @@ func TestInternalGroupsReloadWithoutRestart(t *testing.T) {
 	for name, tt := range map[string]struct{ doc, want string }{
 		"member added":  {strings.Replace(remote, "bob@example.com]", "bob@example.com, carol@example.com]", 1), ""},
 		"group removed": {strings.Replace(remote, "  groups:\n    platform: [alice@example.com, bob@example.com]\n", "", 1), ""},
-		"max ttl":       {strings.Replace(remote, "  mode: remote\n", "  mode: remote\n  apiTokens: { maxTTL: 30d }\n", 1), "identity"},
 		"address":       {strings.Replace(remote, "127.0.0.1:8080", "127.0.0.1:9090", 1), "server"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -116,5 +115,34 @@ func TestRemoteWarnings(t *testing.T) {
 				t.Fatalf("plain HTTP warning = %v, want %v; warnings: %v", got, tt.want, c.Warnings())
 			}
 		})
+	}
+}
+
+func TestMaxTTLIsCapped(t *testing.T) {
+	_, err := Parse([]byte(strings.Replace(remote, "  mode: remote\n", "  mode: remote\n  apiTokens: { maxTTL: 3700d }\n", 1)))
+	if err == nil || !strings.Contains(err.Error(), "at most 3650d") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// maxTTL is read only by the token commands: changing it must not block a reload.
+func TestMaxTTLChangeNeedsNoRestart(t *testing.T) {
+	base, _ := Parse([]byte(remote))
+	next, err := Parse([]byte(strings.Replace(remote, "  mode: remote\n", "  mode: remote\n  apiTokens: { maxTTL: 30d }\n", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := base.RestartRequired(next); len(got) != 0 {
+		t.Fatalf("RestartRequired = %v", got)
+	}
+}
+
+func TestGroupsInLocalModeWarn(t *testing.T) {
+	c, err := Parse([]byte(strings.Replace(minimal, "identity:\n", "identity:\n  groups: { platform: [a] }\n", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(c.Warnings(), "\n"), "identity.groups has no effect in local mode") {
+		t.Fatalf("warnings = %v", c.Warnings())
 	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -26,12 +27,18 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// maxDays is the most days a time.Duration holds.
+const maxDays = int(math.MaxInt64 / int64(24*time.Hour))
+
 // ParseDuration parses a duration with an optional "d" (24h) suffix. "0" is zero.
 func ParseDuration(s string) (time.Duration, error) {
 	if days, ok := strings.CutSuffix(s, "d"); ok {
 		n, err := strconv.Atoi(days)
 		if err != nil {
 			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		if n > maxDays || n < -maxDays {
+			return 0, fmt.Errorf("duration %q is out of range", s)
 		}
 		return time.Duration(n) * 24 * time.Hour, nil
 	}

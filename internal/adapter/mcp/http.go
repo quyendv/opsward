@@ -1,10 +1,12 @@
 package mcpadapter
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,6 +33,11 @@ const (
 	writeTimeout      = 2 * time.Minute
 	idleTimeout       = 2 * time.Minute
 	shutdownTimeout   = 30 * time.Second
+	// callTimeout ends a call early enough that its error still fits in the response.
+	callTimeout = writeTimeout - 10*time.Second
+	// outcomeGrace is how long cancelled calls get to write their outcome records.
+	outcomeGrace = 5 * time.Second
+	maxBodyBytes = 4 << 20
 )
 
 // Authenticate returns the principal a bearer token names and when its credential
@@ -45,6 +52,11 @@ type HTTPOptions struct {
 	Ready  func(context.Context) error
 	TLS    *TLSFiles
 	Logger *slog.Logger
+	// CallTimeout bounds each tool call; default a little under the write timeout.
+	CallTimeout time.Duration
+	// ShutdownTimeout is how long calls in flight may finish once serving stops;
+	// default 30 seconds.
+	ShutdownTimeout time.Duration
 }
 
 // TLSFiles names a certificate and key, re-read when either file changes.
@@ -57,13 +69,24 @@ type principalKey struct{}
 // NewHTTPHandler serves MCP at /mcp, statelessly, for the principal each request's
 // bearer token names, and health endpoints at /healthz and /readyz.
 func NewHTTPHandler(e *engine.Engine, opt HTTPOptions) http.Handler {
-	log := opt.Logger
-	if log == nil {
-		log = slog.New(slog.DiscardHandler)
+	return newHTTPHandler(e, opt, context.Background())
+}
+
+// newHTTPHandler is NewHTTPHandler whose calls also end when stop does.
+func newHTTPHandler(e *engine.Engine, opt HTTPOptions, stop context.Context) http.Handler {
+	log := logger(opt.Logger)
+	timeout := opt.CallTimeout
+	if timeout <= 0 {
+		timeout = callTimeout
 	}
-	srv := newServer(e, principalFromRequest)
+	srv := newServer(e, principalFromRequest, func(ctx context.Context) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		release := context.AfterFunc(stop, cancel)
+		return ctx, func() { release(); cancel() }
+	})
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{
 		Stateless: true, JSONResponse: true, Logger: log,
+		MaxRequestBodyBytes: maxBodyBytes, PropagateRequestCancellation: true,
 	})
 	// authenticate decides; the SDK's middleware then carries the result into each
 	// call's RequestExtra, which is the one path that reaches tool handlers.
@@ -76,7 +99,7 @@ func NewHTTPHandler(e *engine.Engine, opt HTTPOptions) http.Handler {
 	}, nil)
 
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(authenticate(opt.Authenticate, log, carry(h))))
+	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(authenticate(opt.Authenticate, log, singleMessage(carry(h)))))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if opt.Ready != nil {
@@ -107,6 +130,9 @@ func authenticate(fn Authenticate, log *slog.Logger, next http.Handler) http.Han
 		}
 		p, exp, err := fn(r.Context(), strings.TrimSpace(token))
 		switch {
+		case err != nil && r.Context().Err() != nil:
+			log.Debug("client went away during authentication", "remote", r.RemoteAddr)
+			return
 		case errors.Is(err, identity.ErrUnauthenticated):
 			log.Warn("authentication rejected", "remote", r.RemoteAddr, "reason", err.Error())
 			unauthorized(w)
@@ -119,6 +145,40 @@ func authenticate(fn Authenticate, log *slog.Logger, next http.Handler) http.Han
 		p.Adapter = AdapterHTTP
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, authenticated{p, exp})))
 	})
+}
+
+// singleMessage rejects JSON-RPC batches, which the oldest protocol version allows: no
+// client sends them, and one request would otherwise carry thousands of calls.
+func singleMessage(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			next.ServeHTTP(w, r)
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, "cannot read request body", http.StatusBadRequest)
+			return
+		}
+		if trimmed := bytes.TrimLeft(body, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '[' {
+			http.Error(w, "JSON-RPC batches are not supported", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		next.ServeHTTP(w, r)
+	})
+}
+
+func logger(l *slog.Logger) *slog.Logger {
+	if l == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return l
 }
 
 func unauthorized(w http.ResponseWriter) {
@@ -137,18 +197,22 @@ func principalFromRequest(req *mcp.CallToolRequest) (core.Principal, error) {
 	return core.Principal{}, errors.New("no authenticated principal")
 }
 
-// ServeHTTP serves NewHTTPHandler on ln until ctx is done, then stops accepting and
-// lets calls in flight finish for up to 30 seconds.
+// ServeHTTP serves NewHTTPHandler on ln until ctx is done, then stops accepting and lets
+// calls in flight finish for ShutdownTimeout. Calls still running then are cancelled and
+// get a few seconds to write their outcome records before connections are closed.
 func ServeHTTP(ctx context.Context, ln net.Listener, e *engine.Engine, opt HTTPOptions) error {
+	log := logger(opt.Logger)
+	stop, stopCalls := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopCalls()
 	srv := &http.Server{
-		Handler:           NewHTTPHandler(e, opt),
+		Handler:           newHTTPHandler(e, opt, stop),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
 	}
 	if opt.TLS != nil {
-		c := &certFiles{TLSFiles: *opt.TLS}
+		c := &certFiles{TLSFiles: *opt.TLS, log: log}
 		if _, err := c.get(nil); err != nil {
 			return fmt.Errorf("mcp http: %w", err)
 		}
@@ -162,10 +226,17 @@ func ServeHTTP(ctx context.Context, ln net.Listener, e *engine.Engine, opt HTTPO
 		return fmt.Errorf("mcp http: %w", err)
 	case <-ctx.Done():
 	}
-	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(sctx); err != nil {
-		return fmt.Errorf("mcp http: shutdown: %w", err)
+	grace := opt.ShutdownTimeout
+	if grace <= 0 {
+		grace = shutdownTimeout
+	}
+	if err := shutdown(ctx, srv, grace); err != nil {
+		log.Warn("calls still running after the shutdown grace period are cancelled", "grace", grace)
+		stopCalls()
+		if err := shutdown(ctx, srv, outcomeGrace); err != nil {
+			log.Warn("closing connections of calls that did not end in time")
+			_ = srv.Close()
+		}
 	}
 	if err := <-errc; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("mcp http: %w", err)
@@ -173,40 +244,54 @@ func ServeHTTP(ctx context.Context, ln net.Listener, e *engine.Engine, opt HTTPO
 	return nil
 }
 
-// certFiles loads a key pair again whenever either file's modification time changes,
-// so a rotated certificate is served without a restart.
+func shutdown(ctx context.Context, srv *http.Server, d time.Duration) error {
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d)
+	defer cancel()
+	return srv.Shutdown(sctx)
+}
+
+// stamp identifies a version of the certificate and key files.
+type stamp struct {
+	certMod, keyMod   time.Time
+	certSize, keySize int64
+}
+
+// certFiles loads a key pair again whenever either file changes, so a rotated
+// certificate is served without a restart. A pair that fails to load is logged once and
+// not retried until the files change again; meanwhile the previous pair is served.
 type certFiles struct {
 	TLSFiles
-	mu       sync.Mutex
-	cert     *tls.Certificate
-	certMod  time.Time
-	keyMod   time.Time
-	certSize int64
-	keySize  int64
+	log    *slog.Logger
+	mu     sync.Mutex
+	cert   *tls.Certificate
+	loaded stamp
+	failed stamp
 }
 
 func (c *certFiles) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	ci, err := os.Stat(c.CertFile)
-	if err != nil {
-		return nil, fmt.Errorf("tls certificate: %w", err)
-	}
-	ki, err := os.Stat(c.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("tls key: %w", err)
-	}
+	ci, cerr := os.Stat(c.CertFile)
+	ki, kerr := os.Stat(c.KeyFile)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.cert != nil && ci.ModTime().Equal(c.certMod) && ki.ModTime().Equal(c.keyMod) && ci.Size() == c.certSize && ki.Size() == c.keySize {
+	if err := errors.Join(cerr, kerr); err != nil {
+		if c.cert != nil {
+			return c.cert, nil // files caught mid-rotation
+		}
+		return nil, fmt.Errorf("tls key pair: %w", err)
+	}
+	now := stamp{ci.ModTime(), ki.ModTime(), ci.Size(), ki.Size()}
+	if c.cert != nil && (now == c.loaded || now == c.failed) {
 		return c.cert, nil
 	}
 	cert, err := tls.LoadX509KeyPair(c.CertFile, c.KeyFile)
 	if err != nil {
-		if c.cert != nil {
-			// A pair caught mid-rotation: keep serving the previous one.
-			return c.cert, nil
+		if c.cert == nil {
+			return nil, fmt.Errorf("tls key pair: %w", err)
 		}
-		return nil, fmt.Errorf("tls key pair: %w", err)
+		c.failed = now
+		logger(c.log).Error("the TLS certificate files changed but cannot be loaded; the previous certificate is still served", "error", err)
+		return c.cert, nil
 	}
-	c.cert, c.certMod, c.keyMod, c.certSize, c.keySize = &cert, ci.ModTime(), ki.ModTime(), ci.Size(), ki.Size()
+	c.cert, c.loaded = &cert, now
 	return c.cert, nil
 }

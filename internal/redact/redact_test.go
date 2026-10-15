@@ -21,6 +21,7 @@ func TestStringRedacts(t *testing.T) {
 		{"url credentials", join("postgres://app:", "s3cr3tpass", "@db.example.com:5432/app"), "postgres://app:", "s3cr3tpass"},
 		{"key value", join("DB_PASSWORD=", "hunter2hunter2"), "DB_PASSWORD=", "hunter2hunter2"},
 		{"json-ish key value", join(`"api_key": "`, "k-123456789", `"`), `"api_key": "`, "k-123456789"},
+		{"opsward api token", "leaked " + join("opw_", "abcdabcdabcd", "_", strings.Repeat("k2m7", 13)), "leaked ", strings.Repeat("k2m7", 13)},
 		{"private key", join("-----BEGIN RSA ", "PRIVATE KEY-----\nMIIEow\n-----END RSA ", "PRIVATE KEY-----"), "", "MIIEow"},
 	}
 	for _, tt := range tests {
