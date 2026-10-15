@@ -283,3 +283,57 @@ func TestBackendsAreRestartOnly(t *testing.T) {
 		t.Fatalf("an environment's clusterLabelValue must be reloadable: %v", got)
 	}
 }
+
+const twoClusters = `
+identity:
+  principal: { subject: me }
+storage:
+  path: /var/lib/opsward/o.db
+providers:
+  kubernetes:
+    clusters:
+      cluster-a: { profiles: { reader: { kubeconfig: /a } } }
+      cluster-b: { profiles: { reader: { kubeconfig: /b } } }
+%BACKEND%
+environments:
+  - { name: staging, cluster: cluster-a }
+  - { name: production, cluster: cluster-b }
+`
+
+// A shared backend without clusterLabel cannot tell clusters apart: a caller in one
+// environment would read the other cluster's namespace of the same name.
+func TestBackendNeedsClusterLabelWithSeveralClusters(t *testing.T) {
+	doc := strings.Replace(twoClusters, "%BACKEND%", "  metrics: { type: prometheus, url: https://m.example.com }", 1)
+	if _, err := Parse([]byte(doc)); err == nil || !strings.Contains(err.Error(), "clusterLabel is required") {
+		t.Fatalf("err = %v", err)
+	}
+	ok := strings.Replace(twoClusters, "%BACKEND%", "  metrics: { type: prometheus, url: https://m.example.com, clusterLabel: cluster }", 1)
+	if _, err := Parse([]byte(ok)); err != nil {
+		t.Fatalf("with clusterLabel: %v", err)
+	}
+}
+
+func TestClusterLabelValueWithoutClusterLabelWarns(t *testing.T) {
+	doc := withBackends(strings.Replace(minimal, "    cluster: cluster-a\n", "    cluster: cluster-a\n    clusterLabelValue: prod-a\n", 1), "\n  metrics: { type: prometheus, url: https://m.example.com }\n")
+	c, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := strings.Join(c.Warnings(), "\n"); !strings.Contains(w, "clusterLabelValue") || !strings.Contains(w, "ignored") {
+		t.Fatalf("warnings = %s", w)
+	}
+}
+
+// Credentials are referenced by file, never inline (docs/design/0004).
+func TestBackendURLMustNotCarryCredentialsOrQuery(t *testing.T) {
+	for url, want := range map[string]string{
+		"https://user:pass@m.example.com": "credentials",
+		"https://user@m.example.com":      "credentials",
+		"https://m.example.com/?org=1":    "query",
+	} {
+		_, err := Parse([]byte(withBackends(minimal, "\n  metrics: { type: prometheus, url: \""+url+"\" }\n")))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", url, err, want)
+		}
+	}
+}

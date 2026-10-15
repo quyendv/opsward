@@ -41,6 +41,10 @@ environments:
     clusterLabelValue: prod-a # the value of clusterLabel for this environment; default: cluster
 ```
 
+`clusterLabel` is required when the environments use more than one cluster: without it a
+query could not be kept to one cluster, so the configuration is rejected. The URL must not
+contain credentials, a query or a fragment.
+
 Credentials are referenced by file, never inline. One read credential per backend is
 accepted for v0.1: metrics and logs are read-only and confined by query rewriting. Per-profile
 backend credentials follow when a write path to these backends exists.

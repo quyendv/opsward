@@ -338,6 +338,15 @@ func (c *Config) Warnings() []string {
 			}
 		}
 	}
+	labelled := false
+	for _, b := range []*Backend{c.Providers.Metrics, c.Providers.Logs} {
+		labelled = labelled || (b != nil && b.ClusterLabel != "")
+	}
+	for _, e := range c.Environments {
+		if !labelled && e.ClusterLabelValue != e.Cluster {
+			out = append(out, fmt.Sprintf("environment %q: clusterLabelValue is ignored, no backend sets clusterLabel", e.Name))
+		}
+	}
 	for name, b := range map[string]*Backend{"metrics": c.Providers.Metrics, "logs": c.Providers.Logs} {
 		if b == nil {
 			continue
@@ -397,6 +406,23 @@ func (c *Config) validateBackend(name string, b *Backend, wantType string, fail 
 		fail("providers.%s.url is required", name)
 	} else if u, err := url.Parse(b.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		fail("providers.%s.url %q must be an http or https URL", name, b.URL)
+	} else {
+		if u.User != nil {
+			// Not echoed: it may hold a password. Credentials are referenced by file.
+			fail("providers.%s.url must not contain credentials; use auth with a file", name)
+		}
+		if u.RawQuery != "" || u.Fragment != "" {
+			fail("providers.%s.url must not have a query or fragment", name)
+		}
+	}
+	if b.ClusterLabel == "" {
+		clusters := map[string]bool{}
+		for _, e := range c.Environments {
+			clusters[e.Cluster] = true
+		}
+		if len(clusters) > 1 {
+			fail("providers.%s.clusterLabel is required when environments use more than one cluster: without it a query cannot be limited to one cluster", name)
+		}
 	}
 	if b.Auth.BearerTokenFile != "" && b.Auth.Basic != nil {
 		fail("providers.%s.auth: set one of bearerTokenFile and basic", name)
