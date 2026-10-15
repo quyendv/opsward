@@ -25,6 +25,7 @@ var rules = []rule{
 	{regexp.MustCompile(`(?i)\b(authorization:\s*basic\s+)[A-Za-z0-9+/]+=*`), "${1}" + Placeholder},
 	{regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`), Placeholder},
 	{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}\b`), Placeholder},
+	{regexp.MustCompile(`\bopw_[a-z2-7]{12}_[a-z2-7]{52}\b`), Placeholder}, // Opsward's own API tokens
 	{regexp.MustCompile(`\bglpat-[A-Za-z0-9\-_]{20,}\b`), Placeholder},
 	{regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}\b`), Placeholder},
 	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), Placeholder},

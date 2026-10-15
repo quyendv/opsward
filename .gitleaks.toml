@@ -1,2 +1,8 @@
 [extend]
 useDefault = true
+
+[[rules]]
+id = "opsward-api-token"
+description = "Opsward API token"
+regex = '''\bopw_[a-z2-7]{12}_[a-z2-7]{52}\b'''
+keywords = ["opw_"]
