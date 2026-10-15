@@ -3,6 +3,7 @@ package knowledge
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -277,5 +278,45 @@ func TestBuiltinNotesOnStatusDetails(t *testing.T) {
 	unscheduled := map[string]any{"pods": []any{map[string]any{"name": "a", "phase": "Pending"}}}
 	if got := ids(unscheduled); got != "failed-scheduling" {
 		t.Fatalf("unscheduled notes = %q", got)
+	}
+}
+
+// Issue #5: a query word finds the same word in another inflection or in camel case.
+func TestTokensMatchAcrossInflections(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"images", "image"},
+		{"schedule", "scheduling"},
+		{"liveness", "liveness"},
+		{"oom killed", "OOMKilled"},
+		{"crashes", "crashing"},
+		{"pulled", "pull"},
+		{"processes", "process"},
+	} {
+		q, d := tokens(pair[0]), tokens(pair[1])
+		for _, w := range d {
+			if !slices.Contains(q, w) {
+				t.Errorf("tokens(%q) = %v does not contain %q from tokens(%q) = %v", pair[0], q, w, pair[1], d)
+			}
+		}
+	}
+}
+
+// Issue #6: the default summary skips headings, and pack files have a size limit.
+func TestSummarySkipsHeadings(t *testing.T) {
+	d, err := parse("x.md", []byte("---\nid: a\ntitle: b\n---\n# A heading\n\nThe real summary.\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Summary != "The real summary." {
+		t.Fatalf("summary = %q", d.Summary)
+	}
+}
+
+func TestLoadRejectsOversizedFiles(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "huge.md", crashDoc+strings.Repeat("x", maxDocBytes))
+	_, _, err := Load(Options{Paths: []string{dir}})
+	if err == nil || !strings.Contains(err.Error(), "huge.md") || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("err = %v", err)
 	}
 }

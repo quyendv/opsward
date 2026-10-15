@@ -29,6 +29,9 @@ var builtin embed.FS
 // celCostLimit matches the per-call limit used for policy conditions.
 const celCostLimit = 1_000_000
 
+// maxDocBytes bounds one knowledge file.
+const maxDocBytes = 256 << 10
+
 var (
 	validID       = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	severityOrder = map[string]int{"critical": 0, "warning": 1, "info": 2}
@@ -45,6 +48,8 @@ type Doc struct {
 	When     string   `json:"-"`
 
 	when cel.Program
+	// Tokens of the title (with the id), summary and body, computed once at load.
+	titleT, summaryT, bodyT []string
 }
 
 type frontmatter struct {
@@ -109,9 +114,15 @@ func parse(name string, b []byte) (Doc, error) {
 	return d, nil
 }
 
+// firstParagraph returns the body's first paragraph that is not a heading.
 func firstParagraph(body string) string {
-	para, _, _ := strings.Cut(strings.TrimSpace(body), "\n\n")
-	return strings.Join(strings.Fields(para), " ")
+	for para := range strings.SplitSeq(strings.TrimSpace(body), "\n\n") {
+		para = strings.TrimSpace(para)
+		if para != "" && !strings.HasPrefix(para, "#") {
+			return strings.Join(strings.Fields(para), " ")
+		}
+	}
+	return ""
 }
 
 // Options selects where documents come from.
@@ -182,6 +193,10 @@ func Load(opt Options) (*Pack, []string, error) {
 			if d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".md") {
 				return nil
 			}
+			if info, err := d.Info(); err == nil && info.Size() > maxDocBytes {
+				errs = append(errs, fmt.Errorf("knowledge: %s: larger than %d bytes", path, maxDocBytes))
+				return nil
+			}
 			b, err := os.ReadFile(path) //nolint:gosec // G304: reading the operator's configured knowledge paths is the point
 			if err != nil {
 				return err
@@ -231,6 +246,7 @@ func Load(opt Options) (*Pack, []string, error) {
 				warnings = append(warnings, fmt.Sprintf("knowledge: %s: applies-to tool %q is not registered", f.name, t))
 			}
 		}
+		d.titleT, d.summaryT, d.bodyT = tokens(d.Title+" "+d.ID), tokens(d.Summary), tokens(d.Body)
 		p.byID[d.ID] = len(p.docs)
 		p.docs = append(p.docs, d)
 	}
@@ -300,10 +316,9 @@ func (p *Pack) Search(query string, limit int) []Hit {
 	var ranked []scored
 	for i := range p.docs {
 		d := &p.docs[i]
-		title, summary, body := tokens(d.Title+" "+d.ID), tokens(d.Summary), tokens(d.Body)
 		score := 0
 		for _, t := range terms {
-			score += 3*count(title, t) + 2*count(summary, t) + count(body, t)
+			score += 3*count(d.titleT, t) + 2*count(d.summaryT, t) + count(d.bodyT, t)
 		}
 		if score > 0 {
 			ranked = append(ranked, scored{d, score})
@@ -325,23 +340,34 @@ func (p *Pack) Search(query string, limit int) []Hit {
 	return hits
 }
 
-// tokens lower-cases text and splits it into words of two or more letters or digits,
-// with a trailing "s", "es", "ing" or "ed" removed so that "crashing" finds "crash".
+var camelBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])|([A-Z])([A-Z][a-z])`)
+
+// tokens splits text into lower-case word stems of two or more characters, so that
+// "OOMKilled" finds "oom killed", "scheduling" finds "schedule" and "images" "image".
 func tokens(s string) []string {
+	s = camelBoundary.ReplaceAllString(s, "${1}${3} ${2}${4}")
 	words := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	out := words[:0]
 	for _, w := range words {
-		for _, suf := range []string{"ing", "es", "ed", "s"} {
-			if len(w) > len(suf)+2 && strings.HasSuffix(w, suf) {
-				w = strings.TrimSuffix(w, suf)
-				break
-			}
-		}
-		if len(w) >= 2 {
+		if w = stem(w); len(w) >= 2 {
 			out = append(out, w)
 		}
 	}
 	return out
+}
+
+// stem removes one inflection suffix and then a final "e", the same way for every word.
+func stem(w string) string {
+	for _, suf := range []string{"ing", "es", "ed", "s"} {
+		if len(w) > len(suf)+2 && strings.HasSuffix(w, suf) && (suf != "s" || !strings.HasSuffix(w, "ss")) {
+			w = strings.TrimSuffix(w, suf)
+			break
+		}
+	}
+	if len(w) > 3 && strings.HasSuffix(w, "e") {
+		w = strings.TrimSuffix(w, "e")
+	}
+	return w
 }
 
 func count(words []string, t string) int {
