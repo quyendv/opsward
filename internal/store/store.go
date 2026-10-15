@@ -1,5 +1,5 @@
 // Package store defines where Opsward keeps its own state. Implementations live in
-// subpackages: sqlite (default, one replica) and, later, postgres.
+// subpackages: sqlite (default, one replica) and postgres (several replicas).
 package store
 
 import (

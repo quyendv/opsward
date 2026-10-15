@@ -44,9 +44,8 @@ type oidcState struct {
 
 func (a *Authenticator) oidcReady() bool { return a.oidc != nil && a.oidc.verifier.Load() != nil }
 
-// Discover finds the issuer's keys, retrying until it succeeds or ctx is done. Until
-// then OIDC tokens are rejected and API tokens work. Key sets are fetched with ctx, so
-// it must live as long as the Authenticator is used.
+// Discover reads the issuer's discovery document, retrying until it succeeds or ctx is
+// done. Until then OIDC tokens cannot be checked and API tokens work.
 func (a *Authenticator) Discover(ctx context.Context) {
 	if a.oidc == nil {
 		return
