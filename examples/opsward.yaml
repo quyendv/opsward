@@ -1,0 +1,36 @@
+# A minimal single-user configuration: one cluster, read-only access.
+# Validate with: opsward validate --config examples/opsward.yaml
+
+identity:
+  mode: local
+  principal: { subject: local-admin, groups: [admin] }
+
+storage:
+  type: sqlite
+  path: /var/lib/opsward/opsward.db
+  auditRetention: 90d
+
+audit:
+  stream: { type: stderr }
+
+providers:
+  kubernetes:
+    clusters:
+      cluster-a:
+        profiles:
+          # A kubeconfig whose credential is bound to a read-only role without
+          # secrets, pods/exec or pods/portforward.
+          reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
+
+environments:
+  - name: staging
+    cluster: cluster-a
+    namespaces: ["*"]
+
+policy:
+  roles:
+    viewer: { risk: [read] }
+  bindings:
+    - name: admin-view
+      subjects: { groups: [admin] }
+      role: viewer

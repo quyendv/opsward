@@ -10,3 +10,9 @@ All notable changes to this project are documented here. The format follows
 
 - Repository scaffolding: Go module, lint and format configuration, secret scanning hooks,
   CI, release and container build configuration.
+- Policy engine: roles and bindings scoped to environments, namespaces, workloads and
+  applications, with optional CEL conditions; default deny.
+- Hash-chained audit to an embedded SQLite store and a stream, with retention checkpoints
+  and `opsward audit verify`.
+- `get_workload_status` over MCP stdio, with output redaction.
+- `opsward validate` for configuration and policy.

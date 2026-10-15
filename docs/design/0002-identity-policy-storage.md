@@ -202,10 +202,14 @@ Rules that keep this fail-closed:
   workload. A call without one, such as a namespace-wide query, does not match it.
 - `apps` is evaluated against labels that Opsward reads from the live object with its own
   reader profile during validation, on every call, without a cache: a relabelled workload must
-  not keep its old access for a cache lifetime. The tool reuses the object read during
-  validation only when it runs with that same profile; with any other profile it reads the
-  object again, so that the narrower profile's cluster permissions still apply. The labels are
-  not returned to the caller.
+  not keep its old access for a cache lifetime. The lookup reads the labels and nothing else,
+  and it is skipped when no binding uses `apps` or `scope.labels`. The tool reads the object
+  itself only after authorization, with the call's own profile, so a narrower profile's
+  cluster permissions still apply. The labels are not returned to the caller.
+- A failed lookup is not reported before authorization. With the labels unknown, `apps`
+  bindings whose effect is `deny` or `approve` still match and `allow` ones do not, so a
+  lookup failure cannot lift a restriction; an authorized call then reports the error
+  itself. An unauthorized caller cannot use error messages to learn which objects exist.
 
 ### Confining queries
 
@@ -226,9 +230,9 @@ the environment's cluster label. The label names are configured per provider.
 ### Evaluation
 
 1. Collect the bindings whose subjects, role and scope match the call.
-2. Evaluate each binding's `when`. A binding with `effect: deny` whose condition fails to
-   evaluate counts as matching; any other binding whose condition fails to evaluate does not.
-   Both cases are logged.
+2. Evaluate each binding's `when`. A binding with `effect: deny` or `effect: approve` whose
+   condition fails to evaluate counts as matching; an `allow` binding whose condition fails
+   to evaluate does not. Either way the stricter outcome wins, and the failure is logged.
 3. `deny` overrides `approve`, which overrides `allow`. No matching binding is `deny`.
 
 Validation at load time rejects:
@@ -334,12 +338,17 @@ Credentials are never stored; configuration references them by file or environme
 Every record is written to two places:
 
 - the **store**, so the console and API can query it;
-- a **stream** (stdout or a file), for the operator's log pipeline. The stream is the copy meant
-  for long-term, tamper-resistant retention outside Opsward.
+- a **stream** (stdout, stderr or a file), for the operator's log pipeline. The stream is the
+  copy meant for long-term, tamper-resistant retention outside Opsward. Under MCP over stdio,
+  stdout carries the protocol, so the stream must be stderr or a file there.
 
 Each record carries a sequence number and a hash chain: `prev` is the hash of the previous
 record from the same writer and `hash` covers the record including `prev`. A deleted or altered
-record breaks the chain. Each replica keeps its own chain, identified by `writer`.
+record breaks the chain. A chain is identified by `writer` (`opsward` unless configured). Processes that share a
+store and a writer ID, such as one MCP stdio server per client session, share one chain:
+the store reads the chain head and appends under one write lock. Each process's stream
+then holds only its own records, so the store is what `opsward audit verify` checks, and
+it checks every chain it holds.
 
 ```json
 {
@@ -359,9 +368,12 @@ written to both destinations within a timeout, the call is refused. The timeout 
 stdout, which rarely fails but can block when a log collector applies backpressure. If the
 outcome record then fails, the action has already happened: the failure is logged and counted,
 and the intent record still shows the attempt.
+For a `read` call the result is withheld instead: output that was not audited does not
+leave the engine.
 
 **Retention.** The store keeps records for 90 days by default (`auditRetention`, `0` keeps them
-forever); long-term retention is the stream's job. Pruning first writes a `checkpoint` record
+forever), in every chain the store holds; long-term retention is the stream's job. Pruning
+first writes a `checkpoint` record
 holding the hash of the last record it removes, so the chain stays verifiable from the cut and a
 prune is distinguishable from a deletion.
 
@@ -386,7 +398,7 @@ storage:
   # dsn: { file: /etc/opsward/postgres-dsn }
 
 audit:
-  stream: { type: stdout }
+  stream: { type: stderr }
 
 policy:
   sources: [file]

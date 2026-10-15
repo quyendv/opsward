@@ -2,7 +2,7 @@
 
 **A guarded gateway that lets AI agents operate your infrastructure, within the permissions you grant.**
 
-> Status: pre-alpha, design phase. Not usable yet.
+> Status: pre-alpha. One read-only tool works over MCP stdio; nothing is stable.
 
 ## Why
 
@@ -23,6 +23,18 @@ Opsward sits between agents and infrastructure and makes that trust explicit:
 
 It speaks MCP, so it works with the agent clients your team already uses. The engine itself
 is protocol-agnostic.
+
+## Try it
+
+```sh
+mise run build
+./bin/opsward validate --config examples/opsward.yaml
+```
+
+Point `providers.kubernetes.clusters.*.profiles.reader.kubeconfig` at a kubeconfig whose
+credential is bound to a read-only role, then register `opsward serve --config <file>` as a
+stdio MCP server in your agent client. Every call is audited to the SQLite file in
+`storage.path` and to stderr; `opsward audit verify --config <file>` checks the chain.
 
 ## Development
 

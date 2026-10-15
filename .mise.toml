@@ -10,7 +10,7 @@ goreleaser = "2.18.3"
 description = "Install tools and git hooks (run once after cloning)"
 run = """
 mise install
-pre-commit install --install-hooks --hook-type pre-commit --hook-type pre-push
+pre-commit install --install-hooks --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 """
 
 [tasks.fmt]
@@ -36,6 +36,10 @@ run = "govulncheck ./..."
 description = "Scan the whole git history for secrets"
 run = "gitleaks git --redact --no-banner"
 
+[tasks.private-terms]
+description = "Scan the whole history for terms listed in .local/private-terms.txt (skipped without it)"
+run = "scripts/private-terms.sh history"
+
 [tasks.tidy]
 description = "Fail if go.mod or go.sum is not tidy"
 run = "go mod tidy -diff"
@@ -50,4 +54,4 @@ run = "goreleaser release --snapshot --clean"
 
 [tasks.check]
 description = "Everything CI runs"
-depends = ["tidy", "lint", "test", "vuln", "secrets"]
+depends = ["tidy", "lint", "test", "vuln", "secrets", "private-terms"]
