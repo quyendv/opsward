@@ -22,10 +22,11 @@ type WorkloadRef struct {
 
 // Workload is a workload's status and the pods it selects.
 type Workload struct {
-	Kind       string            `json:"kind"`
-	Namespace  string            `json:"namespace"`
-	Name       string            `json:"name"`
-	Labels     map[string]string `json:"labels,omitempty"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Labels are read for policy and never returned to the caller.
+	Labels     map[string]string `json:"-"`
 	Replicas   Replicas          `json:"replicas"`
 	Conditions []Condition       `json:"conditions,omitempty"`
 	Pods       []Pod             `json:"pods"`

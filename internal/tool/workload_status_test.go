@@ -124,3 +124,20 @@ func TestWorkloadStatusRunReportsNotFound(t *testing.T) {
 		t.Fatalf("Run err = %v, want ErrNotFound", err)
 	}
 }
+
+// Labels are read for policy and, per docs/design/0002, not returned to the caller.
+func TestWorkloadStatusDoesNotReturnLabels(t *testing.T) {
+	src := &fakeSource{workload: &capability.Workload{Name: "api", Labels: map[string]string{"team": "a"}}}
+	p, err := prepare(t, src, validArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := p.Run(context.Background(), engine.ProfileReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), "labels") || strings.Contains(string(b), `"team"`) {
+		t.Fatalf("result exposes labels: %s", b)
+	}
+}
