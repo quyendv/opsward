@@ -213,6 +213,11 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	dec := e.authz.Decide(core.Request{
 		Principal: p, Tool: name, Risk: tool.Risk, Scope: scope, Args: prep.Args, Now: start,
 	})
+	if dec.Effect == core.EffectAllow && tool.Risk == core.RiskDestructive {
+		// Policy validation already rejects this; the engine refuses it too, so no
+		// Authorizer can let a destructive call through without approval.
+		dec.Effect = core.EffectApprove
+	}
 	rec.Decision = &dec
 	if dec.Effect != core.EffectAllow {
 		return nil, finish(audit.StatusDenied, &DeniedError{Decision: dec})

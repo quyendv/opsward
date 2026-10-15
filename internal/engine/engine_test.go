@@ -372,3 +372,22 @@ func TestNewRejectsDuplicateTools(t *testing.T) {
 		t.Fatal("New accepted two tools with the same name")
 	}
 }
+
+// Compile rejects allow on destructive tools; the engine refuses it again at run time,
+// so a different Authorizer cannot reintroduce it.
+func TestInvokeNeverRunsDestructiveOnPlainAllow(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskDestructive}
+	aud := &recordingAuditor{}
+	e := newEngine(t, ft, allowAll, aud)
+	_, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs))
+	var denied *DeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("err = %v, want DeniedError", err)
+	}
+	if ft.ran {
+		t.Fatal("destructive tool ran on a plain allow")
+	}
+	if rec := aud.last(); rec.Outcome.Status != audit.StatusDenied {
+		t.Fatalf("audit = %+v", rec)
+	}
+}
