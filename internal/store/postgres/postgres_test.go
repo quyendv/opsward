@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
 	"strings"
 	"sync"
 	"testing"
@@ -83,5 +84,57 @@ func TestOpenErrorHidesTheDSN(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "s3cr3t-value") {
 		t.Fatalf("error leaks the password: %v", err)
+	}
+}
+
+// A database whose default isolation is REPEATABLE READ must not make appenders reuse a
+// sequence number: the snapshot would predate the wait for the lock.
+func TestAppendNextUnderRepeatableReadDefault(t *testing.T) {
+	dsn := storetest.PostgresSchema(t) + "&default_transaction_isolation=repeatable%20read"
+	var wg sync.WaitGroup
+	errs := make(chan error, 200)
+	for range 4 {
+		s := openDSN(t, dsn)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				_, err := s.AppendAuditNext(context.Background(), "w1", func(seq uint64, prev string) (store.AuditRow, error) {
+					return store.AuditRow{Writer: "w1", Seq: seq, ID: rand.Text(), Phase: "outcome", Hash: rand.Text(), Prev: prev, Body: []byte("{}")}, nil
+				})
+				if err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("AppendAuditNext: %v", err)
+	}
+}
+
+// A replica that dies inside a transaction must not hold the audit lock until TCP
+// keepalive notices, hours later: sessions get server-side timeouts unless the DSN sets
+// its own.
+func TestSessionTimeouts(t *testing.T) {
+	ctx := context.Background()
+	show := func(s store.Store, name string) string {
+		var v string
+		if err := s.(*Store).pool.QueryRow(ctx, "SHOW "+name).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	dsn := storetest.PostgresSchema(t)
+	s := openDSN(t, dsn)
+	for name, want := range map[string]string{"idle_in_transaction_session_timeout": "10s", "tcp_keepalives_idle": "30", "tcp_keepalives_interval": "10", "tcp_keepalives_count": "3"} {
+		if got := show(s, name); got != want {
+			t.Errorf("%s = %s, want %s", name, got, want)
+		}
+	}
+	if got := show(openDSN(t, dsn+"&idle_in_transaction_session_timeout=5s"), "idle_in_transaction_session_timeout"); got != "5s" {
+		t.Errorf("the DSN's own value was overridden: %s", got)
 	}
 }

@@ -203,11 +203,19 @@ storage:
   dsn: { file: /etc/opsward/postgres-dsn }   # or { env: OPSWARD_POSTGRES_DSN }
 ```
 
-The DSN may contain a password, so it is referenced, never inline. Migrations are embedded
-and applied at start-up under an advisory lock, so replicas starting together apply each
-one once. Appending to an audit chain takes a transaction-scoped advisory lock on the
-chain's writer ID, which gives replicas sharing a chain the same ordering the SQLite store
-gets from its single writer.
+The DSN may contain a password, so it is referenced, never inline. Use
+`sslmode=verify-full` for a database across a network: the store holds the API token
+hashes that authentication trusts.
+
+Migrations are embedded and applied at start-up in one transaction under an advisory lock,
+so replicas starting together apply each one once. Appending to an audit chain takes a
+transaction-scoped advisory lock on the chain's writer ID, in a READ COMMITTED transaction
+whatever the database's default, which gives replicas sharing a chain the same ordering the
+SQLite store gets from its single writer.
+
+Sessions get `idle_in_transaction_session_timeout` and TCP keepalive settings unless the
+DSN sets its own, so that a replica that dies inside a transaction releases its locks in
+seconds rather than when the operating system's keepalive notices, about two hours later.
 
 Times are stored as integer nanoseconds in both stores, because the audit hash covers
 them and Postgres timestamps keep only microseconds. Both stores pass one conformance test

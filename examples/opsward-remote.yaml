@@ -32,7 +32,7 @@ storage:
   path: /var/lib/opsward/opsward.db
   # For more than one replica:
   # type: postgres
-  # dsn: { file: /etc/opsward/postgres-dsn }   # or { env: OPSWARD_POSTGRES_DSN }
+  # dsn: { file: /etc/opsward/postgres-dsn }   # or { env: OPSWARD_POSTGRES_DSN }; use sslmode=verify-full
 
 audit:
   stream: { type: stdout }

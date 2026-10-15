@@ -37,6 +37,11 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	if err != nil {
 		return nil, errors.New("postgres: the DSN cannot be parsed")
 	}
+	for k, v := range sessionDefaults {
+		if _, set := cfg.ConnConfig.RuntimeParams[k]; !set {
+			cfg.ConnConfig.RuntimeParams[k] = v
+		}
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: %w", err)
@@ -53,54 +58,65 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return s, nil
 }
 
-// migrate applies pending migrations, one transaction each, under a session advisory
-// lock so that replicas starting together apply each one once.
+// sessionDefaults bound how long a replica that dies inside a transaction holds its
+// locks: without them the server waits for TCP keepalive, about two hours, while every
+// other replica's audit appends wait for the lock and fail. A DSN can set its own.
+var sessionDefaults = map[string]string{
+	"idle_in_transaction_session_timeout": "10s",
+	"tcp_keepalives_idle":                 "30",
+	"tcp_keepalives_interval":             "10",
+	"tcp_keepalives_count":                "3",
+}
+
+// readCommitted is set explicitly: under a database default of REPEATABLE READ the
+// snapshot would be taken before the advisory lock is granted, and miss rows committed
+// by whoever held it.
+var readCommitted = pgx.TxOptions{IsoLevel: pgx.ReadCommitted}
+
+// migrate applies pending migrations in one transaction, under a transaction-scoped
+// advisory lock so that replicas starting together apply each one once and no lock
+// outlives a dead process.
 func (s *Store) migrate(ctx context.Context) error {
 	names, err := fs.Glob(migrations, "migrations/*.sql")
 	if err != nil {
 		return fmt.Errorf("postgres: list migrations: %w", err)
 	}
 	sort.Strings(names)
-	conn, err := s.pool.Acquire(ctx)
+	err = pgx.BeginTxFunc(ctx, s.pool, readCommitted, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('opsward:migrate:' || current_schema(), 0))`); err != nil {
+			return fmt.Errorf("lock: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)`); err != nil {
+			return fmt.Errorf("migrations table: %w", err)
+		}
+		var current int
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
+			return fmt.Errorf("read schema version: %w", err)
+		}
+		for _, name := range names {
+			base := strings.TrimPrefix(name, "migrations/")
+			v, err := strconv.Atoi(strings.SplitN(base, "_", 2)[0])
+			if err != nil {
+				return fmt.Errorf("migration %s: name must start with a number", name)
+			}
+			if v <= current {
+				continue
+			}
+			body, err := migrations.ReadFile(name)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", name, err)
+			}
+			if _, err := tx.Exec(ctx, string(body)); err != nil {
+				return fmt.Errorf("migration %s: %w", name, err)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, v); err != nil {
+				return fmt.Errorf("migration %s: %w", name, err)
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
-	}
-	defer conn.Release()
-	const lock = `hashtextextended('opsward:migrate:' || current_schema(), 0)`
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(`+lock+`)`); err != nil {
-		return fmt.Errorf("postgres: migration lock: %w", err)
-	}
-	defer func() { _, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(`+lock+`)`) }()
-	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)`); err != nil {
-		return fmt.Errorf("postgres: migrations table: %w", err)
-	}
-	var current int
-	if err := conn.QueryRow(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
-		return fmt.Errorf("postgres: read schema version: %w", err)
-	}
-	for _, name := range names {
-		base := strings.TrimPrefix(name, "migrations/")
-		v, err := strconv.Atoi(strings.SplitN(base, "_", 2)[0])
-		if err != nil {
-			return fmt.Errorf("postgres: migration %s: name must start with a number", name)
-		}
-		if v <= current {
-			continue
-		}
-		body, err := migrations.ReadFile(name)
-		if err != nil {
-			return fmt.Errorf("postgres: read %s: %w", name, err)
-		}
-		err = pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx, string(body)); err != nil {
-				return err
-			}
-			_, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, v)
-			return err
-		})
-		if err != nil {
-			return fmt.Errorf("postgres: migration %s: %w", name, err)
-		}
 	}
 	return nil
 }
@@ -130,8 +146,8 @@ func (s *Store) AppendAudit(ctx context.Context, r store.AuditRow) error {
 // writer serializes appenders across connections and replicas.
 func (s *Store) AppendAuditNext(ctx context.Context, writer string, build func(seq uint64, prev string) (store.AuditRow, error)) (store.AuditRow, error) {
 	var out store.AuditRow
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('opsward:audit:' || $1, 0))`, writer); err != nil {
+	err := pgx.BeginTxFunc(ctx, s.pool, readCommitted, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('opsward:audit:' || current_schema() || ':' || $1, 0))`, writer); err != nil {
 			return err
 		}
 		var head int64
