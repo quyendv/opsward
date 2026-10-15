@@ -17,6 +17,10 @@ type fakeSource struct {
 	err      error
 	profiles []string
 	calls    []string
+
+	events     []capability.Event
+	logs       *capability.WorkloadLogs
+	logOptions capability.LogOptions
 }
 
 func (f *fakeSource) Workloads(_, profile string) (capability.Workloads, error) {
@@ -27,6 +31,17 @@ func (f *fakeSource) Workloads(_, profile string) (capability.Workloads, error) 
 func (f *fakeSource) GetWorkload(context.Context, capability.WorkloadRef) (*capability.Workload, error) {
 	f.calls = append(f.calls, "get")
 	return f.workload, f.err
+}
+
+func (f *fakeSource) WorkloadEvents(context.Context, capability.WorkloadRef, int) ([]capability.Event, error) {
+	f.calls = append(f.calls, "events")
+	return f.events, f.err
+}
+
+func (f *fakeSource) WorkloadLogs(_ context.Context, _ capability.WorkloadRef, opt capability.LogOptions) (*capability.WorkloadLogs, error) {
+	f.calls = append(f.calls, "logs")
+	f.logOptions = opt
+	return f.logs, f.err
 }
 
 func (f *fakeSource) WorkloadLabels(context.Context, capability.WorkloadRef) (map[string]string, error) {

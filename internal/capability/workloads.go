@@ -5,6 +5,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrNotFound is wrapped by providers when the requested object does not exist.
@@ -59,12 +60,50 @@ type Pod struct {
 	Waiting string `json:"waiting,omitempty"`
 }
 
+// Event is a Kubernetes event about a workload or one of its children.
+type Event struct {
+	Time    time.Time `json:"time"`
+	Type    string    `json:"type"`
+	Reason  string    `json:"reason"`
+	Object  string    `json:"object"` // Kind/name
+	Message string    `json:"message"`
+	Count   int32     `json:"count,omitempty"`
+}
+
+// LogOptions selects which logs WorkloadLogs reads.
+type LogOptions struct {
+	Container  string // empty: every container
+	TailLines  int64
+	Previous   bool  // the container instance before the last restart
+	MaxPods    int   // pods are read in name order; the rest are counted, not read
+	LimitBytes int64 // per container
+}
+
+// ContainerLog is one container's recent output, or why it could not be read.
+type ContainerLog struct {
+	Pod       string   `json:"pod"`
+	Container string   `json:"container"`
+	Lines     []string `json:"lines,omitempty"`
+	Error     string   `json:"error,omitempty"`
+}
+
+// WorkloadLogs is the recent output of a workload's containers.
+type WorkloadLogs struct {
+	Logs        []ContainerLog `json:"logs"`
+	PodsOmitted int            `json:"podsOmitted,omitempty"`
+}
+
 // Workloads reads workloads in one cluster with one profile's credentials.
 type Workloads interface {
 	GetWorkload(ctx context.Context, ref WorkloadRef) (*Workload, error)
 	// WorkloadLabels reads only the workload's labels, in one request. It runs before
 	// authorization, so it must not cost more than that.
 	WorkloadLabels(ctx context.Context, ref WorkloadRef) (map[string]string, error)
+	// WorkloadEvents returns events of the workload, of ReplicaSets it controls and of
+	// its pods, newest first, at most limit.
+	WorkloadEvents(ctx context.Context, ref WorkloadRef, limit int) ([]Event, error)
+	// WorkloadLogs returns recent output of the workload's pods' containers.
+	WorkloadLogs(ctx context.Context, ref WorkloadRef, opt LogOptions) (*WorkloadLogs, error)
 }
 
 // WorkloadSource hands out Workloads for an environment and profile.
