@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-15
+
+First release: a single-user, read-only gateway over MCP stdio.
+
 ### Added
 
 - Repository scaffolding: Go module, lint and format configuration, secret scanning hooks,
@@ -27,3 +31,6 @@ All notable changes to this project are documented here. The format follows
   `query_metrics` and `query_logs`, with PromQL and LogQL confined to the caller's namespace
   and cluster before they are sent.
 - `diagnose_workload`: status, events, failing containers' logs and resource use in one call.
+
+[Unreleased]: https://github.com/quyendv/opsward/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/quyendv/opsward/releases/tag/v0.1.0
