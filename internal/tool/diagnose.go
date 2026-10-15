@@ -17,6 +17,8 @@ const (
 	diagnoseTail     = 50
 	diagnoseLogBytes = 64 << 10
 	diagnoseLogTotal = 256 << 10
+	// diagnoseMetricsBudget bounds the whole metrics part, whatever each request's timeout.
+	diagnoseMetricsBudget = 20 * time.Second
 )
 
 // Diagnosis is diagnose_workload's result. Unavailable names each part that could not be
@@ -81,7 +83,7 @@ func diagnose(ctx context.Context, w capability.Workloads, ms capability.Metrics
 		}
 		logs, err := w.WorkloadLogs(ctx, ref, opt)
 		if err != nil {
-			d.Unavailable["logs"] = err.Error()
+			d.Unavailable["logs."+p.Name] = err.Error()
 			continue
 		}
 		d.Logs = append(d.Logs, logs.Logs...)
@@ -94,14 +96,20 @@ func diagnose(ctx context.Context, w capability.Workloads, ms capability.Metrics
 	} else if pods, err := w.PodNamePattern(ctx, ref); err != nil {
 		d.Unavailable["metrics"] = err.Error()
 	} else {
+		mctx, cancel := context.WithTimeout(ctx, diagnoseMetricsBudget)
+		defer cancel()
 		d.Metrics = map[string]*WorkloadMetricsResult{}
 		for _, metric := range []string{"cpu", "memory"} {
-			r, err := workloadMetrics(ctx, m, ref.Namespace, pods, metric, time.Hour)
+			r, err := workloadMetrics(mctx, m, ref.Namespace, pods, metric, time.Hour)
 			if err != nil {
-				d.Unavailable["metrics."+metric] = err.Error()
-				continue
+				// A backend that failed once (timeout, outage) is not asked again.
+				d.Unavailable["metrics"] = err.Error()
+				break
 			}
 			d.Metrics[metric] = r
+		}
+		if len(d.Metrics) == 0 {
+			d.Metrics = nil
 		}
 	}
 	if len(d.Unavailable) == 0 {

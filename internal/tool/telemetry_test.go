@@ -16,6 +16,7 @@ import (
 type fakeMetrics struct {
 	env, namespace string
 	queries        []capability.MetricsQuery
+	deadlines      []bool
 	fail           *struct {
 		match string
 		err   error
@@ -24,7 +25,9 @@ type fakeMetrics struct {
 
 func (f *fakeMetrics) Metrics(env string) (capability.Metrics, error) { f.env = env; return f, nil }
 
-func (f *fakeMetrics) Query(_ context.Context, ns string, q capability.MetricsQuery) (*capability.MetricsResult, error) {
+func (f *fakeMetrics) Query(ctx context.Context, ns string, q capability.MetricsQuery) (*capability.MetricsResult, error) {
+	_, hasDeadline := ctx.Deadline()
+	f.deadlines = append(f.deadlines, hasDeadline)
 	f.namespace = ns
 	f.queries = append(f.queries, q)
 	if f.fail != nil && strings.Contains(q.Query, f.fail.match) {

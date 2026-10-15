@@ -23,6 +23,7 @@ type fakeSource struct {
 	logOptions capability.LogOptions
 	eventsErr  error
 	eventLimit int
+	logsErr    error
 }
 
 func (f *fakeSource) Workloads(_, profile string) (capability.Workloads, error) {
@@ -47,6 +48,9 @@ func (f *fakeSource) WorkloadEvents(_ context.Context, _ capability.WorkloadRef,
 func (f *fakeSource) WorkloadLogs(_ context.Context, _ capability.WorkloadRef, opt capability.LogOptions) (*capability.WorkloadLogs, error) {
 	f.calls = append(f.calls, "logs")
 	f.logOptions = opt
+	if f.logsErr != nil {
+		return nil, f.logsErr
+	}
 	return f.logs, f.err
 }
 
