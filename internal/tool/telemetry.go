@@ -39,11 +39,14 @@ func window(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// rangeQuery covers the last d with at most pointsPerSeries points.
+// rangeQuery covers the last d with at most pointsPerSeries points: a range [start, end]
+// at step s has d/s+1 points, so the step is d/(points-1), rounded up to a whole second.
 func rangeQuery(query string, d time.Duration) capability.MetricsQuery {
 	end := time.Now().UTC()
-	step := (d + pointsPerSeries - 1) / pointsPerSeries
-	step = step.Round(time.Second)
+	step := (d + pointsPerSeries - 2) / (pointsPerSeries - 1)
+	if r := step % time.Second; r != 0 {
+		step += time.Second - r
+	}
 	if step < time.Second {
 		step = time.Second
 	}

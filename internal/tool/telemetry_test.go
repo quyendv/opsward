@@ -66,7 +66,7 @@ func TestQueryMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := m.queries[1]
-	if !q.Range || q.End.Sub(q.Start) != time.Hour || q.Step != time.Minute {
+	if points := int(q.End.Sub(q.Start)/q.Step) + 1; !q.Range || q.End.Sub(q.Start) != time.Hour || points > 60 {
 		t.Fatalf("range query = %+v", q)
 	}
 	for _, bad := range []string{

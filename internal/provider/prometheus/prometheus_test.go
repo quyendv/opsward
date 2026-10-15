@@ -141,3 +141,32 @@ func TestBackendErrorAndUnknownEnvironment(t *testing.T) {
 		t.Fatalf("after Update: %v", err)
 	}
 }
+
+// An instant query over a range vector (foo[1d]) returns a matrix; it gets the same
+// points cap as a range query, keeping the newest points.
+func TestPointsAreCappedForEveryResult(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"pod":"a"},"values":[`)
+	for i := range 100 {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		v := i
+		if i == 10 {
+			v = 1000 // the maximum is among the dropped points
+		}
+		fmt.Fprintf(&b, `[%d,"%d"]`, 1790000000+i*60, v)
+	}
+	b.WriteString(`]}]}}`)
+	f := &fakeProm{t: t, reply: b.String()}
+	src, done := source(t, f)
+	defer done()
+	res, err := query(t, src, capability.MetricsQuery{Query: "foo[1d]", Time: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := res.Series[0]
+	if len(s.Points) != maxPoints || s.PointsOmitted != 100-maxPoints || s.Last != 99 || s.Points[0].Value != 40 || s.Max != 1000 {
+		t.Fatalf("points %d omitted %d last %v first %v max %v", len(s.Points), s.PointsOmitted, s.Last, s.Points[0].Value, s.Max)
+	}
+}

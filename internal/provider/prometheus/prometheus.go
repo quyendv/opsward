@@ -18,8 +18,12 @@ import (
 	"github.com/quyendv/opsward/internal/provider/httpapi"
 )
 
-// maxSeries bounds the series returned for one query (docs/design/0004).
-const maxSeries = 50
+// Limits from docs/design/0004: an instant query over a range vector (foo[1d]) returns a
+// matrix too, so the points cap applies to every result, not only to range queries.
+const (
+	maxSeries = 50
+	maxPoints = 60
+)
 
 // Options configures the backend.
 type Options struct {
@@ -186,6 +190,10 @@ func series(labels map[string]string, samples []sample) capability.Series {
 		}
 		s.Last = v
 		s.Points = append(s.Points, p)
+	}
+	if n := len(s.Points); n > maxPoints {
+		s.PointsOmitted = n - maxPoints
+		s.Points = s.Points[n-maxPoints:]
 	}
 	return s
 }
