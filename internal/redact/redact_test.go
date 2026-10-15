@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -109,6 +110,47 @@ func TestValueMatchesKeyNamesLoosely(t *testing.T) {
 	for _, k := range []string{"secretName", "tokenTTL"} {
 		if out[k] != "keep" {
 			t.Errorf("%s = %v, want kept", k, out[k])
+		}
+	}
+}
+
+// Log tools return output as an array of lines. A private key spans several lines, so
+// it must be redacted across them, including when the tail window cut off its BEGIN or
+// END line.
+func TestValueRedactsPrivateKeysAcrossLines(t *testing.T) {
+	begin, end := join("-----BEGIN RSA ", "PRIVATE KEY-----"), join("-----END RSA ", "PRIVATE KEY-----")
+	body1, body2 := join("MIIEow", "IBAAKCAQEA0Z3VS5JJcds3xfn"), join("secretbody", "Q2xvdWQgS2V5")
+	for name, lines := range map[string][]any{
+		"whole key":     {"starting", begin, body1, body2, end, "listening on :8080"},
+		"no end line":   {"starting", begin, body1, body2},
+		"no begin line": {body1, body2, end, "listening on :8080"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := Value(map[string]any{"lines": lines}).(map[string]any)["lines"].([]any)
+			joined := fmt.Sprint(out...)
+			if strings.Contains(joined, "MIIEow") || strings.Contains(joined, "secretbody") {
+				t.Fatalf("key material survived: %q", out)
+			}
+			if len(out) != len(lines) {
+				t.Fatalf("line count changed: %d -> %d", len(lines), len(out))
+			}
+			for i, l := range lines {
+				if l == "starting" || l == "listening on :8080" {
+					if out[i] != l {
+						t.Fatalf("ordinary line %d changed: %q", i, out[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestValueLeavesOrdinaryLineArraysAlone(t *testing.T) {
+	lines := []any{"GET /healthz 200", "QmFzZTY0IGlzIG5vdCBhIGtleQ==", "done"}
+	out := Value(lines).([]any)
+	for i := range lines {
+		if out[i] != lines[i] {
+			t.Fatalf("line %d changed: %q", i, out[i])
 		}
 	}
 }
