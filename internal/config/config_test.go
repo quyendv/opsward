@@ -350,3 +350,18 @@ func TestBackendWarningsDoNotNameCredentialPaths(t *testing.T) {
 		t.Fatalf("warnings = %s", w)
 	}
 }
+
+// Issue #12: label names are checked when the configuration is loaded, not at query time.
+func TestBackendLabelNames(t *testing.T) {
+	for _, b := range []string{
+		"\n  metrics: { type: prometheus, url: https://m.example.com, namespaceLabel: k8s.namespace }\n",
+		"\n  logs: { type: loki, url: https://l.example.com, clusterLabel: \"1cluster\" }\n",
+	} {
+		if _, err := Parse([]byte(withBackends(minimal, b))); err == nil || !strings.Contains(err.Error(), "label name") {
+			t.Errorf("%s: err = %v", b, err)
+		}
+	}
+	if _, err := Parse([]byte(withBackends(minimal, "\n  metrics: { type: prometheus, url: https://m.example.com, namespaceLabel: k8s_namespace_name }\n"))); err != nil {
+		t.Fatalf("valid label: %v", err)
+	}
+}

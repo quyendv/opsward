@@ -104,3 +104,26 @@ func TestGetTrustsTheConfiguredCA(t *testing.T) {
 		t.Fatal("an unknown CA must be refused without caFile")
 	}
 }
+
+// Issue #17: long queries go in a POST form body instead of the URL.
+func TestPostSendsAForm(t *testing.T) {
+	var method, ctype, query, auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, ctype, auth = r.Method, r.Header.Get("Content-Type"), r.Header.Get("Authorization")
+		_ = r.ParseForm()
+		query = r.PostForm.Get("query")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	c, err := New(Options{URL: srv.URL, BearerTokenFile: writeFile(t, "tok")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("x", 9000)
+	if _, err := c.Post(context.Background(), "/api/v1/query", url.Values{"query": {long}}); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPost || ctype != "application/x-www-form-urlencoded" || query != long || auth != "Bearer tok" {
+		t.Fatalf("method %s, content type %s, query length %d, auth %q", method, ctype, len(query), auth)
+	}
+}

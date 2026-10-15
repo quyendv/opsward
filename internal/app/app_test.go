@@ -297,7 +297,7 @@ type fakeBackend struct {
 
 func (b *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	b.mu.Lock()
-	b.queries = append(b.queries, r.URL.Query().Get("query"))
+	b.queries = append(b.queries, r.FormValue("query"))
 	b.mu.Unlock()
 	if strings.HasPrefix(r.URL.Path, "/loki/") {
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"streams","result":[]}}`))

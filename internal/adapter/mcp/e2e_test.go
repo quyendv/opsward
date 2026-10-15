@@ -205,7 +205,7 @@ func TestEndToEndMetricsAndLogs(t *testing.T) {
 	ctx := context.Background()
 	var received []string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = append(received, r.URL.Query().Get("query"))
+		received = append(received, r.FormValue("query"))
 		if strings.HasPrefix(r.URL.Path, "/loki/") {
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"streams","result":[{"stream":{"pod":"api-a"},"values":[["1790000000000000000","boom"]]}]}}`))
 			return

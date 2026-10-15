@@ -89,3 +89,30 @@ func TestDiagnoseFailsWhenTheWorkloadCannotBeRead(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// Issue #13: the metrics part has one deadline and stops at its first error, and log
+// errors are kept per pod.
+func TestDiagnoseBoundsMetricsAndKeepsEveryLogError(t *testing.T) {
+	w := failingWorkload()
+	w.Pods = append(w.Pods, capability.Pod{Name: "api-bad2", Phase: "Running", Waiting: "CrashLoopBackOff"})
+	ws := &fakeSource{workload: w, logsErr: errors.New("logs forbidden")}
+	m := &fakeMetrics{fail: &struct {
+		match string
+		err   error
+	}{"container_cpu_usage_seconds_total", errors.New("backend timeout")}}
+	tl, _ := DiagnoseWorkload(ws, m)
+	_, out, err := runTool(t, tl, diagnoseArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := out.(*Diagnosis)
+	if len(m.queries) != 1 || !m.deadlines[0] {
+		t.Fatalf("metrics queries = %d (deadline %v); want one, under a deadline, then stop", len(m.queries), m.deadlines)
+	}
+	if !strings.Contains(d.Unavailable["metrics"], "backend timeout") {
+		t.Fatalf("unavailable = %v", d.Unavailable)
+	}
+	if d.Unavailable["logs.api-bad"] == "" || d.Unavailable["logs.api-bad2"] == "" {
+		t.Fatalf("log errors per pod: %v", d.Unavailable)
+	}
+}
