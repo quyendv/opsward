@@ -200,7 +200,9 @@ one once. Appending to an audit chain takes a transaction-scoped advisory lock o
 chain's writer ID, which gives replicas sharing a chain the same ordering the SQLite store
 gets from its single writer.
 
-Both stores pass one conformance test suite. CI runs it against a Postgres service; locally
+Times are stored as integer nanoseconds in both stores, because the audit hash covers
+them and Postgres timestamps keep only microseconds. Both stores pass one conformance test
+suite. CI runs it against a Postgres service and fails if the database is missing; locally
 it runs when `OPSWARD_TEST_POSTGRES_DSN` is set.
 
 ## Consequences

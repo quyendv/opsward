@@ -11,6 +11,15 @@ mise run setup   # installs pinned tools and the pre-commit and pre-push hooks
 
 Before pushing, `mise run check` must pass. It is exactly what CI runs.
 
+The PostgreSQL store tests run when `OPSWARD_TEST_POSTGRES_DSN` names a database in which
+they may create and drop schemas; without it they are skipped locally, and CI provides one:
+
+```sh
+docker run -d --name opsward-pg -p 127.0.0.1:55432:5432 \
+  -e POSTGRES_USER=opsward -e POSTGRES_PASSWORD=opsward -e POSTGRES_DB=opsward postgres:18-alpine
+export OPSWARD_TEST_POSTGRES_DSN='postgres://opsward:opsward@127.0.0.1:55432/opsward?sslmode=disable'
+```
+
 ## Pull requests
 
 - Read the invariants in [AGENTS.md](AGENTS.md). A change that relaxes one needs a design

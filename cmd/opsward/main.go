@@ -19,7 +19,6 @@ import (
 	"github.com/quyendv/opsward/internal/app"
 	"github.com/quyendv/opsward/internal/audit"
 	"github.com/quyendv/opsward/internal/config"
-	"github.com/quyendv/opsward/internal/store/sqlite"
 	"github.com/quyendv/opsward/internal/version"
 )
 
@@ -173,10 +172,12 @@ func verify(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	// Opening would create a missing database, and an empty one verifies trivially.
-	if _, err := os.Stat(cfg.Storage.Path); err != nil {
-		return fmt.Errorf("no database at %s: %w", cfg.Storage.Path, err)
+	if cfg.Storage.Type == config.StorageSQLite {
+		if _, err := os.Stat(cfg.Storage.Path); err != nil {
+			return fmt.Errorf("no database at %s: %w", cfg.Storage.Path, err)
+		}
 	}
-	st, err := sqlite.Open(ctx, cfg.Storage.Path)
+	st, err := app.OpenStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -186,7 +187,7 @@ func verify(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	if len(writers) == 0 {
-		return fmt.Errorf("no audit records in %s", cfg.Storage.Path)
+		return errors.New("no audit records in the store")
 	}
 	for _, w := range writers {
 		records, err := audit.Load(ctx, st, w)

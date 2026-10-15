@@ -16,6 +16,8 @@ All notable changes to this project are documented here. The format follows
   resource URL as audience, with claim groups optionally prefixed; RFC 9728 protected
   resource metadata so that MCP clients discover the issuer.
 - Internal groups (`identity.groups`), applied on reload.
+- PostgreSQL store (`storage.type: postgres`, DSN by file or environment variable) for more
+  than one replica: migrations under an advisory lock, one audit chain shared by replicas.
 - Audit records name the credential behind a call (`principal.credential`).
 
 ## [0.1.0] - 2026-10-15

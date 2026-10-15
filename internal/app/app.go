@@ -28,6 +28,7 @@ import (
 	"github.com/quyendv/opsward/internal/provider/loki"
 	"github.com/quyendv/opsward/internal/provider/prometheus"
 	"github.com/quyendv/opsward/internal/store"
+	"github.com/quyendv/opsward/internal/store/postgres"
 	"github.com/quyendv/opsward/internal/store/sqlite"
 	"github.com/quyendv/opsward/internal/tool"
 )
@@ -327,7 +328,7 @@ func hash(b []byte) string {
 // openAudit opens the store and an audit writer on it. The closers release both, in
 // reverse order.
 func openAudit(ctx context.Context, cfg *config.Config, opt Options) (store.Store, *audit.Writer, []io.Closer, error) {
-	st, err := sqlite.Open(ctx, cfg.Storage.Path)
+	st, err := OpenStore(ctx, cfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -350,6 +351,18 @@ func openAudit(ctx context.Context, cfg *config.Config, opt Options) (store.Stor
 		return nil, nil, nil, err
 	}
 	return st, w, closers, nil
+}
+
+// OpenStore opens the configured store, applying pending migrations.
+func OpenStore(ctx context.Context, cfg *config.Config) (store.Store, error) {
+	if cfg.Storage.Type == config.StoragePostgres {
+		dsn, err := cfg.Storage.DSN.Resolve("storage.dsn")
+		if err != nil {
+			return nil, err
+		}
+		return postgres.Open(ctx, dsn)
+	}
+	return sqlite.Open(ctx, cfg.Storage.Path)
 }
 
 func openStream(s config.Stream, opt Options, closers *[]io.Closer) (io.Writer, error) {

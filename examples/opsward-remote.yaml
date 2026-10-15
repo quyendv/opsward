@@ -30,6 +30,9 @@ server:
 storage:
   type: sqlite
   path: /var/lib/opsward/opsward.db
+  # For more than one replica:
+  # type: postgres
+  # dsn: { file: /etc/opsward/postgres-dsn }   # or { env: OPSWARD_POSTGRES_DSN }
 
 audit:
   stream: { type: stdout }

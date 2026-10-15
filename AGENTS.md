@@ -24,7 +24,7 @@ internal/core/               vocabulary shared by engine, policy and audit
 internal/engine/             the pipeline: validate, authorize, run, redact, audit
 internal/policy/             roles, bindings, CEL conditions
 internal/audit/              hash-chained records, stream, verification, retention
-internal/store/              persistence interface; sqlite/ implements it, storetest/ is the shared suite
+internal/store/              persistence interface; sqlite/ and postgres/ implement it, storetest/ is the shared suite
 internal/identity/           bearer tokens to principals: API tokens, internal groups
 internal/redact/             credential-shaped content removal
 internal/capability/         backend-neutral interfaces tools depend on
