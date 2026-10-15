@@ -1,4 +1,4 @@
-default_install_hook_types: [pre-commit, pre-push]
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
 default_stages: [pre-commit]
 
 repos:
@@ -26,6 +26,20 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: private-terms
+        name: private terms (staged changes, identity)
+        language: system
+        entry: scripts/private-terms.sh staged
+        pass_filenames: false
+        always_run: true
+
+      - id: private-terms-message
+        name: private terms (commit message)
+        language: system
+        entry: scripts/private-terms.sh message
+        stages: [commit-msg]
+        always_run: true
+
       - id: go-mod-tidy
         name: go mod tidy
         language: system
@@ -51,6 +65,14 @@ repos:
         name: gitleaks (unpushed commits)
         language: system
         entry: scripts/gitleaks-pre-push.sh
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+
+      - id: private-terms-push
+        name: private terms (unpushed commits)
+        language: system
+        entry: scripts/private-terms.sh push
         stages: [pre-push]
         pass_filenames: false
         always_run: true

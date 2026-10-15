@@ -78,6 +78,10 @@ These are design decisions, not style preferences. Changing one needs a design n
   cluster names, internal URLs or incident details in code, tests, docs or commit messages.
   Examples use `example.com`, `cluster-a`, `team-a`. Teach the shape of a value, not a value.
 - English for everything written to files.
+- Maintainers list private terms (organization names, hostnames, addresses) as regexes in
+  `.local/private-terms.txt`; `scripts/private-terms.sh` blocks them in staged changes,
+  commit messages, identities and unpushed commits. Without the file the check is skipped;
+  `git config opsward.privateTermsRequired true` makes a missing file an error.
 - `docs/` holds decided project information only. Discussion, open questions and drafts live
   in `.local/`, which is git-ignored; promote a conclusion into `docs/` once it is decided.
 - Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `test:`, `refactor:`).
