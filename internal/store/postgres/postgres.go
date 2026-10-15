@@ -82,6 +82,24 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("postgres: list migrations: %w", err)
 	}
 	sort.Strings(names)
+	latest, err := version(names[len(names)-1])
+	if err != nil {
+		return fmt.Errorf("postgres: %w", err)
+	}
+	// Up to date: nothing to create, so a runtime role needs no CREATE privilege.
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `SELECT to_regclass('schema_migrations') IS NOT NULL`).Scan(&exists); err != nil {
+		return fmt.Errorf("postgres: read schema version: %w", err)
+	}
+	if exists {
+		var current int
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
+			return fmt.Errorf("postgres: read schema version: %w", err)
+		}
+		if current >= latest {
+			return nil
+		}
+	}
 	err = pgx.BeginTxFunc(ctx, s.pool, readCommitted, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('opsward:migrate:' || current_schema(), 0))`); err != nil {
 			return fmt.Errorf("lock: %w", err)
@@ -94,10 +112,9 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("read schema version: %w", err)
 		}
 		for _, name := range names {
-			base := strings.TrimPrefix(name, "migrations/")
-			v, err := strconv.Atoi(strings.SplitN(base, "_", 2)[0])
+			v, err := version(name)
 			if err != nil {
-				return fmt.Errorf("migration %s: name must start with a number", name)
+				return err
 			}
 			if v <= current {
 				continue
@@ -119,6 +136,16 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("postgres: %w", err)
 	}
 	return nil
+}
+
+// version is the number a migration file name starts with.
+func version(name string) (int, error) {
+	base := strings.TrimPrefix(name, "migrations/")
+	v, err := strconv.Atoi(strings.SplitN(base, "_", 2)[0])
+	if err != nil {
+		return 0, fmt.Errorf("migration %s: name must start with a number", name)
+	}
+	return v, nil
 }
 
 const auditColumns = `writer, seq, id, time_ns, phase, hash, prev, body`
