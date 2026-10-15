@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	cel.dev/cel-go v0.32.0
+	github.com/google/uuid v1.6.0
 	go.yaml.in/yaml/v3 v3.0.4
 	modernc.org/sqlite v1.60.1
 )
@@ -12,7 +13,6 @@ require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
