@@ -10,7 +10,7 @@ is not raw API access, which many MCP servers already offer, but **typed operati
 per-principal policy, audit, redaction, and a write path that proposes changes instead of
 making them**.
 
-Status: **pre-alpha.** Nothing is stable. Read-only workload tools and knowledge packs work end to end over MCP stdio.
+Status: **pre-alpha.** Nothing is stable. Read-only workload, metrics and logs tools and knowledge packs work end to end over MCP stdio.
 Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0001](docs/design/0001-architecture.md) for the architecture,
 [0002](docs/design/0002-identity-policy-storage.md) for identity, policy and storage.
@@ -26,7 +26,8 @@ internal/audit/              hash-chained records, stream, verification, retenti
 internal/store/              persistence interface; sqlite/ implements it
 internal/redact/             credential-shaped content removal
 internal/capability/         backend-neutral interfaces tools depend on
-internal/provider/<name>/    backend implementations (kubernetes)
+internal/provider/<name>/    backend implementations (kubernetes, prometheus, loki; httpapi is their shared client)
+internal/confine/            PromQL and LogQL rewriting that keeps queries inside a scope
 internal/tool/               the agent's vocabulary
 internal/knowledge/          knowledge packs; builtin/ holds the generic pack
 internal/adapter/<protocol>/ the only place protocol SDKs appear (mcp)

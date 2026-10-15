@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -194,5 +196,71 @@ func TestEndToEndKnowledge(t *testing.T) {
 	}})
 	if err != nil || res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, "fake logs") {
 		t.Fatalf("logs = %+v, %v", res, err)
+	}
+}
+
+// TestEndToEndMetricsAndLogs: backend tools through the real pipeline, with queries
+// confined before they reach the backend and out-of-scope queries refused.
+func TestEndToEndMetricsAndLogs(t *testing.T) {
+	ctx := context.Background()
+	var received []string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received = append(received, r.URL.Query().Get("query"))
+		if strings.HasPrefix(r.URL.Path, "/loki/") {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"streams","result":[{"stream":{"pod":"api-a"},"values":[["1790000000000000000","boom"]]}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"pod":"api-a"},"value":[1790000000,"0.5"]}]}}`))
+	}))
+	defer backend.Close()
+	doc := strings.Replace(e2eConfig, "%DB%", filepath.Join(t.TempDir(), "opsward.db"), 1)
+	doc = strings.Replace(doc, "providers:\n", "providers:\n  metrics: { type: prometheus, url: "+backend.URL+" }\n  logs: { type: loki, url: "+backend.URL+" }\n", 1)
+	doc = strings.Replace(doc, "      scope: { workloads: [api] }\n", "", 1) // namespace-wide calls need an unscoped binding
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.Open(ctx, cfg, app.Options{
+		Stderr:        &bytes.Buffer{},
+		ClientFactory: func(kubernetes.Profile) (k8s.Interface, error) { return fake.NewClientset(), nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close() }()
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := mcpadapter.NewServer(a.Engine, a.Principal).Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "e2e", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cs.Close() }()
+	call := func(name string, args map[string]any) (bool, string) {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*mcp.TextContent).Text
+	}
+
+	isErr, text := call("query_metrics", map[string]any{"environment": "staging", "namespace": "team-a-shop", "query": "up"})
+	if isErr || !strings.Contains(text, `"last": 0.5`) || !strings.Contains(received[0], `namespace="team-a-shop"`) {
+		t.Fatalf("query_metrics: %v %s; backend got %q", isErr, text, received)
+	}
+	before := len(received)
+	isErr, text = call("query_metrics", map[string]any{"environment": "staging", "namespace": "team-a-shop", "query": `up{namespace="kube-system"}`})
+	if !isErr || !strings.Contains(text, "outside the call's scope") || len(received) != before {
+		t.Fatalf("out-of-scope query: %v %s (backend requests %d → %d)", isErr, text, before, len(received))
+	}
+	isErr, text = call("query_logs", map[string]any{"environment": "staging", "namespace": "team-a-shop", "query": `{app="api"}`})
+	if isErr || !strings.Contains(text, "boom") {
+		t.Fatalf("query_logs: %v %s", isErr, text)
+	}
+	isErr, text = call("query_logs", map[string]any{"environment": "staging", "namespace": "team-a-shop", "query": `rate({app="api"}[5m])`})
+	if !isErr || !strings.Contains(text, "only log queries") {
+		t.Fatalf("metric LogQL: %v %s", isErr, text)
 	}
 }

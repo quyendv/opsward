@@ -2,7 +2,7 @@
 
 **A guarded gateway that lets AI agents operate your infrastructure, within the permissions you grant.**
 
-> Status: pre-alpha. Read-only workload tools and knowledge packs work over MCP stdio; nothing is stable.
+> Status: pre-alpha. Read-only workload, metrics and logs tools and knowledge packs work over MCP stdio; nothing is stable.
 
 ## Why
 
@@ -37,7 +37,9 @@ stdio MCP server in your agent client. Every call is audited to the SQLite file 
 `storage.path` and to stderr; `opsward audit verify --config <file>` checks the chain.
 
 Tools: `get_workload_status`, `list_workload_events`, `list_workload_logs`,
-`search_knowledge`, `get_knowledge`. Results that match a knowledge document carry its
+`diagnose_workload`, `search_knowledge`, `get_knowledge`; with a Prometheus-compatible
+metrics backend also `get_workload_metrics` and `query_metrics`, and with Loki `query_logs`.
+Free-form queries are rewritten so that they cannot leave the caller's namespace. Results that match a knowledge document carry its
 summary as a note. Edits to the configuration file apply without a restart; after editing
 knowledge documents, send `SIGHUP`.
 

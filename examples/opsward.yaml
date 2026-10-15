@@ -23,6 +23,17 @@ providers:
           # pods/portforward.
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
 
+  # Optional query backends; their tools appear only when configured. Changing these
+  # sections needs a restart.
+  # metrics:
+  #   type: prometheus                 # Prometheus, VictoriaMetrics, Mimir, Thanos
+  #   url: https://metrics.example.com
+  #   clusterLabel: cluster            # omit if the backend holds one cluster
+  #   auth: { bearerTokenFile: /etc/opsward/metrics-token }
+  # logs:
+  #   type: loki
+  #   url: https://logs.example.com
+
 environments:
   - name: staging
     cluster: cluster-a
