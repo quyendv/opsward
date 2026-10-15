@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -277,5 +278,70 @@ func TestServeHTTPReloadsTheCertificate(t *testing.T) {
 	writeCert(t, dir, "second")
 	if got := peer(); got != "second" {
 		t.Fatalf("after rotation, certificate = %s", got)
+	}
+}
+
+func TestHTTPResourceMetadata(t *testing.T) {
+	srv := httptest.NewServer(NewHTTPHandler(httpEngine(t, &nopAuditor{}), HTTPOptions{
+		Authenticate: tokens(nil),
+		Resource: &Resource{
+			URL: "https://opsward.example.com/mcp", AuthorizationServers: []string{"https://id.example.com"}, Scopes: []string{"opsward"},
+		},
+	}))
+	defer srv.Close()
+	for _, path := range []string{"/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"} {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m struct {
+			Resource             string   `json:"resource"`
+			AuthorizationServers []string `json:"authorization_servers"`
+			Scopes               []string `json:"scopes_supported"`
+			Methods              []string `json:"bearer_methods_supported"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&m)
+		_ = resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK || m.Resource != "https://opsward.example.com/mcp" ||
+			len(m.AuthorizationServers) != 1 || m.AuthorizationServers[0] != "https://id.example.com" || len(m.Scopes) != 1 || len(m.Methods) != 1 || m.Methods[0] != "header" {
+			t.Fatalf("%s: %d %+v %v", path, resp.StatusCode, m, err)
+		}
+	}
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/mcp", strings.NewReader("{}"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	want := `Bearer resource_metadata="https://opsward.example.com/.well-known/oauth-protected-resource/mcp", scope="opsward"`
+	if got := resp.Header.Get("WWW-Authenticate"); resp.StatusCode != http.StatusUnauthorized || got != want {
+		t.Fatalf("401 challenge = %q, want %q", got, want)
+	}
+}
+
+func TestHTTPNoResourceMetadataWithoutOIDC(t *testing.T) {
+	srv := httptest.NewServer(NewHTTPHandler(httpEngine(t, &nopAuditor{}), HTTPOptions{Authenticate: tokens(nil)}))
+	defer srv.Close()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/.well-known/oauth-protected-resource", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("metadata without OIDC = %d", resp.StatusCode)
+	}
+}
+
+func TestMetadataURL(t *testing.T) {
+	for resource, want := range map[string]string{
+		"https://opsward.example.com/mcp":       "https://opsward.example.com/.well-known/oauth-protected-resource/mcp",
+		"https://example.com/tools/opsward/mcp": "https://example.com/.well-known/oauth-protected-resource/tools/opsward/mcp",
+		"http://127.0.0.1:8080/mcp":             "http://127.0.0.1:8080/.well-known/oauth-protected-resource/mcp",
+	} {
+		if got := metadataURL(resource); got != want {
+			t.Errorf("metadataURL(%s) = %s, want %s", resource, got, want)
+		}
 	}
 }

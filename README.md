@@ -41,7 +41,8 @@ stdio MCP server in your agent client. Every call is audited to the SQLite file 
 To share one Opsward with a team, run it in remote mode
 ([examples/opsward-remote.yaml](examples/opsward-remote.yaml)): it serves MCP over HTTP at
 `/mcp`, and each person or pipeline authenticates with an API token from
-`opsward token create`, sent as `Authorization: Bearer <token>`. For example, in Claude Code:
+`opsward token create`, sent as `Authorization: Bearer <token>`, or signs in through an
+OpenID Connect issuer configured in `identity.oidc`. With an API token in Claude Code:
 
 ```sh
 claude mcp add --transport http opsward https://opsward.example.com/mcp \

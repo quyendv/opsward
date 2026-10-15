@@ -62,6 +62,7 @@ func (c *Config) validateIdentity(fail func(string, ...any)) {
 	default:
 		fail("identity.mode: unknown mode %q; use %s or %s", id.Mode, ModeLocal, ModeRemote)
 	}
+	c.validateOIDC(fail)
 	if d := id.APITokens.MaxTTL.Std(); d <= 0 || d > LimitAPITokenMaxTTL {
 		fail("identity.apiTokens.maxTTL must be positive and at most 3650d")
 	}

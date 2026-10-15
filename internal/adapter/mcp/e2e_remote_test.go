@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/quyendv/opsward/internal/audit"
 	"github.com/quyendv/opsward/internal/config"
 	"github.com/quyendv/opsward/internal/identity"
+	"github.com/quyendv/opsward/internal/identity/oidctest"
 	"github.com/quyendv/opsward/internal/provider/kubernetes"
 )
 
@@ -128,5 +130,61 @@ func TestEndToEndRemote(t *testing.T) {
 	}
 	if records[1].Principal.Subject != "bob@example.com" || records[1].Outcome.Status != audit.StatusDenied {
 		t.Fatalf("bob's record = %+v", records[1])
+	}
+}
+
+// TestEndToEndOIDC: an access token from the issuer, its groups claim prefixed, reaches
+// a tool; the principal is audited with credential "oidc".
+func TestEndToEndOIDC(t *testing.T) {
+	ctx := context.Background()
+	is := oidctest.New(t)
+	doc := strings.Replace(e2eRemoteConfig, "%DB%", filepath.Join(t.TempDir(), "o.db"), 1)
+	doc = strings.Replace(doc, "  mode: remote\n", "  mode: remote\n  oidc: { issuer: "+is.URL+", groupsPrefix: \"oidc:\" }\n", 1)
+	doc = strings.Replace(doc, "  http: { address: 127.0.0.1:0 }\n", "  http: { address: 127.0.0.1:0, publicURL: https://opsward.example.com }\n", 1)
+	doc = strings.Replace(doc, "      subjects: { groups: [team-a] }\n", "      subjects: { groups: [\"oidc:team-a\"] }\n", 1)
+	doc = strings.Replace(doc, "  groups:\n    team-a: [alice@example.com]\n", "", 1)
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := fake.NewClientset(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop"}})
+	a, err := app.Open(ctx, cfg, app.Options{
+		Stderr:        &bytes.Buffer{},
+		ClientFactory: func(kubernetes.Profile) (k8s.Interface, error) { return cluster, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close() }()
+	dctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go a.Identity.Discover(dctx)
+	srv := httptest.NewServer(mcpadapter.NewHTTPHandler(a.Engine, mcpadapter.HTTPOptions{Authenticate: a.Identity.Authenticate}))
+	defer srv.Close()
+
+	token := is.Sign(is.Claims("https://opsward.example.com/mcp", nil))
+	var res *mcp.CallToolResult
+	for range 100 { // discovery runs in the background
+		tr := &mcp.StreamableClientTransport{Endpoint: srv.URL + "/mcp", HTTPClient: &http.Client{Transport: bearerTransport{token}}}
+		cs, cerr := mcp.NewClient(&mcp.Implementation{Name: "e2e", Version: "0"}, nil).Connect(ctx, tr, nil)
+		if cerr != nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "get_workload_status", Arguments: map[string]any{
+			"environment": "staging", "namespace": "shop", "kind": "Deployment", "name": "api",
+		}})
+		_ = cs.Close()
+		break
+	}
+	if res == nil || err != nil || res.IsError {
+		t.Fatalf("call = %+v, %v", res, err)
+	}
+	records, err := audit.Load(ctx, a.Store, "test")
+	if err != nil || len(records) != 1 {
+		t.Fatalf("records = %d, %v", len(records), err)
+	}
+	if p := records[0].Principal; p.Subject != "alice@example.com" || p.Credential != "oidc" || !slices.Contains(p.Groups, "oidc:team-a") {
+		t.Fatalf("principal = %+v", p)
 	}
 }

@@ -35,10 +35,11 @@ identity:
     maxTTL: 365d               # default; a token can never be created for longer
   oidc:                        # optional, M5
     issuer: https://id.example.com
-    audience: opsward
+    audience: https://opsward.example.com/mcp   # default: publicURL + /mcp
     subjectClaim: email
     groupsClaim: groups
     groupsPrefix: "oidc:"
+    scopes: [opsward]          # optional; advertised to clients
   groups:                      # internal groups, reloadable
     platform: [alice@example.com, bob@example.com]
 
@@ -142,20 +143,30 @@ can be revoked without touching the others.
 ### OIDC
 
 Opsward is an OAuth resource server (MCP authorization, RFC 9728). It validates access
-tokens issued by `identity.oidc.issuer`:
+tokens issued by `identity.oidc.issuer`, which must be JWTs; an issuer that hands out
+opaque access tokens needs a broker in front that issues JWTs:
 
-- signature against the issuer's published keys, found by discovery and refreshed when an
-  unknown key ID appears;
-- `iss` equal to the issuer, `aud` containing `audience`, `exp` in the future, with one
-  minute of clock skew;
+- signature against the issuer's published keys, found by discovery. The keys are fetched
+  again only for a key ID not held yet, and at most once every 30 seconds: a forged token
+  must not make Opsward call the issuer on every request;
+- `iss` equal to the issuer, `aud` containing `audience`, `exp` in the future (`nbf` is
+  allowed five minutes of clock skew);
 - when `subjectClaim` is `email`, `email_verified` must be `true`.
 
-The issuer is discovered at start-up. If it cannot be reached, Opsward starts anyway and
-retries in the background; until discovery succeeds OIDC tokens are rejected and API tokens
-work.
+`audience` defaults to the MCP resource URL, `publicURL` + `/mcp`, which MCP clients send
+as the resource indicator (RFC 8707) when they request a token. Binding tokens to that
+audience keeps tokens issued for other applications of the same issuer, ID tokens
+included, from being accepted.
 
-Clients find the issuer through `/.well-known/oauth-protected-resource`, which names
-`publicURL` + `/mcp` as the resource and the issuer as its only authorization server.
+The issuer is discovered at start-up. If it cannot be reached, Opsward starts anyway and
+retries in the background, waiting from one second up to a minute between attempts; until
+discovery succeeds OIDC tokens are rejected and API tokens work.
+
+Clients find the issuer through `/.well-known/oauth-protected-resource/mcp` (also served
+without the `/mcp` suffix), which names `publicURL` + `/mcp` as the resource, the issuer as
+its only authorization server, and `scopes` when set. Every `401` carries
+`WWW-Authenticate: Bearer resource_metadata="…"` pointing there. Without OIDC neither the
+metadata nor the parameter is served.
 Registering the client is between the client and the issuer: a pre-registered client ID,
 Client ID Metadata Documents or Dynamic Client Registration, whichever both support. Opsward
 does not register clients, issue tokens or proxy an authorization server (0002). A client
@@ -166,8 +177,16 @@ that can do none of these can send an API token as a static header.
 A principal's groups are the union of:
 
 1. the token's groups: those given at `opsward token create`, or the `groupsClaim` values of
-   an OIDC token, each prefixed with `groupsPrefix`;
+   an OIDC token, each prefixed with `groupsPrefix`, `oidc:` unless set. At many issuers
+   people can create groups themselves; without a prefix, a group named `platform` there
+   would be the internal group `platform`. Set `groupsPrefix: ""` only for an issuer whose
+   groups only administrators manage;
 2. the internal groups whose member list contains the subject, from `identity.groups`.
+
+A binding without `subjects` applies to every authenticated principal. With OIDC that is
+everyone the issuer will issue a token for this audience, which at a multi-tenant issuer or
+one that registers clients dynamically can be more people than intended; name subjects or
+groups in such bindings.
 
 Subjects and group names are compared exactly. `identity.groups` is the one part of
 `identity` that a reload applies, because membership changes far more often than how
@@ -184,13 +203,23 @@ storage:
   dsn: { file: /etc/opsward/postgres-dsn }   # or { env: OPSWARD_POSTGRES_DSN }
 ```
 
-The DSN may contain a password, so it is referenced, never inline. Migrations are embedded
-and applied at start-up under an advisory lock, so replicas starting together apply each
-one once. Appending to an audit chain takes a transaction-scoped advisory lock on the
-chain's writer ID, which gives replicas sharing a chain the same ordering the SQLite store
-gets from its single writer.
+The DSN may contain a password, so it is referenced, never inline. Use
+`sslmode=verify-full` for a database across a network: the store holds the API token
+hashes that authentication trusts.
 
-Both stores pass one conformance test suite. CI runs it against a Postgres service; locally
+Migrations are embedded and applied at start-up in one transaction under an advisory lock,
+so replicas starting together apply each one once. Appending to an audit chain takes a
+transaction-scoped advisory lock on the chain's writer ID, in a READ COMMITTED transaction
+whatever the database's default, which gives replicas sharing a chain the same ordering the
+SQLite store gets from its single writer.
+
+Sessions get `idle_in_transaction_session_timeout` and TCP keepalive settings unless the
+DSN sets its own, so that a replica that dies inside a transaction releases its locks in
+seconds rather than when the operating system's keepalive notices, about two hours later.
+
+Times are stored as integer nanoseconds in both stores, because the audit hash covers
+them and Postgres timestamps keep only microseconds. Both stores pass one conformance test
+suite. CI runs it against a Postgres service and fails if the database is missing; locally
 it runs when `OPSWARD_TEST_POSTGRES_DSN` is set.
 
 ## Consequences

@@ -28,6 +28,7 @@ import (
 	"github.com/quyendv/opsward/internal/provider/loki"
 	"github.com/quyendv/opsward/internal/provider/prometheus"
 	"github.com/quyendv/opsward/internal/store"
+	"github.com/quyendv/opsward/internal/store/postgres"
 	"github.com/quyendv/opsward/internal/store/sqlite"
 	"github.com/quyendv/opsward/internal/tool"
 )
@@ -187,7 +188,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 		return nil, err
 	}
 	a.Store, a.Audit, a.closers = st, w, closers
-	a.Identity = identity.New(identity.Options{Store: st, Groups: cfg.Identity.Groups, Logger: opt.Logger})
+	a.Identity = identity.New(identity.Options{Store: st, Groups: cfg.Identity.Groups, Logger: opt.Logger, OIDC: oidcOptions(cfg)})
 
 	a.Engine, err = engine.New(engine.Options{
 		Tools: a.tools, Environments: d.envs, Authorizer: d.policy, Auditor: w, Annotator: a.lib, Logger: opt.Logger,
@@ -327,7 +328,7 @@ func hash(b []byte) string {
 // openAudit opens the store and an audit writer on it. The closers release both, in
 // reverse order.
 func openAudit(ctx context.Context, cfg *config.Config, opt Options) (store.Store, *audit.Writer, []io.Closer, error) {
-	st, err := sqlite.Open(ctx, cfg.Storage.Path)
+	st, err := OpenStore(ctx, cfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -350,6 +351,18 @@ func openAudit(ctx context.Context, cfg *config.Config, opt Options) (store.Stor
 		return nil, nil, nil, err
 	}
 	return st, w, closers, nil
+}
+
+// OpenStore opens the configured store, applying pending migrations.
+func OpenStore(ctx context.Context, cfg *config.Config) (store.Store, error) {
+	if cfg.Storage.Type == config.StoragePostgres {
+		dsn, err := cfg.Storage.DSN.Resolve("storage.dsn")
+		if err != nil {
+			return nil, err
+		}
+		return postgres.Open(ctx, dsn)
+	}
+	return sqlite.Open(ctx, cfg.Storage.Path)
 }
 
 func openStream(s config.Stream, opt Options, closers *[]io.Closer) (io.Writer, error) {
@@ -390,6 +403,16 @@ func (a *App) RunRetention(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+	}
+}
+
+func oidcOptions(cfg *config.Config) *identity.OIDCOptions {
+	o := cfg.Identity.OIDC
+	if o == nil {
+		return nil
+	}
+	return &identity.OIDCOptions{
+		Issuer: o.Issuer, Audience: o.Audience, SubjectClaim: o.SubjectClaim, GroupsClaim: o.GroupsClaim, GroupsPrefix: o.GroupsPrefixOrDefault(),
 	}
 }
 

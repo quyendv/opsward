@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 
 	"github.com/quyendv/opsward/internal/core"
 	"github.com/quyendv/opsward/internal/engine"
@@ -57,6 +59,16 @@ type HTTPOptions struct {
 	// ShutdownTimeout is how long calls in flight may finish once serving stops;
 	// default 30 seconds.
 	ShutdownTimeout time.Duration
+	// Resource, when set, is advertised as RFC 9728 protected resource metadata and in
+	// every 401 challenge, so that OAuth clients can find the authorization server.
+	Resource *Resource
+}
+
+// Resource describes the MCP endpoint as an OAuth protected resource.
+type Resource struct {
+	URL                  string // the MCP endpoint as clients reach it
+	AuthorizationServers []string
+	Scopes               []string
 }
 
 // TLSFiles names a certificate and key, re-read when either file changes.
@@ -98,8 +110,21 @@ func newHTTPHandler(e *engine.Engine, opt HTTPOptions, stop context.Context) htt
 		return &auth.TokenInfo{UserID: a.p.Subject, Expiration: a.expires, Extra: map[string]any{"principal": a.p}}, nil
 	}, nil)
 
+	challenge := `Bearer realm="opsward"`
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(authenticate(opt.Authenticate, log, singleMessage(carry(h)))))
+	if r := opt.Resource; r != nil {
+		meta := auth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
+			Resource: r.URL, AuthorizationServers: r.AuthorizationServers, ScopesSupported: r.Scopes,
+			BearerMethodsSupported: []string{"header"},
+		})
+		mux.Handle("/.well-known/oauth-protected-resource", meta)
+		mux.Handle("/.well-known/oauth-protected-resource/mcp", meta)
+		challenge = fmt.Sprintf("Bearer resource_metadata=%q", metadataURL(r.URL))
+		if len(r.Scopes) > 0 {
+			challenge += fmt.Sprintf(", scope=%q", strings.Join(r.Scopes, " "))
+		}
+	}
+	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(authenticate(opt.Authenticate, challenge, log, singleMessage(carry(h)))))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if opt.Ready != nil {
@@ -121,11 +146,11 @@ type authenticated struct {
 
 // authenticate resolves the bearer token. Why a token was rejected is logged, never
 // sent: the client learns only that it was.
-func authenticate(fn Authenticate, log *slog.Logger, next http.Handler) http.Handler {
+func authenticate(fn Authenticate, challenge string, log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
 		if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
-			unauthorized(w)
+			unauthorized(w, challenge)
 			return
 		}
 		p, exp, err := fn(r.Context(), strings.TrimSpace(token))
@@ -135,7 +160,7 @@ func authenticate(fn Authenticate, log *slog.Logger, next http.Handler) http.Han
 			return
 		case errors.Is(err, identity.ErrUnauthenticated):
 			log.Warn("authentication rejected", "remote", r.RemoteAddr, "reason", err.Error())
-			unauthorized(w)
+			unauthorized(w, challenge)
 			return
 		case err != nil:
 			log.Error("authentication failed", "remote", r.RemoteAddr, "error", err)
@@ -181,9 +206,20 @@ func logger(l *slog.Logger) *slog.Logger {
 	return l
 }
 
-func unauthorized(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Bearer realm="opsward"`)
+func unauthorized(w http.ResponseWriter, challenge string) {
+	w.Header().Set("WWW-Authenticate", challenge)
 	http.Error(w, "invalid or missing bearer token", http.StatusUnauthorized)
+}
+
+// metadataURL is where RFC 9728 places a resource's metadata: the well-known path
+// inserted between the host and the resource's path.
+func metadataURL(resource string) string {
+	u, err := url.Parse(resource)
+	if err != nil {
+		return ""
+	}
+	u.Path = "/.well-known/oauth-protected-resource" + u.Path
+	return u.String()
 }
 
 // principalFromRequest fails closed: a call without an authenticated principal is

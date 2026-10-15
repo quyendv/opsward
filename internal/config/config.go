@@ -57,6 +57,7 @@ type Identity struct {
 	Mode      string    `yaml:"mode"`      // local (stdio, fixed principal) or remote (HTTP, tokens)
 	Principal Principal `yaml:"principal"` // local mode only
 	APITokens APITokens `yaml:"apiTokens"`
+	OIDC      *OIDC     `yaml:"oidc"` // optional; remote mode
 	// Groups are internal groups: group name to member subjects. Reloadable.
 	Groups map[string][]string `yaml:"groups"`
 }
@@ -69,9 +70,10 @@ type Principal struct {
 
 // Storage configures the store.
 type Storage struct {
-	Type           string    `yaml:"type"`
-	Path           string    `yaml:"path"`
-	AuditRetention *Duration `yaml:"auditRetention"`
+	Type           string     `yaml:"type"` // sqlite (default) or postgres
+	Path           string     `yaml:"path"` // sqlite
+	DSN            *SecretRef `yaml:"dsn"`  // postgres; may hold a password, so referenced
+	AuditRetention *Duration  `yaml:"auditRetention"`
 }
 
 // Audit configures the audit stream.
@@ -189,6 +191,7 @@ func (c *Config) applyDefaults() {
 	if c.Identity.Mode == "" {
 		c.Identity.Mode = ModeLocal
 	}
+	c.oidcDefaults()
 	if c.Identity.APITokens.MaxTTL == nil {
 		d := Duration(DefaultAPITokenMaxTTL)
 		c.Identity.APITokens.MaxTTL = &d
@@ -238,12 +241,7 @@ func (c *Config) validate() error {
 
 	c.validateIdentity(fail)
 
-	if c.Storage.Type != "sqlite" {
-		fail("storage.type: %q is not available in this version; use sqlite", c.Storage.Type)
-	}
-	if c.Storage.Path == "" {
-		fail("storage.path is required")
-	}
+	c.validateStorage(fail)
 	if *c.Storage.AuditRetention < 0 {
 		fail("storage.auditRetention must not be negative")
 	}
