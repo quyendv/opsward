@@ -190,3 +190,15 @@ func TestNonFiniteSeriesHasNoSummary(t *testing.T) {
 		t.Fatalf("series = %s", b)
 	}
 }
+
+// An empty namespace means every namespace only when the query says so: a tool that
+// forgets a namespace must not go unconfined.
+func TestEmptyNamespaceNeedsAllNamespaces(t *testing.T) {
+	f := &fakeProm{t: t, reply: `{"status":"success","data":{"resultType":"vector","result":[]}}`}
+	src, done := source(t, f)
+	defer done()
+	m, _ := src.Metrics("production")
+	if _, err := m.Query(context.Background(), "", capability.MetricsQuery{Query: "up"}); err == nil || len(f.paths) != 0 {
+		t.Fatalf("err = %v, requests %d", err, len(f.paths))
+	}
+}

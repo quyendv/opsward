@@ -20,7 +20,9 @@ providers:
         profiles:
           # A kubeconfig whose credential is bound to a read-only role: get/list on
           # workloads, pods and events, list on namespaces, get on pods/log; no
-          # secrets, pods/exec or pods/portforward.
+          # secrets, pods/exec or pods/portforward. Listing across an environment that
+          # spans every namespace needs list on deployments, statefulsets and daemonsets
+          # cluster-wide.
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
         # A cluster can have its own backends, used instead of the shared ones below:
         # metrics: { type: prometheus, url: https://prometheus.cluster-a.example.com }

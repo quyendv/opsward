@@ -145,3 +145,44 @@ func TestClusterWideCallNeedsAnUnlimitedEnvironment(t *testing.T) {
 		t.Fatalf("named namespace: err = %v, ran = %v", err, ran)
 	}
 }
+
+// An item allowed only through a profile other than the reader's is not shown: the
+// listing read it with the reader's permissions, not that profile's.
+func TestListDropsItemsAllowedThroughAnotherProfile(t *testing.T) {
+	lt := &listTool{items: []Item{
+		{Scope: core.Scope{Environment: "staging", Namespace: "team-a-api", Kind: "Deployment", Name: "api"}, Data: "api"},
+		{Scope: core.Scope{Environment: "staging", Namespace: "team-a-api", Kind: "Deployment", Name: "web"}, Data: "web"},
+	}}
+	authz := reachPolicy{
+		decide: func(r core.Request) core.Decision {
+			if r.Scope.Name == "web" {
+				return core.Decision{Effect: core.EffectAllow, Rule: "team", Profile: "team-a"}
+			}
+			return core.Decision{Effect: core.EffectAllow, Rule: "readers", Profile: ProfileReader}
+		},
+		reach: func(core.Request) bool { return true },
+	}
+	res, err := listEngine(t, lt, authz, &recordingAuditor{}).Invoke(context.Background(), alice, "list_things", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := json.Marshal(res.Data); string(got) != `["api"]` {
+		t.Fatalf("items = %s", got)
+	}
+}
+
+// Items outside the environment are dropped by the engine too, whatever the tool did.
+func TestListDropsItemsOutsideTheEnvironment(t *testing.T) {
+	lt := &listTool{items: []Item{
+		{Scope: core.Scope{Environment: "staging", Namespace: "team-a-api"}, Data: "in"},
+		{Scope: core.Scope{Environment: "staging", Namespace: "kube-system"}, Data: "out"},
+	}}
+	authz := reachPolicy{decide: allowAll, reach: func(core.Request) bool { return true }}
+	res, err := listEngine(t, lt, authz, &recordingAuditor{}).Invoke(context.Background(), alice, "list_things", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := json.Marshal(res.Data); string(got) != `["in"]` {
+		t.Fatalf("items = %s", got)
+	}
+}

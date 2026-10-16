@@ -77,6 +77,9 @@ type metrics struct {
 }
 
 func (m *metrics) Query(ctx context.Context, namespace string, q capability.MetricsQuery) (*capability.MetricsResult, error) {
+	if namespace == "" && !q.AllNamespaces {
+		return nil, errors.New("metrics: no namespace, and the query is not marked as spanning every namespace")
+	}
 	confined, err := confine.PromQL(q.Query, confine.Scope{
 		NamespaceLabel: m.s.opt.NamespaceLabel, Namespace: namespace,
 		ClusterLabel: m.s.opt.ClusterLabel, Cluster: m.cluster,

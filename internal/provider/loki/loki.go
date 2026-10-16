@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -77,6 +78,9 @@ type logs struct {
 }
 
 func (l *logs) Query(ctx context.Context, namespace string, q capability.LogsQuery) (*capability.LogsResult, error) {
+	if namespace == "" && !q.AllNamespaces {
+		return nil, errors.New("logs: no namespace, and the query is not marked as spanning every namespace")
+	}
 	confined, err := confine.LogQL(q.Query, confine.Scope{
 		NamespaceLabel: l.s.opt.NamespaceLabel, Namespace: namespace,
 		ClusterLabel: l.s.opt.ClusterLabel, Cluster: l.cluster,

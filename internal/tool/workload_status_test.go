@@ -36,7 +36,16 @@ func (f *fakeSource) ListNamespaces(context.Context) ([]string, error) {
 
 func (f *fakeSource) ListWorkloads(_ context.Context, namespace string) ([]capability.WorkloadSummary, error) {
 	f.calls = append(f.calls, "workloads:"+namespace)
-	return f.summaries, f.err
+	if namespace == "" {
+		return f.summaries, f.err
+	}
+	var out []capability.WorkloadSummary
+	for _, s := range f.summaries {
+		if s.Namespace == namespace || s.Namespace == "" {
+			out = append(out, s)
+		}
+	}
+	return out, f.err
 }
 
 func (f *fakeSource) Workloads(_, profile string) (capability.Workloads, error) {

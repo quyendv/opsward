@@ -68,10 +68,6 @@ func TestListNamespacesFiltersByEnvironmentPatterns(t *testing.T) {
 	if strings.Join(names, ",") != "shared,team-a-api,team-a-web" {
 		t.Fatalf("namespaces = %v", names)
 	}
-	out, _ := json.Marshal(prep.Wrap([]any{"shared"}))
-	if string(out) != `{"namespaces":["shared"],"unmatchedPatterns":["typo-ns"]}` {
-		t.Fatalf("result = %s", out)
-	}
 }
 
 func TestListWorkloadsItemsCarryLabelsForPolicy(t *testing.T) {
@@ -103,7 +99,7 @@ func TestListWorkloadsItemsCarryLabelsForPolicy(t *testing.T) {
 // Without a namespace, list_workloads spans the environment's namespaces; unhealthy keeps
 // only workloads with fewer ready replicas than desired.
 func TestListWorkloadsAcrossNamespacesAndUnhealthy(t *testing.T) {
-	src := &fakeSource{summaries: []capability.WorkloadSummary{
+	src := &fakeSource{namespaces: []string{"kube-system", "shared", "team-a-api"}, summaries: []capability.WorkloadSummary{
 		{Namespace: "kube-system", Kind: "DaemonSet", Name: "proxy", Desired: 1, Ready: 1},
 		{Namespace: "shared", Kind: "Deployment", Name: "web", Desired: 2, Ready: 2},
 		{Namespace: "team-a-api", Kind: "Deployment", Name: "api", Desired: 2, Ready: 1},
@@ -124,12 +120,27 @@ func TestListWorkloadsAcrossNamespacesAndUnhealthy(t *testing.T) {
 	for _, it := range items {
 		got = append(got, it.Scope.Namespace+"/"+it.Scope.Name)
 	}
-	if strings.Join(got, ",") != "shared/web,team-a-api/api" || src.calls[len(src.calls)-1] != "workloads:" {
-		t.Fatalf("items = %v (calls %v); kube-system is outside the environment", got, src.calls)
+	if strings.Join(got, ",") != "shared/web,team-a-api/api" {
+		t.Fatalf("items = %v; kube-system is outside the environment", got)
+	}
+	// An environment limited to some namespaces is listed namespace by namespace, so a
+	// reader bound only in those namespaces can list it.
+	if strings.Join(src.calls, " ") != "namespaces workloads:shared workloads:team-a-api" {
+		t.Fatalf("calls = %v", src.calls)
 	}
 	prep, _ = tl.Prepare(json.RawMessage(`{"environment":"staging","unhealthy":true}`))
 	items, _ = prep.RunList(context.Background(), "reader")
 	if len(items) != 1 || items[0].Scope.Name != "api" {
 		t.Fatalf("unhealthy = %+v", items)
+	}
+}
+
+func TestListWorkloadsInAnUnlimitedEnvironmentListsOnce(t *testing.T) {
+	src := &fakeSource{summaries: []capability.WorkloadSummary{{Namespace: "a", Kind: "Deployment", Name: "x", Desired: 1, Ready: 1}}}
+	tl, _ := ListWorkloads(testEnvs, src)
+	prep, _ := tl.Prepare(json.RawMessage(`{"environment":"production"}`))
+	items, err := prep.RunList(context.Background(), "reader")
+	if err != nil || len(items) != 1 || strings.Join(src.calls, " ") != "workloads:" {
+		t.Fatalf("items %+v, calls %v, %v", items, src.calls, err)
 	}
 }

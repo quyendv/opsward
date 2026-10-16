@@ -11,7 +11,6 @@ import (
 	"path"
 	"slices"
 	"sort"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -262,8 +261,9 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 			return nil, finish(audit.StatusInvalid, fmt.Errorf("%w: %w", ErrInvalidArguments, err))
 		}
 		if tool.ClusterWide && prep.Scope.Namespace == "" && !st.unlimited(prep.Scope.Environment) {
-			return nil, finish(audit.StatusInvalid, fmt.Errorf("%w: environment %q is limited to namespaces %s; name one",
-				ErrInvalidArguments, prep.Scope.Environment, strings.Join(st.envs[prep.Scope.Environment].Namespaces, ", ")))
+			// The patterns are not echoed: this is answered before authorization.
+			return nil, finish(audit.StatusInvalid, fmt.Errorf("%w: environment %q is limited to some namespaces; name one",
+				ErrInvalidArguments, prep.Scope.Environment))
 		}
 	}
 	if tool.List {
@@ -355,11 +355,17 @@ func (e *Engine) list(ctx context.Context, st *state, tool Tool, prep *Prepared,
 	}
 	kept := []any{}
 	for _, it := range items {
+		// Defence in depth: the tool filters by the environment, and so does the engine.
+		if !tool.Global && st.validateScope(it.Scope) != nil {
+			continue
+		}
 		ireq := req
 		ireq.Scope = it.Scope
 		allowed := false
 		if it.Scope.Name != "" {
-			allowed = st.authz.Decide(ireq).Effect == core.EffectAllow
+			// Read with the reader profile, so shown only when allowed through it.
+			d := st.authz.Decide(ireq)
+			allowed = d.Effect == core.EffectAllow && (d.Profile == "" || d.Profile == ProfileReader)
 		} else {
 			allowed = reacher.Reachable(ireq)
 		}
@@ -367,6 +373,7 @@ func (e *Engine) list(ctx context.Context, st *state, tool Tool, prep *Prepared,
 			kept = append(kept, it.Data)
 		}
 	}
+	// Listings carry no knowledge notes: notes describe a target, and a listing has none.
 	var out any = kept
 	if prep.Wrap != nil {
 		out = prep.Wrap(kept)

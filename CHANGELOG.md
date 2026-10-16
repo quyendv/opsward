@@ -9,7 +9,9 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - `list_environments`, `list_namespaces` and `list_workloads`, authorized per item: each
-  shows only what the caller may work on. The reader profile needs `list` on namespaces.
+  shows only what the caller may work on, through bindings that use the reader profile.
+  The reader needs `list` on namespaces, and on Deployments, StatefulSets and DaemonSets
+  cluster-wide for environments that span every namespace.
   `list_workloads` without a namespace spans the environment, and `unhealthy` keeps only
   workloads with fewer ready replicas than desired.
 - Metrics and logs backends per cluster (`providers.kubernetes.clusters.<name>.metrics`
@@ -22,7 +24,7 @@ All notable changes to this project are documented here. The format follows
 
 - Metrics results are summaries by default: each series has `min`, `max`, `avg`, `last`
   and `samples`; points are returned with `points: true`.
-- Log lines longer than 2,000 characters are cut; `query_logs` results past 32 KiB
+- Log lines longer than 2,000 bytes are cut; `query_logs` results past 32 KiB
   (JSON-encoded) leave out the oldest lines, counted in `linesOmitted`; container logs are
   capped at 16 KiB per container and 32 KiB per call (were 256 KiB and 1 MiB).
 

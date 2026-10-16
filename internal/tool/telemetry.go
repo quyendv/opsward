@@ -33,8 +33,8 @@ const (
 	maxLogResultBytes = 32 << 10
 )
 
-// cutLine shortens a line beyond maxLogLineChars, on a character boundary, and says by
-// how much.
+// cutLine shortens a line beyond maxLogLineChars bytes, on a character boundary, and
+// says by how many bytes.
 func cutLine(s string) string {
 	if len(s) <= maxLogLineChars {
 		return s
@@ -43,7 +43,7 @@ func cutLine(s string) string {
 	for end > 0 && !utf8.RuneStart(s[end]) {
 		end--
 	}
-	return fmt.Sprintf("%s … [%d more characters]", s[:end], len(s)-end)
+	return fmt.Sprintf("%s … [%d more bytes]", s[:end], len(s)-end)
 }
 
 // encodedLen is the length of s as a JSON string, the form the agent receives.
@@ -66,27 +66,43 @@ func cutContainerLines(logs []capability.ContainerLog) {
 }
 
 // boundLogs cuts long lines and, past maxLogResultBytes, leaves out lines oldest first:
-// streams come most recently active first, so their newest lines are kept first.
+// streams come most recently active first, so their newest lines are kept first. A
+// stream's labels count against the budget, and a stream left without lines is dropped.
 func boundLogs(r *capability.LogsResult) {
 	if r == nil {
 		return
 	}
+	const perLine = 4 // the separators the encoding adds around a line
 	budget := maxLogResultBytes
-	for i := range r.Streams {
-		lines := r.Streams[i].Lines
-		keep := len(lines)
+	kept := r.Streams[:0]
+	for _, st := range r.Streams {
+		lines := st.Lines
+		labels, _ := json.Marshal(st.Labels)
+		cost := len(labels) + 32 // labels plus the stream's own structure
+		if budget < cost {
+			r.LinesOmitted += len(lines)
+			continue
+		}
+		budget -= cost
+		keep := 0
 		for j := len(lines) - 1; j >= 0; j-- {
 			lines[j] = cutLine(lines[j])
-			cost := encodedLen(lines[j])
-			if budget < cost {
-				keep = len(lines) - 1 - j
+			c := encodedLen(lines[j]) + perLine
+			if budget < c {
 				break
 			}
-			budget -= cost
+			budget -= c
+			keep++
 		}
 		r.LinesOmitted += len(lines) - keep
-		r.Streams[i].Lines = lines[len(lines)-keep:]
+		if keep == 0 {
+			budget += cost // the stream is not returned
+			continue
+		}
+		st.Lines = lines[len(lines)-keep:]
+		kept = append(kept, st)
 	}
+	r.Streams = kept
 }
 
 // window parses a range such as "30m" or "6h"; empty means the default.
@@ -187,6 +203,7 @@ func QueryMetrics(src capability.MetricsSource) (engine.Tool, error) {
 					if err != nil {
 						return nil, err
 					}
+					q.AllNamespaces = v.Namespace == ""
 					r, err := m.Query(ctx, v.Namespace, q)
 					if err == nil && !v.Points {
 						summarize(r)
@@ -248,7 +265,7 @@ func QueryLogs(src capability.LogsSource) (engine.Tool, error) {
 					if err != nil {
 						return nil, err
 					}
-					r, err := l.Query(ctx, v.Namespace, capability.LogsQuery{Query: v.Query, Since: since, Limit: limit})
+					r, err := l.Query(ctx, v.Namespace, capability.LogsQuery{Query: v.Query, Since: since, Limit: limit, AllNamespaces: v.Namespace == ""})
 					boundLogs(r)
 					return r, err
 				},

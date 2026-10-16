@@ -46,3 +46,37 @@ func TestReachable(t *testing.T) {
 		})
 	}
 }
+
+// Listings read with the reader profile: a binding that grants access only through a
+// narrower profile does not reach, so its cluster boundary is not bypassed. A deny or an
+// approval over every namespace, or over a whole namespace, hides it.
+func TestReachableRespectsProfilesAndWholeRestrictions(t *testing.T) {
+	roles := map[string]Role{"viewer": {Risk: []core.Risk{core.RiskRead}}}
+	cat := testCatalog
+	for name, tt := range map[string]struct {
+		bindings []Binding
+		scope    core.Scope
+		want     bool
+	}{
+		"narrower profile": {[]Binding{{Name: "a", Subjects: Subjects{Groups: teamA}, Role: "viewer", Profile: "team-a-operator", Scope: ScopeSelector{Environments: []string{"staging"}}}}, core.Scope{Environment: "staging"}, false},
+		"reader profile":   {[]Binding{{Name: "a", Subjects: Subjects{Groups: teamA}, Role: "viewer", Profile: "reader"}}, core.Scope{Environment: "staging"}, true},
+		"deny every namespace": {[]Binding{
+			{Name: "a", Subjects: Subjects{Groups: teamA}, Role: "viewer"},
+			{Name: "d", Role: "viewer", Effect: core.EffectDeny, Scope: ScopeSelector{Namespaces: []string{"*"}}},
+		}, core.Scope{Environment: "staging"}, false},
+		"approval over a namespace": {[]Binding{
+			{Name: "a", Subjects: Subjects{Groups: teamA}, Role: "viewer"},
+			{Name: "ask", Role: "viewer", Effect: core.EffectApprove, Scope: ScopeSelector{Namespaces: []string{"payments"}}, Approvers: Subjects{Groups: []string{"platform"}}},
+		}, core.Scope{Environment: "staging", Namespace: "payments"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, _, err := Compile(Config{Roles: roles, Bindings: tt.bindings}, cat, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := p.Reachable(request("alice@example.com", teamA, "get_workload_status", core.RiskRead, tt.scope)); got != tt.want {
+				t.Fatalf("Reachable = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -34,6 +34,10 @@ type MetricsQuery struct {
 	Time       time.Time
 	Start, End time.Time
 	Step       time.Duration
+	// AllNamespaces must be set for a query without a namespace, which then spans every
+	// namespace of the cluster; without it an empty namespace is an error, so a tool that
+	// forgets one cannot go unconfined.
+	AllNamespaces bool
 }
 
 // MetricsResult is the answer to a metrics query.
@@ -60,6 +64,8 @@ type LogsQuery struct {
 	Since time.Duration
 	Limit int
 	End   time.Time
+	// AllNamespaces: as for MetricsQuery.
+	AllNamespaces bool
 }
 
 // LogStream is the lines of one stream (such as one container), oldest first, each

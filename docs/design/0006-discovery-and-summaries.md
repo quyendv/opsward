@@ -44,12 +44,25 @@ authorized **per item**, in two steps:
 
 Items that are not kept are left out without a trace, so the result does not tell a
 principal what exists beyond its reach. The audit record carries the decision rule
-`per-item`. Listings read the backend with the environment's reader profile, because no
-single binding chooses a profile for the whole result.
+`per-item`. Listings carry no knowledge notes.
 
-`list_namespaces` also filters by the environment's namespace patterns, and reports
-patterns without wildcards that match no namespace of the cluster, which usually means a
-typing mistake in the configuration.
+**Profiles.** Listings read the backend with the environment's reader profile, because no
+single binding chooses a profile for the whole result. So that a listing cannot show what a
+narrower profile would keep from the principal (0002: the profile is the boundary the
+cluster enforces), only bindings with the reader profile count: an allow binding that
+names another profile neither makes a listing reachable nor keeps an item. A team bound
+only through its own profile cannot list; it names its namespaces and workloads instead.
+A deny or approval that covers a whole namespace, or every namespace (a pattern such as
+`*`), hides it, as Decide would refuse it.
+
+Both `list_namespaces` and `list_workloads` filter by the environment's namespace
+patterns, and the engine checks every item against the environment again.
+
+**Permissions.** The reader needs `list` on namespaces for `list_namespaces`, and for
+`list_workloads` across an environment: in an environment spanning every namespace it
+lists Deployments, StatefulSets and DaemonSets cluster-wide, which needs `list` on them
+cluster-wide; in one limited to some namespaces it lists namespace by namespace, which a
+RoleBinding in each namespace allows.
 
 Asked "is anything unhealthy", an agent otherwise lists every namespace one call at a time;
 `list_workloads` with `unhealthy` and no namespace answers in one call.
@@ -60,10 +73,10 @@ A series is returned with `min`, `max`, `avg`, `last` and `samples` (the number 
 it had). Points are returned only when the call asks for them with `points: true`, and
 then as before, at most 60 per series. `diagnose_workload` returns summaries only.
 
-Log results are bounded the same way. A line longer than 2,000 characters is cut, with the
-number of characters left out. A `query_logs` result past 32 KiB, counted as JSON-encoded
-since that is what the agent receives, leaves out lines oldest first and counts them in
-`linesOmitted`; container logs are capped at 16 KiB per container and 32 KiB per call.
+Log results are bounded the same way. A line longer than 2,000 bytes is cut, with the
+number of bytes left out. A `query_logs` result past 32 KiB, counted as JSON-encoded since
+that is what the agent receives, stream labels included, leaves out lines oldest first and
+counts them in `linesOmitted`; a stream left without lines is not returned; container logs are capped at 16 KiB per container and 32 KiB per call.
 Clients cap a tool result at some 25,000 tokens, structured logs run to kilobytes per line,
 and escaped JSON is dense in tokens: a result an agent cannot read whole is one it cannot
 use.
@@ -72,14 +85,25 @@ use.
 
 `namespace` becomes optional for `query_metrics` and `query_logs`. Without it, the query
 is confined to the environment's cluster only, so node and cluster-level series are
-reachable. Such a call:
+reachable, and a query that names a namespace in its own matchers is accepted as
+written. Such a call covers every namespace, so:
 
-- is refused in an environment limited to some namespaces (one without the pattern `*`):
-  it would read the namespaces the environment leaves out;
-- matches only bindings whose scope does not restrict namespaces, or restricts them to
-  `*`, because a call without a namespace never matches a narrower pattern.
+- it is refused in an environment limited to some namespaces (one without the pattern
+  `*`): it would read the namespaces the environment leaves out;
+- a deny or approval binding for the principal, tool and environment applies to it
+  whatever its namespaces, workloads, apps or condition: it restricts some part of what
+  the call reads. Deny still overrides allow, so a principal denied one namespace must
+  name namespaces;
+- an allow binding applies only if it covers every namespace (no namespace selector, or
+  one such as `*`), has no workload or app selector, and its condition, if any, does not
+  look at the target (`scope`).
 
-A query that names a namespace in its own matchers is then accepted as written.
+The query tools mark such a call as spanning every namespace, and the backends refuse an
+empty namespace without that mark, so a tool that forgot one cannot go unconfined.
+
+Without a `clusterLabel`, a cluster-wide query reads the whole backend. That is right
+for a backend that holds one cluster, and the reason a backend shared by several clusters
+must set one.
 
 ## Backends per cluster
 

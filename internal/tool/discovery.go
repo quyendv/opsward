@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path"
 	"slices"
-	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
 
@@ -78,16 +77,14 @@ func ListNamespaces(envs Environments, ws capability.WorkloadSource) (engine.Too
 		return engine.Tool{}, err
 	}
 	return engine.Tool{
-		Name: "list_namespaces",
-		Description: "List the namespaces of an environment that you can work in. unmatchedPatterns names configured " +
-			"namespaces that do not exist in the cluster.",
-		Risk: core.RiskRead, InputSchema: in.schema, Args: in.names, List: true,
+		Name:        "list_namespaces",
+		Description: "List the namespaces of an environment that you can work in.",
+		Risk:        core.RiskRead, InputSchema: in.schema, Args: in.names, List: true,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
 			if err != nil {
 				return nil, err
 			}
-			var unmatched []string
 			return &engine.Prepared{
 				Scope: core.Scope{Environment: v.Environment}, Args: obj,
 				RunList: func(ctx context.Context, profile string) ([]engine.Item, error) {
@@ -109,20 +106,7 @@ func ListNamespaces(envs Environments, ws capability.WorkloadSource) (engine.Too
 							items = append(items, engine.Item{Scope: core.Scope{Environment: v.Environment, Namespace: n}, Data: n})
 						}
 					}
-					for _, p := range env.Namespaces {
-						// A literal pattern that names no namespace is usually a typing mistake.
-						if !strings.ContainsAny(p, `*?[\`) && !slices.Contains(names, p) {
-							unmatched = append(unmatched, p)
-						}
-					}
 					return items, nil
-				},
-				Wrap: func(kept []any) any {
-					out := map[string]any{"namespaces": kept}
-					if len(unmatched) > 0 {
-						out["unmatchedPatterns"] = unmatched
-					}
-					return out
 				},
 			}, nil
 		},
@@ -176,7 +160,7 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 					if err != nil {
 						return nil, err
 					}
-					list, err := w.ListWorkloads(ctx, v.Namespace)
+					list, err := listWorkloads(ctx, w, env, v.Namespace)
 					if err != nil {
 						return nil, err
 					}
@@ -199,4 +183,29 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 			}, nil
 		},
 	}, nil
+}
+
+// listWorkloads lists one namespace, or the environment: an environment spanning every
+// namespace in one request, otherwise namespace by namespace, so that a reader bound only
+// in the environment's namespaces can list it.
+func listWorkloads(ctx context.Context, w capability.Workloads, env EnvironmentInfo, namespace string) ([]capability.WorkloadSummary, error) {
+	if namespace != "" || slices.Contains(env.Namespaces, "*") {
+		return w.ListWorkloads(ctx, namespace)
+	}
+	names, err := w.ListNamespaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []capability.WorkloadSummary
+	for _, n := range names {
+		if !inPatterns(env.Namespaces, n) {
+			continue
+		}
+		list, err := w.ListWorkloads(ctx, n)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, list...)
+	}
+	return out, nil
 }

@@ -89,9 +89,14 @@ type compiled struct {
 // matching binding is a deny.
 func (p *Policy) Decide(req core.Request) core.Decision {
 	var best *compiled
+	wide := req.Scope.Environment != "" && req.Scope.Namespace == "" && req.Scope.Name == ""
 	for i := range p.bindings {
 		b := &p.bindings[i]
-		if !b.matches(req, p.appLabel) || !p.conditionHolds(b, req) {
+		if wide {
+			if !p.matchesWide(b, req) {
+				continue
+			}
+		} else if !b.matches(req, p.appLabel) || !p.conditionHolds(b, req) {
 			continue
 		}
 		if best == nil || rank(b.Effect) > rank(best.Effect) {
@@ -125,6 +130,31 @@ func rank(e core.Effect) int {
 		return 0
 	}
 	return 0
+}
+
+// matchesWide decides whether a binding applies to a call without a namespace, which
+// covers every namespace of its environment (docs/design/0006). A deny or an approval
+// that could apply to any part of the call applies, whatever its narrower selectors or
+// condition. An allow must cover every namespace, have no narrower selectors, and not
+// depend on the target in its condition.
+func (p *Policy) matchesWide(b *compiled, req core.Request) bool {
+	if !b.Subjects.match(req.Principal) || !b.role.contains(req.Tool, req.Risk) || !anyGlob(b.Scope.Environments, req.Scope.Environment) {
+		return false
+	}
+	if b.Effect != core.EffectAllow {
+		return true
+	}
+	s := b.Scope
+	if !anyGlob(s.Namespaces, "") || len(s.Workloads) > 0 || len(s.Apps) > 0 {
+		return false
+	}
+	if b.When == "" {
+		return true
+	}
+	if strings.Contains(b.When, "scope") {
+		return false
+	}
+	return p.conditionHolds(b, req)
 }
 
 func (b *compiled) matches(req core.Request, appLabel string) bool {

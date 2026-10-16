@@ -245,10 +245,10 @@ func TestQueryToolsAcceptClusterWideCalls(t *testing.T) {
 		}
 	}
 	p, _, err := runTool(t, qm, `{"environment":"production","query":"sum(node_load1)"}`)
-	if err != nil || p.Scope.Namespace != "" || m.namespace != "" {
+	if err != nil || p.Scope.Namespace != "" || m.namespace != "" || !m.queries[len(m.queries)-1].AllNamespaces {
 		t.Fatalf("query_metrics without namespace: %+v, %v", p, err)
 	}
-	if _, _, err := runTool(t, ql, `{"environment":"production","query":"{app=\"api\"}"}`); err != nil {
+	if _, _, err := runTool(t, ql, `{"environment":"production","query":"{app=\"api\"}"}`); err != nil || !l.q.AllNamespaces {
 		t.Fatalf("query_logs without namespace: %v", err)
 	}
 }
@@ -274,7 +274,7 @@ func TestQueryLogsBoundsLineLengthAndResultSize(t *testing.T) {
 	}
 	got := r.Streams[0].Lines
 	last := got[len(got)-1]
-	if len(last) > maxLogLineChars+64 || !strings.Contains(last, "more characters") {
+	if len(last) > maxLogLineChars+64 || !strings.Contains(last, "more bytes") {
 		t.Fatalf("long line kept as %d chars: %.80s", len(last), last)
 	}
 	if r.LinesOmitted == 0 || strings.HasPrefix(got[0], "line-000") {
@@ -297,5 +297,36 @@ func TestQueryLogsBudgetCountsEncodedSize(t *testing.T) {
 	}
 	if b, _ := json.Marshal(out); len(b) > maxLogResultBytes+4096 {
 		t.Fatalf("encoded result is %d bytes", len(b))
+	}
+}
+
+// Many streams of few lines: their labels count against the budget too, and a stream
+// left without lines is not returned.
+func TestQueryLogsBudgetCountsStreamLabels(t *testing.T) {
+	var streams []capability.LogStream
+	for i := range 300 {
+		labels := map[string]string{}
+		for j := range 10 {
+			labels[fmt.Sprintf("label_%d", j)] = fmt.Sprintf("value-%d-%d", i, j)
+		}
+		streams = append(streams, capability.LogStream{Labels: labels, Lines: []string{"short line"}})
+	}
+	l := &fakeLogs{result: &capability.LogsResult{Streams: streams}}
+	tl, _ := QueryLogs(l)
+	_, out, err := runTool(t, tl, `{"environment":"production","namespace":"shop","query":"{a=\"b\"}","limit":1000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := out.(*capability.LogsResult)
+	if b, _ := json.Marshal(r); len(b) > maxLogResultBytes+4096 {
+		t.Fatalf("encoded result is %d bytes", len(b))
+	}
+	for _, s := range r.Streams {
+		if len(s.Lines) == 0 {
+			t.Fatal("a stream without lines is returned")
+		}
+	}
+	if r.LinesOmitted == 0 || len(r.Streams)+r.LinesOmitted != 300 {
+		t.Fatalf("streams %d, omitted %d", len(r.Streams), r.LinesOmitted)
 	}
 }
