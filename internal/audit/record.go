@@ -58,6 +58,14 @@ type Outcome struct {
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 	DurationMs int64  `json:"durationMs"`
+	// Listed is set for listings, which are authorized per item.
+	Listed *Listed `json:"listed,omitempty"`
+}
+
+// Listed counts a listing's items: read from the backend, and kept by policy.
+type Listed struct {
+	Read int `json:"read"`
+	Kept int `json:"kept"`
 }
 
 // Checkpoint records what retention is about to remove, so the chain stays verifiable

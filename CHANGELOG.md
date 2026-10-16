@@ -9,7 +9,9 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - `list_environments`, `list_namespaces` and `list_workloads`, authorized per item: each
-  shows only what the caller may work on, through bindings that use the reader profile.
+  shows only what the caller may work on. A listing runs once per profile the caller's
+  bindings use, and keeps an item only when allowed through the profile it was read with;
+  the audit records how many items were read and kept.
   The reader needs `list` on namespaces, and on Deployments, StatefulSets and DaemonSets
   cluster-wide for environments that span every namespace.
   `list_workloads` without a namespace spans the environment, and `unhealthy` keeps only

@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/quyendv/opsward/internal/core"
@@ -40,7 +41,7 @@ func TestReachable(t *testing.T) {
 		"no binding":                              {[]string{"nobody"}, core.Scope{Environment: "staging"}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := p.Reachable(request("alice@example.com", tt.groups, "get_workload_status", core.RiskRead, tt.scope)); got != tt.want {
+			if got := len(p.ReachableProfiles(request("alice@example.com", tt.groups, "get_workload_status", core.RiskRead, tt.scope))) > 0; got != tt.want {
 				t.Fatalf("Reachable = %v, want %v", got, tt.want)
 			}
 		})
@@ -58,8 +59,7 @@ func TestReachableRespectsProfilesAndWholeRestrictions(t *testing.T) {
 		scope    core.Scope
 		want     bool
 	}{
-		"narrower profile": {[]Binding{{Name: "a", Subjects: Subjects{Groups: teamA}, Role: "viewer", Profile: "team-a-operator", Scope: ScopeSelector{Environments: []string{"staging"}}}}, core.Scope{Environment: "staging"}, false},
-		"reader profile":   {[]Binding{{Name: "a", Subjects: Subjects{Groups: teamA}, Role: "viewer", Profile: "reader"}}, core.Scope{Environment: "staging"}, true},
+		"reader profile": {[]Binding{{Name: "a", Subjects: Subjects{Groups: teamA}, Role: "viewer", Profile: "reader"}}, core.Scope{Environment: "staging"}, true},
 		"deny every namespace": {[]Binding{
 			{Name: "a", Subjects: Subjects{Groups: teamA}, Role: "viewer"},
 			{Name: "d", Role: "viewer", Effect: core.EffectDeny, Scope: ScopeSelector{Namespaces: []string{"*"}}},
@@ -74,9 +74,27 @@ func TestReachableRespectsProfilesAndWholeRestrictions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := p.Reachable(request("alice@example.com", teamA, "get_workload_status", core.RiskRead, tt.scope)); got != tt.want {
+			if got := len(p.ReachableProfiles(request("alice@example.com", teamA, "get_workload_status", core.RiskRead, tt.scope))) > 0; got != tt.want {
 				t.Fatalf("Reachable = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// A listing runs once per profile the principal reaches through, so a team bound through
+// its own profile lists with it.
+func TestReachableProfiles(t *testing.T) {
+	roles := map[string]Role{"viewer": {Risk: []core.Risk{core.RiskRead}}}
+	p := mustCompile(t, Config{Roles: roles, Bindings: []Binding{
+		{Name: "own", Subjects: Subjects{Groups: teamA}, Role: "viewer", Profile: "team-a-operator", Scope: ScopeSelector{Environments: []string{"staging"}, Namespaces: []string{"team-a-*"}}},
+		{Name: "shared", Subjects: Subjects{Groups: teamA}, Role: "viewer", Scope: ScopeSelector{Environments: []string{"staging"}, Namespaces: []string{"shared"}}},
+	}})
+	got := p.ReachableProfiles(request("alice@example.com", teamA, "get_workload_status", core.RiskRead, core.Scope{Environment: "staging"}))
+	if strings.Join(got, ",") != "reader,team-a-operator" {
+		t.Fatalf("profiles = %v", got)
+	}
+	got = p.ReachableProfiles(request("alice@example.com", teamA, "get_workload_status", core.RiskRead, core.Scope{Environment: "staging", Namespace: "team-a-api"}))
+	if strings.Join(got, ",") != "team-a-operator" {
+		t.Fatalf("profiles in team-a-api = %v", got)
 	}
 }

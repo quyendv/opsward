@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -12,19 +13,32 @@ import (
 	"github.com/quyendv/opsward/internal/core"
 )
 
-// reachPolicy decides with decide and answers Reachable with reach.
+// reachPolicy decides with decide; reach answers which profiles reach a scope, the reader
+// alone when profiles is nil.
 type reachPolicy struct {
-	decide func(core.Request) core.Decision
-	reach  func(core.Request) bool
+	decide   func(core.Request) core.Decision
+	reach    func(core.Request) bool
+	profiles func(core.Request) []string
 }
 
 func (p reachPolicy) Decide(r core.Request) core.Decision { return p.decide(r) }
-func (p reachPolicy) Reachable(r core.Request) bool       { return p.reach(r) }
+func (p reachPolicy) ReachableProfiles(r core.Request) []string {
+	if p.profiles != nil {
+		return p.profiles(r)
+	}
+	if p.reach(r) {
+		return []string{ProfileReader}
+	}
+	return nil
+}
 
 type listTool struct {
-	items   []Item
-	ran     bool
-	profile string
+	items     []Item
+	byProfile map[string][]Item
+	failFor   string
+	ran       bool
+	profile   string
+	profiles  []string
 }
 
 func (l *listTool) tool() Tool {
@@ -33,10 +47,17 @@ func (l *listTool) tool() Tool {
 		InputSchema: &jsonschema.Schema{Type: "object"},
 		Prepare: func(json.RawMessage) (*Prepared, error) {
 			return &Prepared{
-				Scope: core.Scope{Environment: "staging", Namespace: "team-a-api"},
+				Scope: core.Scope{Environment: "staging"},
 				Args:  map[string]any{},
 				RunList: func(_ context.Context, profile string) ([]Item, error) {
 					l.ran, l.profile = true, profile
+					l.profiles = append(l.profiles, profile)
+					if profile == l.failFor {
+						return nil, errors.New("forbidden")
+					}
+					if l.byProfile != nil {
+						return l.byProfile[profile], nil
+					}
 					return l.items, nil
 				},
 			}, nil
@@ -184,5 +205,54 @@ func TestListDropsItemsOutsideTheEnvironment(t *testing.T) {
 	}
 	if got, _ := json.Marshal(res.Data); string(got) != `["in"]` {
 		t.Fatalf("items = %s", got)
+	}
+}
+
+// A listing runs once per profile that reaches, and keeps an item only when policy allows
+// it through the profile it was read with; one profile failing does not hide the others.
+func TestListRunsOncePerReachableProfile(t *testing.T) {
+	shared := Item{Scope: core.Scope{Environment: "staging", Namespace: "team-a-shared"}, Data: "team-a-shared"}
+	own := Item{Scope: core.Scope{Environment: "staging", Namespace: "team-a-api"}, Data: "team-a-api"}
+	api := Item{Scope: core.Scope{Environment: "staging", Namespace: "team-a-api", Kind: "Deployment", Name: "api"}, Data: "api"}
+	lt := &listTool{byProfile: map[string][]Item{
+		ProfileReader: {shared, own, api}, // the reader may see more than the policy grants through it
+		"team-a":      {own, api},
+	}, failFor: "team-b"}
+	aud := &recordingAuditor{}
+	authz := reachPolicy{
+		decide: func(r core.Request) core.Decision {
+			return core.Decision{Effect: core.EffectAllow, Rule: "own", Profile: "team-a"}
+		},
+		profiles: func(r core.Request) []string {
+			switch r.Scope.Namespace {
+			case "":
+				return []string{ProfileReader, "team-a", "team-b"}
+			case "team-a-shared":
+				return []string{ProfileReader}
+			default:
+				return []string{"team-a"}
+			}
+		},
+	}
+	res, err := listEngine(t, lt, authz, aud).Invoke(context.Background(), alice, "list_things", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := json.Marshal(res.Data); string(got) != `["team-a-shared","team-a-api","api"]` {
+		t.Fatalf("items = %s", got)
+	}
+	if strings.Join(lt.profiles, ",") != "reader,team-a,team-b" {
+		t.Fatalf("listed with %v", lt.profiles)
+	}
+	if l := aud.last().Outcome.Listed; l == nil || l.Read != 5 || l.Kept != 3 {
+		t.Fatalf("audit listed = %+v", l)
+	}
+}
+
+func TestListFailsWhenEveryProfileFails(t *testing.T) {
+	lt := &listTool{failFor: ProfileReader}
+	authz := reachPolicy{decide: allowAll, reach: func(core.Request) bool { return true }}
+	if _, err := listEngine(t, lt, authz, &recordingAuditor{}).Invoke(context.Background(), alice, "list_things", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("no error")
 	}
 }

@@ -44,15 +44,18 @@ authorized **per item**, in two steps:
 
 Items that are not kept are left out without a trace, so the result does not tell a
 principal what exists beyond its reach. The audit record carries the decision rule
-`per-item`. Listings carry no knowledge notes.
+`per-item` and, in its outcome, how many items were read and how many kept. Listings carry
+no knowledge notes.
 
-**Profiles.** Listings read the backend with the environment's reader profile, because no
-single binding chooses a profile for the whole result. So that a listing cannot show what a
-narrower profile would keep from the principal (0002: the profile is the boundary the
-cluster enforces), only bindings with the reader profile count: an allow binding that
-names another profile neither makes a listing reachable nor keeps an item. A team bound
-only through its own profile cannot list; it names its namespaces and workloads instead.
-A deny or approval that covers a whole namespace, or every namespace (a pattern such as
+**Profiles.** No single binding chooses a profile for a whole listing, so a listing runs
+once for each profile through which the call is reachable (a binding without a profile
+counts as the reader's), and keeps an item only when policy allows it through the profile
+it was read with. A team bound through its own profile thus lists with that profile, and
+the cluster enforces that profile's boundary as for any other call (0002); what the reader
+could see but the team's bindings do not grant through the reader is not shown. A profile
+that cannot list (a namespaced credential asked for the cluster's namespaces) leaves its
+items out without failing the others; the listing fails only when every profile does. A
+deny or approval that covers a whole namespace, or every namespace (a pattern such as
 `*`), hides it, as Decide would refuse it.
 
 Both `list_namespaces` and `list_workloads` filter by the environment's namespace
