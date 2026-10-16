@@ -78,7 +78,7 @@ func handler(e *engine.Engine, principal func(*mcp.CallToolRequest) (core.Princi
 			// Tool-level errors go in the result, so the agent can read them and adjust.
 			return errorResult(err.Error()), nil
 		}
-		b, err := json.MarshalIndent(res.Data, "", "  ")
+		b, err := json.Marshal(res.Data)
 		if err != nil {
 			return errorResult(fmt.Sprintf("encode result: %v", err)), nil
 		}

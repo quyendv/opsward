@@ -102,7 +102,7 @@ func TestEndToEnd(t *testing.T) {
 		return res
 	}
 
-	if res := call("api", "team-a-shop"); res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, `"ready": 1`) {
+	if res := call("api", "team-a-shop"); res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, `"ready":1`) {
 		t.Fatalf("allowed call: %+v", res.Content[0])
 	}
 	if res := call("worker", "team-a-shop"); !res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, "denied by policy") {
@@ -247,7 +247,7 @@ func TestEndToEndMetricsAndLogs(t *testing.T) {
 	}
 
 	isErr, text := call("query_metrics", map[string]any{"environment": "staging", "namespace": "team-a-shop", "query": "up"})
-	if isErr || !strings.Contains(text, `"last": 0.5`) || !strings.Contains(received[0], `namespace="team-a-shop"`) {
+	if isErr || !strings.Contains(text, `"last":0.5`) || !strings.Contains(received[0], `namespace="team-a-shop"`) {
 		t.Fatalf("query_metrics: %v %s; backend got %q", isErr, text, received)
 	}
 	before := len(received)
