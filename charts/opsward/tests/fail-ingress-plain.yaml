@@ -1,0 +1,4 @@
+# expect: ingress: without tls, bearer tokens cross the network in clear
+config:
+  identity: { mode: remote }
+ingress: { enabled: true, host: opsward.example.com }

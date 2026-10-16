@@ -7,6 +7,9 @@ set -euo pipefail
 chart=charts/opsward
 cd "$(dirname "$0")/.."
 fail=0
+# Schemas are fetched once and kept, so later runs work offline.
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/opsward/kubeconform"
+mkdir -p "$cache"
 for values in "$chart"/ci/*.yaml; do
   name=$(basename "$values" .yaml)
   # Lint reports a template's fail only as INFO: its output is checked too.
@@ -15,7 +18,7 @@ for values in "$chart"/ci/*.yaml; do
   fi
   out=$(helm template opsward "$chart" --namespace opsward -f "$values")
   if ! kc=$(printf '%s\n' "$out" | kubeconform -strict -summary -output text \
-    -schema-location default -kubernetes-version 1.31.0 - 2>&1); then
+    -schema-location default -cache "$cache" -kubernetes-version 1.31.0 - 2>&1); then
     echo "$name: kubeconform:"; echo "$kc"; fail=1
   fi
   # The configuration the chart writes must be one Opsward accepts.

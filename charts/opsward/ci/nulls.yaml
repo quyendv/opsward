@@ -1,0 +1,23 @@
+# Sections left empty in YAML are absent, not an error.
+config:
+  identity: { mode: remote }
+  server:
+  storage:
+  providers:
+    kubernetes:
+      clusters:
+        local:
+          profiles:
+            reader: { kubeconfig: /etc/opsward/kubeconfig/reader/kubeconfig }
+  environments:
+    - { name: staging, cluster: local }
+localProfiles: [reader]
+ingress: { enabled: true, host: opsward.example.com, allowPlainHTTP: true }
+env:
+  - { name: OPSWARD_POSTGRES_DSN, valueFrom: { secretKeyRef: { name: opsward-postgres, key: dsn } } }
+envFrom:
+  - { secretRef: { name: opsward-env } }
+extraVolumes:
+  - { name: knowledge, configMap: { name: opsward-knowledge } }
+extraVolumeMounts:
+  - { name: knowledge, mountPath: /etc/opsward/knowledge, readOnly: true }

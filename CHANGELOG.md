@@ -16,6 +16,9 @@ All notable changes to this project are documented here. The format follows
   subjects `opsward rbac render` binds; its reviewed output can ship as `rbac.rendered`.
   The pod runs as non-root with a read-only filesystem and no token of its own.
 - `opsward rbac render --cluster NAME` prints one cluster's RBAC.
+- The chart takes `env`, `envFrom`, `extraVolumes` and `extraVolumeMounts`, refuses an
+  Ingress without TLS unless `ingress.allowPlainHTTP` says TLS ends in front of it, and is
+  published with a provenance attestation.
 
 ## [0.5.0] - 2026-10-16
 
