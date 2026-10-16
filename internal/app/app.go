@@ -552,7 +552,7 @@ func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capabi
 func catalog(cfg *config.Config, tools []engine.Tool) policy.Catalog {
 	cat := policy.Catalog{Tools: map[string]policy.ToolInfo{}, Environments: map[string][]string{}}
 	for _, t := range tools {
-		cat.Tools[t.Name] = policy.ToolInfo{Risk: t.Risk, Args: t.Args, Global: t.Global}
+		cat.Tools[t.Name] = policy.ToolInfo{Risk: t.Risk, Risks: t.Risks, Args: t.Args, Global: t.Global}
 	}
 	for _, e := range cfg.Environments {
 		cat.Environments[e.Name] = cfg.Profiles(e)

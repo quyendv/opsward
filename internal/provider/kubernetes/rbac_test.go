@@ -31,9 +31,9 @@ func allows(rules []rbacv1.PolicyRule, a k8stesting.Action) bool {
 	return false
 }
 
-// Every request a Workloads method makes is allowed by the rules of the operations it is
-// declared to perform (the same table the tool package checks tools against), so the
-// rendered RBAC is enough. docs/design/0009.
+// Every request a Workloads method makes is allowed by the rules of the operations
+// capability.WorkloadsOps gives it (the table the tool package checks tools against), so
+// the rendered RBAC is enough. docs/design/0009.
 func TestOperationRulesCoverTheRequests(t *testing.T) {
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop"},
@@ -45,47 +45,51 @@ func TestOperationRulesCoverTheRequests(t *testing.T) {
 	}
 	refs := []capability.WorkloadRef{apiRef, {Namespace: "shop", Kind: "StatefulSet", Name: "db"}, {Namespace: "shop", Kind: "DaemonSet", Name: "agent"}}
 	ctx := context.Background()
-	tests := []struct {
+	type opCase struct {
 		name string
-		ops  []string
 		call func(capability.Workloads, capability.WorkloadRef) error
-	}{
-		{"GetWorkload", []string{capability.OpWorkloadsGet, capability.OpWorkloadsPods}, func(w capability.Workloads, r capability.WorkloadRef) error {
+	}
+	tests := []opCase{
+		{"GetWorkload", func(w capability.Workloads, r capability.WorkloadRef) error {
 			_, err := w.GetWorkload(ctx, r)
 			return err
 		}},
-		{"WorkloadMetadata", []string{capability.OpWorkloadsGet}, func(w capability.Workloads, r capability.WorkloadRef) error {
+		{"WorkloadLabels", func(w capability.Workloads, r capability.WorkloadRef) error {
+			_, err := w.WorkloadLabels(ctx, r)
+			return err
+		}},
+		{"WorkloadMetadata", func(w capability.Workloads, r capability.WorkloadRef) error {
 			_, err := w.WorkloadMetadata(ctx, r)
 			return err
 		}},
-		{"WorkloadEvents", []string{capability.OpWorkloadsGet, capability.OpWorkloadsPods, capability.OpWorkloadsEvents}, func(w capability.Workloads, r capability.WorkloadRef) error {
+		{"WorkloadEvents", func(w capability.Workloads, r capability.WorkloadRef) error {
 			_, err := w.WorkloadEvents(ctx, r, 10)
 			return err
 		}},
-		{"WorkloadLogs", []string{capability.OpWorkloadsGet, capability.OpWorkloadsPods, capability.OpWorkloadsLogs}, func(w capability.Workloads, r capability.WorkloadRef) error {
+		{"WorkloadLogs", func(w capability.Workloads, r capability.WorkloadRef) error {
 			_, err := w.WorkloadLogs(ctx, r, capability.LogOptions{TailLines: 10, MaxPods: 2, MaxBytes: 1000, TotalBytes: 2000})
 			return err
 		}},
-		{"PodNamePattern", []string{capability.OpWorkloadsGet, capability.OpWorkloadsPods}, func(w capability.Workloads, r capability.WorkloadRef) error {
+		{"PodNamePattern", func(w capability.Workloads, r capability.WorkloadRef) error {
 			_, err := w.PodNamePattern(ctx, r)
 			return err
 		}},
-		{"ListNamespaces", []string{capability.OpNamespacesList}, func(w capability.Workloads, _ capability.WorkloadRef) error {
+		{"ListNamespaces", func(w capability.Workloads, _ capability.WorkloadRef) error {
 			_, err := w.ListNamespaces(ctx)
 			return err
 		}},
-		{"ListWorkloads", []string{capability.OpWorkloadsList}, func(w capability.Workloads, _ capability.WorkloadRef) error {
+		{"ListWorkloads", func(w capability.Workloads, _ capability.WorkloadRef) error {
 			if _, err := w.ListWorkloads(ctx, ""); err != nil {
 				return err
 			}
 			_, err := w.ListWorkloads(ctx, "shop")
 			return err
 		}},
-		{"RestartWorkload", []string{capability.OpWorkloadsGet, capability.OpWorkloadsRestart}, func(w capability.Workloads, r capability.WorkloadRef) error {
+		{"RestartWorkload", func(w capability.Workloads, r capability.WorkloadRef) error {
 			_, err := w.RestartWorkload(ctx, r, true)
 			return err
 		}},
-		{"ScaleWorkload", []string{capability.OpWorkloadsGet, capability.OpWorkloadsScale}, func(w capability.Workloads, r capability.WorkloadRef) error {
+		{"ScaleWorkload", func(w capability.Workloads, r capability.WorkloadRef) error {
 			if r.Kind == "DaemonSet" {
 				return errNotScalable
 			}
@@ -93,11 +97,26 @@ func TestOperationRulesCoverTheRequests(t *testing.T) {
 			return err
 		}},
 	}
+	for method := range capability.WorkloadsOps {
+		if !slices.ContainsFunc(tests, func(tt opCase) bool { return tt.name == method }) {
+			t.Errorf("%s is not exercised", method)
+		}
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			namespaced, cluster := Rules(tt.ops)
+			ops, ok := capability.WorkloadsOps[tt.name]
+			if !ok {
+				t.Fatalf("%s is not in capability.WorkloadsOps", tt.name)
+			}
+			namespaced, cluster := Rules(ops)
 			for _, r := range refs {
-				c := fake.NewClientset(deployment(), sts, ds, pod("api-a", map[string]string{"app": "api"}, true, 0, ""))
+				d := deployment()
+				d.UID = "d1"
+				rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+					Name: "api-7d9f", Namespace: "shop", UID: "r1", Labels: map[string]string{"app": "api"},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "api", UID: "d1", Controller: ptr(true)}},
+				}}
+				c := fake.NewClientset(d, rs, sts, ds, pod("api-7d9f-a", map[string]string{"app": "api"}, true, 0, ""))
 				c.ClearActions()
 				// An error (a Deployment without ReplicaSets) still made its requests.
 				err := tt.call(NewWorkloads(c), r)
@@ -117,7 +136,7 @@ func TestOperationRulesCoverTheRequests(t *testing.T) {
 					}
 					if !allows(rules, a) {
 						t.Errorf("%s: %s %s/%s %q is not allowed by the rules of %v",
-							r.Kind, a.GetVerb(), a.GetResource().Resource, a.GetSubresource(), a.GetNamespace(), tt.ops)
+							r.Kind, a.GetVerb(), a.GetResource().Resource, a.GetSubresource(), a.GetNamespace(), ops)
 					}
 				}
 			}

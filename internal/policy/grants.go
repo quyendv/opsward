@@ -20,21 +20,28 @@ func (p *Policy) Grants(cat Catalog) map[string]map[string][]string {
 				continue
 			}
 			for name, t := range cat.Tools {
-				if t.Global || !b.role.contains(name, t.Risk) {
+				if t.Global {
 					continue
 				}
-				profile := b.Profile
-				if profile == "" {
-					profile = core.ProfileOperator
-					if t.Risk == core.RiskRead {
-						profile = core.ProfileReader
+				// A call is decided at the risk it runs with: each risk the tool can
+				// have may match the role, and picks its own default profile.
+				for _, risk := range append([]core.Risk{t.Risk}, t.Risks...) {
+					if !b.role.contains(name, risk) {
+						continue
 					}
-				}
-				if out[env] == nil {
-					out[env] = map[string][]string{}
-				}
-				if !slices.Contains(out[env][profile], name) {
-					out[env][profile] = append(out[env][profile], name)
+					profile := b.Profile
+					if profile == "" {
+						profile = core.ProfileOperator
+						if risk == core.RiskRead {
+							profile = core.ProfileReader
+						}
+					}
+					if out[env] == nil {
+						out[env] = map[string][]string{}
+					}
+					if !slices.Contains(out[env][profile], name) {
+						out[env][profile] = append(out[env][profile], name)
+					}
 				}
 			}
 		}

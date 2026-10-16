@@ -46,7 +46,9 @@ func ParseRBACSubject(s string) (string, rbacv1.Subject, error) {
 	return "", rbacv1.Subject{}, fmt.Errorf("subject %q: kind %q is not User, Group or ServiceAccount", s, kind)
 }
 
-const rbacPrefix = "opsward-"
+// Object names are opsward:<profile>[:cluster|:delivery]. Profile names are DNS-1123
+// labels, which have no colon, so no two profiles can render the same name.
+const rbacPrefix = "opsward:"
 
 // RenderRBAC prints, per cluster and profile, the Kubernetes RBAC that the tools policy
 // lets run through the profile need (docs/design/0009). Nothing is applied.
@@ -76,8 +78,9 @@ func RenderRBAC(cfg *config.Config, opt RBACOptions) (string, error) {
 		clusters = append(clusters, name)
 	}
 	slices.Sort(clusters)
+	bound := map[string]bool{}
 	for _, cluster := range clusters {
-		objs, err := clusterRBAC(cfg, cluster, grants, needs, opt)
+		objs, err := clusterRBAC(cfg, cluster, grants, needs, opt, bound)
 		if err != nil {
 			return "", err
 		}
@@ -94,6 +97,11 @@ func RenderRBAC(cfg *config.Config, opt RBACOptions) (string, error) {
 			b.Write(y)
 		}
 	}
+	for profile := range opt.Subjects {
+		if !bound[profile] {
+			return "", fmt.Errorf("--subject names profile %q, which no rendered object binds", profile)
+		}
+	}
 	return b.String(), nil
 }
 
@@ -104,7 +112,8 @@ type profileUse struct {
 	wide       bool     // an environment it serves has namespace patterns
 }
 
-func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[string][]string, needs map[string][]string, opt RBACOptions) ([]any, error) {
+// clusterRBAC renders one cluster's objects, and records in bound the profiles it binds.
+func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[string][]string, needs map[string][]string, opt RBACOptions, bound map[string]bool) ([]any, error) {
 	declared := cfg.Providers.Kubernetes.Clusters[cluster].Profiles
 	uses := map[string]*profileUse{}
 	use := func(profile string, env config.Environment, ops ...string) {
@@ -145,10 +154,11 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 	}
 
 	subject := func(profile string) rbacv1.Subject {
+		bound[profile] = true
 		if s, ok := opt.Subjects[profile]; ok {
 			return s
 		}
-		return rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: opt.ServiceAccountNamespace, Name: rbacPrefix + profile}
+		return rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: opt.ServiceAccountNamespace, Name: "opsward-" + profile}
 	}
 	var objs []any
 	profiles := make([]string, 0, len(uses))
@@ -177,19 +187,45 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 			}
 		}
 		if len(clusterRules) > 0 {
-			cname := name + "-cluster"
+			cname := name + ":cluster"
 			objs = append(objs, clusterRole(cname, clusterRules),
 				clusterRoleBinding(cname, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: cname}, subjects))
 		}
 	}
 	if d := cfg.Providers.Delivery; d != nil && d.Cluster == cluster && len(cfg.Providers.Forges) > 0 {
 		rules, _ := kubernetes.Rules([]string{capability.OpApplicationsGet})
-		name := rbacPrefix + d.Profile + "-delivery"
+		name := rbacPrefix + d.Profile + ":delivery"
 		objs = append(objs,
 			&rbacv1.Role{TypeMeta: typeMeta("Role"), ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: d.Namespace}, Rules: rules},
 			roleBinding(name, d.Namespace, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name}, []rbacv1.Subject{subject(d.Profile)}))
 	}
-	return objs, nil
+	return objs, unique(objs)
+}
+
+// unique refuses two objects of one kind and name in one namespace: kubectl apply would
+// merge them into one, granting one subject the other's rules.
+func unique(objs []any) error {
+	seen := map[string]bool{}
+	for _, o := range objs {
+		var kind string
+		var meta metav1.ObjectMeta
+		switch v := o.(type) {
+		case *rbacv1.ClusterRole:
+			kind, meta = v.Kind, v.ObjectMeta
+		case *rbacv1.ClusterRoleBinding:
+			kind, meta = v.Kind, v.ObjectMeta
+		case *rbacv1.Role:
+			kind, meta = v.Kind, v.ObjectMeta
+		case *rbacv1.RoleBinding:
+			kind, meta = v.Kind, v.ObjectMeta
+		}
+		key := kind + "/" + meta.Namespace + "/" + meta.Name
+		if seen[key] {
+			return fmt.Errorf("two %s objects would be named %s", kind, meta.Name)
+		}
+		seen[key] = true
+	}
+	return nil
 }
 
 func typeMeta(kind string) metav1.TypeMeta {

@@ -6,7 +6,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: opsward-operator
+  name: opsward:operator
 rules:
 - apiGroups:
   - apps
@@ -21,12 +21,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: opsward-operator
+  name: opsward:operator
   namespace: team-a-api
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: opsward-operator
+  name: opsward:operator
 subjects:
 - kind: ServiceAccount
   name: opsward-operator
@@ -35,12 +35,12 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: opsward-operator
+  name: opsward:operator
   namespace: team-a-web
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: opsward-operator
+  name: opsward:operator
 subjects:
 - kind: ServiceAccount
   name: opsward-operator
@@ -49,7 +49,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: opsward-reader
+  name: opsward:reader
 rules:
 - apiGroups:
   - ""
@@ -83,12 +83,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: opsward-reader
+  name: opsward:reader
   namespace: team-a-api
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: opsward-reader
+  name: opsward:reader
 subjects:
 - kind: ServiceAccount
   name: opsward-reader
@@ -97,12 +97,12 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: opsward-reader
+  name: opsward:reader
   namespace: team-a-web
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: opsward-reader
+  name: opsward:reader
 subjects:
 - kind: ServiceAccount
   name: opsward-reader
@@ -111,7 +111,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: opsward-reader-cluster
+  name: opsward:reader:cluster
 rules:
 - apiGroups:
   - ""
@@ -123,11 +123,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: opsward-reader-cluster
+  name: opsward:reader:cluster
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: opsward-reader-cluster
+  name: opsward:reader:cluster
 subjects:
 - kind: ServiceAccount
   name: opsward-reader
@@ -136,7 +136,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: opsward-reader-delivery
+  name: opsward:reader:delivery
   namespace: argocd
 rules:
 - apiGroups:
@@ -149,12 +149,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: opsward-reader-delivery
+  name: opsward:reader:delivery
   namespace: argocd
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: opsward-reader-delivery
+  name: opsward:reader:delivery
 subjects:
 - kind: ServiceAccount
   name: opsward-reader
@@ -165,7 +165,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: opsward-ops-b
+  name: opsward:ops-b
 rules:
 - apiGroups:
   - apps
@@ -191,11 +191,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: opsward-ops-b
+  name: opsward:ops-b
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: opsward-ops-b
+  name: opsward:ops-b
 subjects:
 - kind: User
   name: opsward-ops-b
@@ -203,7 +203,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: opsward-reader
+  name: opsward:reader
 rules:
 - apiGroups:
   - ""
@@ -237,11 +237,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: opsward-reader
+  name: opsward:reader
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: opsward-reader
+  name: opsward:reader
 subjects:
 - kind: ServiceAccount
   name: opsward-reader
@@ -250,7 +250,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: opsward-reader-cluster
+  name: opsward:reader:cluster
 rules:
 - apiGroups:
   - ""
@@ -262,11 +262,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: opsward-reader-cluster
+  name: opsward:reader:cluster
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: opsward-reader-cluster
+  name: opsward:reader:cluster
 subjects:
 - kind: ServiceAccount
   name: opsward-reader

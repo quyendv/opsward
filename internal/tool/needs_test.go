@@ -12,19 +12,12 @@ import (
 	"github.com/quyendv/opsward/internal/engine"
 )
 
-// callOps maps fakeSource's recorded calls to the operations they perform, as the
-// Kubernetes provider implements them (docs/design/0009).
-var callOps = map[string][]string{
-	"get":        {capability.OpWorkloadsGet, capability.OpWorkloadsPods},
-	"labels":     {capability.OpWorkloadsGet},
-	"metadata":   {capability.OpWorkloadsGet},
-	"events":     {capability.OpWorkloadsGet, capability.OpWorkloadsPods, capability.OpWorkloadsEvents},
-	"logs":       {capability.OpWorkloadsGet, capability.OpWorkloadsPods, capability.OpWorkloadsLogs},
-	"pattern":    {capability.OpWorkloadsGet, capability.OpWorkloadsPods},
-	"restart":    {capability.OpWorkloadsGet, capability.OpWorkloadsRestart},
-	"scale":      {capability.OpWorkloadsGet, capability.OpWorkloadsScale},
-	"namespaces": {capability.OpNamespacesList},
-	"workloads":  {capability.OpWorkloadsList},
+// callMethods maps fakeSource's recorded calls to the Workloads methods they stand for.
+var callMethods = map[string]string{
+	"get": "GetWorkload", "labels": "WorkloadLabels", "metadata": "WorkloadMetadata",
+	"events": "WorkloadEvents", "logs": "WorkloadLogs", "pattern": "PodNamePattern",
+	"restart": "RestartWorkload", "scale": "ScaleWorkload",
+	"namespaces": "ListNamespaces", "workloads": "ListWorkloads",
 }
 
 // Each tool declares exactly the operations it performs on the workload source, so that
@@ -37,7 +30,11 @@ func TestToolsDeclareWhatTheyUse(t *testing.T) {
 			LastTerminated: &capability.Termination{Container: "api", Reason: "Error", ExitCode: 1},
 		},
 	}}
-	envs := fixedEnvironments{{Name: "staging", Cluster: "cluster-a", Namespaces: []string{"*"}, Metrics: true}}
+	envs := fixedEnvironments{
+		{Name: "staging", Cluster: "cluster-a", Namespaces: []string{"*"}, Metrics: true},
+		{Name: "literal", Cluster: "cluster-a", Namespaces: []string{"shop", "web"}},
+		{Name: "patterns", Cluster: "cluster-a", Namespaces: []string{"sh*"}},
+	}
 	w := `"environment":"staging","namespace":"shop","kind":"Deployment","name":"api"`
 	tests := []struct {
 		build func(*fakeSource) (engine.Tool, error)
@@ -50,6 +47,10 @@ func TestToolsDeclareWhatTheyUse(t *testing.T) {
 		{func(s *fakeSource) (engine.Tool, error) { return GetWorkloadMetrics(s, &fakeMetrics{}) }, `{` + w + `,"metric":"cpu"}`},
 		{func(s *fakeSource) (engine.Tool, error) { return ListNamespaces(envs, s) }, `{"environment":"staging"}`},
 		{func(s *fakeSource) (engine.Tool, error) { return ListWorkloads(envs, s) }, `{"environment":"staging","namespace":"shop"}`},
+		{func(s *fakeSource) (engine.Tool, error) { return ListWorkloads(envs, s) }, `{"environment":"staging"}`},
+		{func(s *fakeSource) (engine.Tool, error) { return ListWorkloads(envs, s) }, `{"environment":"literal"}`},
+		{func(s *fakeSource) (engine.Tool, error) { return ListWorkloads(envs, s) }, `{"environment":"patterns"}`},
+		{func(s *fakeSource) (engine.Tool, error) { return ListNamespaces(envs, s) }, `{"environment":"literal"}`},
 		{func(s *fakeSource) (engine.Tool, error) { return RestartWorkload(s) }, `{` + w + `}`},
 		{func(s *fakeSource) (engine.Tool, error) { return ScaleWorkload(s) }, `{` + w + `,"replicas":3}`},
 		{func(s *fakeSource) (engine.Tool, error) {
@@ -61,6 +62,10 @@ func TestToolsDeclareWhatTheyUse(t *testing.T) {
 			return ProposeChange(s, cfg)
 		}, `{` + w + `,"title":"t","edits":[{"path":"apps/api/values.yaml","old":"replicaCount: 2","new":"replicaCount: 3"}]}`},
 	}
+	// A tool may appear with several arguments; what it declares is checked against the
+	// union of what they use.
+	used := map[string][]string{}
+	needs := map[string][]string{}
 	for _, tt := range tests {
 		src := &fakeSource{
 			workload: crashing, change: &capability.WorkloadChange{Diff: "d"}, logs: &capability.WorkloadLogs{},
@@ -71,7 +76,7 @@ func TestToolsDeclareWhatTheyUse(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Run(tl.Name, func(t *testing.T) {
+		t.Run(tl.Name+tt.args, func(t *testing.T) {
 			p, err := tl.Prepare(json.RawMessage(tt.args))
 			if err != nil {
 				t.Fatal(err)
@@ -90,20 +95,29 @@ func TestToolsDeclareWhatTheyUse(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var used []string
+			needs[tl.Name] = tl.Needs
 			for _, c := range src.calls {
 				name, _, _ := strings.Cut(c, ":")
-				for _, op := range callOps[name] {
-					if !slices.Contains(used, op) {
-						used = append(used, op)
+				ops, ok := capability.WorkloadsOps[callMethods[name]]
+				if !ok {
+					t.Fatalf("call %q has no operations in capability.WorkloadsOps", c)
+				}
+				for _, op := range ops {
+					if !slices.Contains(tl.Needs, op) {
+						t.Errorf("call %q uses %s, which the tool does not declare (%v)", c, op, tl.Needs)
+					}
+					if !slices.Contains(used[tl.Name], op) {
+						used[tl.Name] = append(used[tl.Name], op)
 					}
 				}
 			}
-			slices.Sort(used)
-			needs := slices.Sorted(slices.Values(tl.Needs))
-			if !slices.Equal(used, needs) {
-				t.Fatalf("calls %v use %v; the tool declares %v", src.calls, used, needs)
-			}
 		})
+	}
+	for name, declared := range needs {
+		for _, op := range declared {
+			if !slices.Contains(used[name], op) {
+				t.Errorf("%s declares %s, which no call used", name, op)
+			}
+		}
 	}
 }

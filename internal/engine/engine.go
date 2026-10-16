@@ -49,6 +49,9 @@ type Tool struct {
 	// ClusterWide tools read across namespaces when the call names none. Such a call is
 	// refused in an environment limited to some namespaces.
 	ClusterWide bool
+	// Risks are lower risks a call may take (Prepared.Risk), such as propose_change under
+	// the suggest strategy. Policy and rendered RBAC account for each.
+	Risks []core.Risk
 	// Needs are the backend operations the tool performs (capability.Op*), from which
 	// opsward rbac render derives each profile's permissions (docs/design/0009).
 	Needs []string
@@ -68,7 +71,7 @@ type Prepared struct {
 	Run func(ctx context.Context, profile string) (any, error)
 	// Risk, if set, replaces the tool's risk for this call: a tool whose risk depends on
 	// its arguments or environment (propose_change, docs/design/0008) declares the
-	// highest it can have and lowers it here.
+	// highest it can have, and the lower ones in Tool.Risks, and lowers it here.
 	Risk core.Risk
 	// Preview, if set, reports what a write would change, as a dry run with the named
 	// profile: shown to approvers and recorded in the audit (docs/design/0007).
@@ -290,9 +293,9 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	}
 	rec.Scope = prep.Scope
 	risk := tool.Risk
-	// A call may lower its tool's risk, never raise it: policy validation judged the
-	// tool by the risk it declares.
-	if prep.Risk != "" && riskRank(prep.Risk) < riskRank(tool.Risk) {
+	// A call may lower its tool's risk to one the tool declares, never raise it: policy
+	// validation judged the tool by the risks it declares.
+	if prep.Risk != "" && riskRank(prep.Risk) < riskRank(tool.Risk) && slices.Contains(tool.Risks, prep.Risk) {
 		risk = prep.Risk
 		rec.Risk = risk
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"slices"
+	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
 
@@ -145,7 +146,7 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 			"replicas: in one namespace, or across the environment without one. unhealthy keeps only those with " +
 			"fewer ready replicas than desired, the quickest way to find what is broken.",
 		Risk: core.RiskRead, InputSchema: in.schema, Args: in.names, List: true,
-		Needs: []string{capability.OpWorkloadsList},
+		Needs: []string{capability.OpWorkloadsList, capability.OpNamespacesList},
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
 			if err != nil {
@@ -189,14 +190,18 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 
 // listWorkloads lists one namespace, or the environment: an environment spanning every
 // namespace in one request, otherwise namespace by namespace, so that a reader bound only
-// in the environment's namespaces can list it.
+// in the environment's namespaces can list it. Only patterns need the cluster's
+// namespaces listed; literal names are listed as they are (docs/design/0009).
 func listWorkloads(ctx context.Context, w capability.Workloads, env EnvironmentInfo, namespace string) ([]capability.WorkloadSummary, error) {
 	if namespace != "" || slices.Contains(env.Namespaces, "*") {
 		return w.ListWorkloads(ctx, namespace)
 	}
-	names, err := w.ListNamespaces(ctx)
-	if err != nil {
-		return nil, err
+	names := env.Namespaces
+	if slices.ContainsFunc(names, func(n string) bool { return strings.ContainsAny(n, "*?[") }) {
+		var err error
+		if names, err = w.ListNamespaces(ctx); err != nil {
+			return nil, err
+		}
 	}
 	var out []capability.WorkloadSummary
 	for _, n := range names {

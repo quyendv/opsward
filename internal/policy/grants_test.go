@@ -39,3 +39,31 @@ func TestGrants(t *testing.T) {
 		t.Fatalf("Grants = %v\nwant %v", got, want)
 	}
 }
+
+// A tool whose calls may run at a lower risk (propose_change under suggest) is granted at
+// each risk it can have, through the profile that risk defaults to.
+func TestGrantsCountLowerRisks(t *testing.T) {
+	cat := Catalog{
+		Tools: map[string]ToolInfo{
+			"propose_change": {Risk: core.RiskWrite, Risks: []core.Risk{core.RiskRead}, Args: []string{"environment"}},
+		},
+		Environments: map[string][]string{"staging": {"reader", "operator"}, "production": {"reader", "operator"}},
+	}
+	p, _, err := Compile(Config{
+		Roles: map[string]Role{"viewer": {Risk: []core.Risk{core.RiskRead}}, "proposer": {Tools: []string{"propose_change"}}},
+		Bindings: []Binding{
+			{Name: "view", Role: "viewer", Scope: ScopeSelector{Environments: []string{"staging"}}},
+			{Name: "propose", Role: "proposer", Scope: ScopeSelector{Environments: []string{"production"}}},
+		},
+	}, cat, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string][]string{
+		"staging":    {"reader": {"propose_change"}},
+		"production": {"reader": {"propose_change"}, "operator": {"propose_change"}},
+	}
+	if got := p.Grants(cat); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Grants = %v\nwant %v", got, want)
+	}
+}

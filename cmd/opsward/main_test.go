@@ -151,7 +151,7 @@ func TestRBACRender(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errOut)
 	}
-	for _, want := range []string{"# Cluster cluster-a", "name: opsward-reader\n  namespace: platform", "kind: User\n  name: opsward-operator", "name: opsward-reader-delivery"} {
+	for _, want := range []string{"# Cluster cluster-a", "name: opsward-reader\n  namespace: platform", "kind: User\n  name: opsward-operator", "name: opsward:reader:delivery"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output misses %q:\n%s", want, out)
 		}

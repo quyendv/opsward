@@ -28,29 +28,42 @@ against a fake cluster and may only make requests its rules allow.
 
 For each binding that allows or approves (deny bindings grant nothing), every tool in its
 role runs through the binding's profile, or through `reader` for read tools and `operator`
-for the others, in each environment the binding's scope selects. Besides that:
+for the others, in each environment the binding's scope selects. A tool whose calls may
+run at a lower risk declares it (`engine.Tool.Risks`: `propose_change` is a read under
+`suggest`), the engine lowers a call only to a declared risk, and each declared risk is
+counted here. Besides that:
 
 - the `reader` profile reads every targeted workload before authorization, to match
   labels, so it gets `workloads.get` wherever a workload tool is reachable;
 - the delivery profile (0008) gets `delivery.applications.get` in the Argo CD namespace
-  of the delivery cluster.
+  of the delivery cluster. Applications in other namespaces (`<namespace>_<name>`
+  tracking ids) need the same permission there, which is not rendered.
+
+`list_workloads` without a namespace lists an environment's literal namespaces one by one,
+and only lists the cluster's namespaces to match patterns; it declares
+`namespaces.list` for the latter.
 
 ## Output
 
-Per cluster, per profile, with names prefixed `opsward-`:
+Per cluster, per profile, named `opsward:<profile>` with a `:cluster` or `:delivery`
+suffix. Profile names are DNS-1123 labels, which have no colon, so two profiles cannot
+render the same name; the renderer refuses duplicates as well, since `kubectl apply` would
+merge them into one object.
 
 | Object | Holds | Bound |
 |---|---|---|
-| ClusterRole `opsward-<profile>` | namespaced rules | by a RoleBinding in each namespace when every environment it serves on the cluster lists literal namespaces; otherwise by a ClusterRoleBinding |
-| ClusterRole `opsward-<profile>-cluster` | cluster-scoped rules (`namespaces.list`) | ClusterRoleBinding |
-| Role `opsward-<profile>-delivery` | `delivery.applications.get` | RoleBinding in the Argo CD namespace |
+| ClusterRole `opsward:<profile>` | namespaced rules | by a RoleBinding in each namespace when every environment it serves on the cluster lists literal namespaces; otherwise by a ClusterRoleBinding |
+| ClusterRole `opsward:<profile>:cluster` | cluster-scoped rules (`namespaces.list`) | ClusterRoleBinding |
+| Role `opsward:<profile>:delivery` | `delivery.applications.get` | RoleBinding in the Argo CD namespace |
 
 The subject is the ServiceAccount `opsward-<profile>` in the namespace given by
 `--service-account-namespace` (default `opsward`), or what `--subject
 <profile>=<User|Group|ServiceAccount>:<name>` names (`<namespace>/<name>` for a
-ServiceAccount). Policy narrower than an environment (a binding limited to some
-namespaces) does not narrow the rendered RBAC: a profile is shared by every binding that
-uses it. Narrower RBAC needs separate profiles.
+ServiceAccount); a `--subject` for a profile that renders nothing is an error.
+
+Policy narrower than an environment (a binding limited to some namespaces) does not narrow
+the rendered RBAC: a profile is shared by every binding that uses it. Narrower RBAC needs
+separate profiles.
 
 ## Alternatives considered
 

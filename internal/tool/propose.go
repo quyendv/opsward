@@ -254,7 +254,7 @@ func ProposeChange(src capability.WorkloadSource, cfg ChangeConfig) (engine.Tool
 		Name: "propose_change",
 		Description: "Propose edits to the files that declare a workload (see resolve_source). Depending on the environment " +
 			"this returns the diff only (suggest) or opens a pull request (pull-request); nothing is applied to the cluster.",
-		Risk: core.RiskWrite, InputSchema: in.schema, Args: in.names,
+		Risk: core.RiskWrite, Risks: []core.Risk{core.RiskRead}, InputSchema: in.schema, Args: in.names,
 		Needs: []string{capability.OpWorkloadsGet},
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
