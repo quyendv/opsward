@@ -19,8 +19,8 @@ providers:
       cluster-a:
         profiles:
           # A kubeconfig whose credential is bound to a read-only role: get/list on
-          # workloads, pods and events, get on pods/log; no secrets, pods/exec or
-          # pods/portforward.
+          # workloads, pods and events, list on namespaces, get on pods/log; no
+          # secrets, pods/exec or pods/portforward.
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
 
   # Optional query backends; their tools appear only when configured. Changing these

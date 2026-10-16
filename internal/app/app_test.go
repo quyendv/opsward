@@ -142,7 +142,7 @@ func TestOpenRegistersM2Tools(t *testing.T) {
 	for _, tl := range f.app.Engine.Tools() {
 		names = append(names, tl.Name)
 	}
-	if got := strings.Join(names, ","); got != "diagnose_workload,get_knowledge,get_workload_status,list_workload_events,list_workload_logs,search_knowledge" {
+	if got := strings.Join(names, ","); got != "diagnose_workload,get_knowledge,get_workload_status,list_environments,list_namespaces,list_workload_events,list_workload_logs,list_workloads,search_knowledge" {
 		t.Fatalf("tools = %s", got)
 	}
 	if err := f.call("search_knowledge", `{"query":"crash"}`); err != nil {
@@ -372,5 +372,32 @@ func TestCheckDoesNotNeedBackendFiles(t *testing.T) {
 	}
 	if _, err := Check(cfg); err != nil {
 		t.Fatalf("Check: %v", err)
+	}
+}
+
+// list_environments follows the configuration, and policy decides each environment.
+func TestListEnvironmentsFollowsReload(t *testing.T) {
+	f := newFixture(t, "team-a")
+	names := func() string {
+		t.Helper()
+		res, err := f.app.Engine.Invoke(context.Background(), f.app.Principal, "list_environments", json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, e := range res.Data.([]any) {
+			out = append(out, e.(map[string]any)["name"].(string))
+		}
+		return strings.Join(out, ",")
+	}
+	if got := names(); got != "staging" {
+		t.Fatalf("environments = %s", got)
+	}
+	f.writeReplacing("team-a", "policy:\n", "  - name: production\n    cluster: cluster-a\npolicy:\n")
+	if err := f.app.ReloadFile(f.path); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); got != "staging,production" {
+		t.Fatalf("after reload, environments = %s", got)
 	}
 }

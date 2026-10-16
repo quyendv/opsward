@@ -128,6 +128,21 @@ type Workloads interface {
 	// matches the names of this workload's pods, current and past revisions, and no
 	// other workload's.
 	PodNamePattern(ctx context.Context, ref WorkloadRef) (string, error)
+	// ListNamespaces returns the names of the cluster's namespaces, sorted.
+	ListNamespaces(ctx context.Context) ([]string, error)
+	// ListWorkloads returns a namespace's Deployments, StatefulSets and DaemonSets,
+	// sorted by kind, then name.
+	ListWorkloads(ctx context.Context, namespace string) ([]WorkloadSummary, error)
+}
+
+// WorkloadSummary is one workload in a listing.
+type WorkloadSummary struct {
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	Desired int32  `json:"desired"`
+	Ready   int32  `json:"ready"`
+	// Labels are for policy (apps scope) and are not returned.
+	Labels map[string]string `json:"-"`
 }
 
 // WorkloadSource hands out Workloads for an environment and profile.

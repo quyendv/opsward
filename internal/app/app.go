@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quyendv/opsward/internal/audit"
@@ -71,6 +72,7 @@ type App struct {
 	lib        *knowledge.Library
 	metrics    *prometheus.Source // nil without providers.metrics
 	logs       *loki.Source       // nil without providers.logs
+	envs       environments
 	tools      []engine.Tool
 }
 
@@ -84,7 +86,20 @@ type derived struct {
 	profiles   map[string]map[string]kubernetes.Profile
 	// clusterValues maps each environment to its value of a backend's cluster label.
 	clusterValues map[string]string
+	envInfo       []tool.EnvironmentInfo
 	warnings      []string
+}
+
+// environments is what list_environments reads; a reload replaces it.
+type environments struct {
+	p atomic.Pointer[[]tool.EnvironmentInfo]
+}
+
+func (e *environments) Environments() []tool.EnvironmentInfo {
+	if p := e.p.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 func derive(cfg *config.Config, tools []engine.Tool, log *slog.Logger) (*derived, error) {
@@ -106,6 +121,10 @@ func derive(cfg *config.Config, tools []engine.Tool, log *slog.Logger) (*derived
 		d.envs = append(d.envs, engine.Environment{Name: e.Name, Namespaces: e.Namespaces})
 		d.envCluster[e.Name] = e.Cluster
 		d.clusterValues[e.Name] = e.ClusterLabelValue
+		d.envInfo = append(d.envInfo, tool.EnvironmentInfo{
+			Name: e.Name, Cluster: e.Cluster, Namespaces: e.Namespaces,
+			Metrics: cfg.Providers.Metrics != nil, Logs: cfg.Providers.Logs != nil,
+		})
 	}
 	for name, cl := range cfg.Providers.Kubernetes.Clusters {
 		d.profiles[name] = map[string]kubernetes.Profile{}
@@ -129,7 +148,7 @@ func Check(cfg *config.Config) ([]string, error) {
 	if cfg.Providers.Logs != nil {
 		ls = placeholder{}
 	}
-	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls)
+	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{})
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +192,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 		}
 		ls = a.logs
 	}
-	if a.tools, err = buildTools(a.source, a.lib, ms, ls); err != nil {
+	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs); err != nil {
 		return nil, err
 	}
 	d, err := derive(cfg, a.tools, opt.Logger)
@@ -245,6 +264,7 @@ func (a *App) Reload(next *config.Config) error {
 // apply hands a derived configuration to the providers and the knowledge library.
 func (a *App) apply(d *derived) {
 	a.source.Update(d.envCluster, d.profiles)
+	a.envs.p.Store(&d.envInfo)
 	a.lib.Set(d.pack)
 	if a.metrics != nil {
 		a.metrics.Update(d.clusterValues)
@@ -430,8 +450,11 @@ func (a *App) Close() error {
 
 // buildTools registers the tools whose backends are configured (docs/design/0001,
 // "Registration follows capability"). ms and ls are nil when not configured.
-func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource) ([]engine.Tool, error) {
+func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments) ([]engine.Tool, error) {
 	builders := []func() (engine.Tool, error){
+		func() (engine.Tool, error) { return tool.ListEnvironments(envs) },
+		func() (engine.Tool, error) { return tool.ListNamespaces(envs, src) },
+		func() (engine.Tool, error) { return tool.ListWorkloads(src) },
 		func() (engine.Tool, error) { return tool.WorkloadStatus(src) },
 		func() (engine.Tool, error) { return tool.WorkloadEvents(src) },
 		func() (engine.Tool, error) { return tool.WorkloadLogs(src) },

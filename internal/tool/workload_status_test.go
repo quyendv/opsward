@@ -24,6 +24,19 @@ type fakeSource struct {
 	eventsErr  error
 	eventLimit int
 	logsErr    error
+
+	namespaces []string
+	summaries  []capability.WorkloadSummary
+}
+
+func (f *fakeSource) ListNamespaces(context.Context) ([]string, error) {
+	f.calls = append(f.calls, "namespaces")
+	return f.namespaces, f.err
+}
+
+func (f *fakeSource) ListWorkloads(_ context.Context, namespace string) ([]capability.WorkloadSummary, error) {
+	f.calls = append(f.calls, "workloads:"+namespace)
+	return f.summaries, f.err
 }
 
 func (f *fakeSource) Workloads(_, profile string) (capability.Workloads, error) {

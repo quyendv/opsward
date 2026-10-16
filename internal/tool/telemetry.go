@@ -65,16 +65,39 @@ func refineNamespaceInput(s *jsonschema.Schema) {
 	s.Properties["namespace"].MinLength = jsonschema.Ptr(1)
 }
 
+// queryScope is the scope of a query tool: a namespace, or the whole cluster where the
+// environment and policy allow it (docs/design/0006).
+type queryScope struct {
+	Environment string `json:"environment" jsonschema:"name of a configured environment"`
+	Namespace   string `json:"namespace,omitempty" jsonschema:"namespace the query is confined to; omit for the whole cluster, where your permissions allow"`
+}
+
+func refineQueryScope(s *jsonschema.Schema) {
+	s.Properties["environment"].MinLength = jsonschema.Ptr(1)
+	s.Properties["namespace"].MinLength = jsonschema.Ptr(1)
+}
+
 type queryMetricsInput struct {
-	namespaceInput
-	Query string `json:"query" jsonschema:"PromQL expression; every selector is limited to the namespace (and cluster) automatically"`
-	Range string `json:"range,omitempty" jsonschema:"for a range query, how far back from now, such as 1h; at most 24h. Omit for an instant query"`
+	queryScope
+	Query  string `json:"query" jsonschema:"PromQL expression; every selector is limited to the namespace (if given) and the cluster automatically"`
+	Range  string `json:"range,omitempty" jsonschema:"for a range query, how far back from now, such as 1h; at most 24h. Omit for an instant query"`
+	Points bool   `json:"points,omitempty" jsonschema:"also return the points of each series (at most 60), not only min, max, avg and last"`
+}
+
+// summarize leaves only each series' summary: an overview needs no points.
+func summarize(r *capability.MetricsResult) {
+	if r == nil {
+		return
+	}
+	for i := range r.Series {
+		r.Series[i].Points, r.Series[i].PointsOmitted = nil, 0
+	}
 }
 
 // QueryMetrics is query_metrics.
 func QueryMetrics(src capability.MetricsSource) (engine.Tool, error) {
 	in, err := newInput[queryMetricsInput](func(s *jsonschema.Schema) {
-		refineNamespaceInput(s)
+		refineQueryScope(s)
 		s.Properties["query"].MinLength = jsonschema.Ptr(1)
 		s.Properties["query"].MaxLength = jsonschema.Ptr(maxQueryLength)
 	})
@@ -83,9 +106,11 @@ func QueryMetrics(src capability.MetricsSource) (engine.Tool, error) {
 	}
 	return engine.Tool{
 		Name: "query_metrics",
-		Description: "Run a PromQL query, instant or over a range, limited to one namespace. Each series comes with " +
-			"min, max and last. Prefer get_workload_metrics for a workload's CPU, memory or restarts.",
+		Description: "Run a PromQL query, instant or over a range, limited to one namespace, or to the whole cluster " +
+			"without one. Each series comes with min, max, avg and last; points only on request. Prefer " +
+			"get_workload_metrics for a workload's CPU, memory or restarts.",
 		Risk:        core.RiskRead,
+		ClusterWide: true,
 		InputSchema: in.schema,
 		Args:        in.names,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
@@ -109,7 +134,11 @@ func QueryMetrics(src capability.MetricsSource) (engine.Tool, error) {
 					if err != nil {
 						return nil, err
 					}
-					return m.Query(ctx, v.Namespace, q)
+					r, err := m.Query(ctx, v.Namespace, q)
+					if err == nil && !v.Points {
+						summarize(r)
+					}
+					return r, err
 				},
 			}, nil
 		},
@@ -117,7 +146,7 @@ func QueryMetrics(src capability.MetricsSource) (engine.Tool, error) {
 }
 
 type queryLogsInput struct {
-	namespaceInput
+	queryScope
 	Query string `json:"query" jsonschema:"LogQL log query: one {stream selector} and an optional pipeline, such as {app=\"api\"} |= \"error\"; limited to the namespace automatically"`
 	Since string `json:"since,omitempty" jsonschema:"how far back, such as 30m; default 1h, at most 24h"`
 	Limit int    `json:"limit,omitempty" jsonschema:"newest lines to return; default 100"`
@@ -126,7 +155,7 @@ type queryLogsInput struct {
 // QueryLogs is query_logs.
 func QueryLogs(src capability.LogsSource) (engine.Tool, error) {
 	in, err := newInput[queryLogsInput](func(s *jsonschema.Schema) {
-		refineNamespaceInput(s)
+		refineQueryScope(s)
 		s.Properties["query"].MinLength = jsonschema.Ptr(1)
 		s.Properties["query"].MaxLength = jsonschema.Ptr(maxLogQueryLength)
 		s.Properties["limit"].Minimum = jsonschema.Ptr(1.0)
@@ -139,8 +168,10 @@ func QueryLogs(src capability.LogsSource) (engine.Tool, error) {
 		Name: "query_logs",
 		Description: "Search a namespace's logs with a LogQL log query. Returns the newest matching lines, grouped by " +
 			"stream (pod, container): the most recently active stream first, lines oldest first within a stream. " +
-			"Metric queries over logs (rate, count_over_time) are not supported.",
+			"Metric queries over logs (rate, count_over_time) are not supported. Omit namespace to search the whole " +
+			"cluster, where your permissions allow.",
 		Risk:        core.RiskRead,
+		ClusterWide: true,
 		InputSchema: in.schema,
 		Args:        in.names,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
@@ -175,6 +206,7 @@ type workloadMetricsInput struct {
 	workloadInput
 	Metric string `json:"metric" jsonschema:"cpu (cores), memory (working-set bytes) or restarts"`
 	Range  string `json:"range,omitempty" jsonschema:"how far back from now; default 1h, at most 24h"`
+	Points bool   `json:"points,omitempty" jsonschema:"also return the points of each series (at most 60), not only min, max, avg and last"`
 }
 
 type metricTemplate struct {
@@ -247,7 +279,13 @@ func GetWorkloadMetrics(ws capability.WorkloadSource, ms capability.MetricsSourc
 					if err != nil {
 						return nil, err
 					}
-					return workloadMetrics(ctx, m, v.Namespace, pods, v.Metric, d)
+					r, err := workloadMetrics(ctx, m, v.Namespace, pods, v.Metric, d)
+					if err == nil && !v.Points {
+						summarize(r.Usage)
+						summarize(r.Requests)
+						summarize(r.Limits)
+					}
+					return r, err
 				},
 			}, nil
 		},

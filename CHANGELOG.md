@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `list_environments`, `list_namespaces` and `list_workloads`, authorized per item: each
+  shows only what the caller may work on. The reader profile needs `list` on namespaces.
+- `query_metrics` and `query_logs` without a namespace query the whole cluster, where the
+  environment spans every namespace and a binding not restricted to namespaces allows it.
+
+### Changed
+
+- Metrics results are summaries by default: each series has `min`, `max`, `avg`, `last`
+  and `samples`; points are returned with `points: true`.
+
 ## [0.2.0] - 2026-10-16
 
 A gateway a team can share: MCP over HTTP with API tokens or OIDC, internal groups, and a

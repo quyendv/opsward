@@ -34,7 +34,10 @@ func (f *fakeMetrics) Query(ctx context.Context, ns string, q capability.Metrics
 		return nil, f.fail.err
 	}
 	one := 1.0
-	return &capability.MetricsResult{Query: q.Query, Series: []capability.Series{{Labels: map[string]string{"pod": "api-a"}, Last: &one}}}, nil
+	return &capability.MetricsResult{Query: q.Query, Series: []capability.Series{{
+		Labels: map[string]string{"pod": "api-a"}, Last: &one, Samples: 1,
+		Points: []capability.Point{{Time: q.End, Value: one}},
+	}}}, nil
 }
 
 type fakeLogs struct {
@@ -85,7 +88,6 @@ func TestQueryMetrics(t *testing.T) {
 	for _, bad := range []string{
 		`{"environment":"production","namespace":"shop","query":"up","range":"25h"}`,
 		`{"environment":"production","namespace":"shop","query":"up","range":"soon"}`,
-		`{"environment":"production","query":"up"}`,
 		`{"environment":"production","namespace":"shop","query":""}`,
 		`{"environment":"production","namespace":"shop","query":"` + strings.Repeat("u", 4097) + `"}`,
 	} {
@@ -200,5 +202,49 @@ func TestQueryLogsLengthLimit(t *testing.T) {
 	long, _ := json.Marshal(map[string]string{"environment": "production", "namespace": "shop", "query": "{a=\"b\"} |= \"" + strings.Repeat("x", 2048) + "\""})
 	if _, err := tl.Prepare(long); err == nil {
 		t.Fatal("a query over 2048 characters was accepted")
+	}
+}
+
+// An overview needs min, max, avg and last; every point costs tokens.
+func TestMetricsAreSummariesUnlessPointsAreAsked(t *testing.T) {
+	m := &fakeMetrics{}
+	qm, _ := QueryMetrics(m)
+	_, out, err := runTool(t, qm, `{"environment":"production","namespace":"shop","query":"up","range":"1h"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := out.(*capability.MetricsResult).Series[0]; len(s.Points) != 0 || s.Samples != 1 || s.Last == nil {
+		t.Fatalf("default series = %+v", s)
+	}
+	_, out, _ = runTool(t, qm, `{"environment":"production","namespace":"shop","query":"up","range":"1h","points":true}`)
+	if s := out.(*capability.MetricsResult).Series[0]; len(s.Points) != 1 {
+		t.Fatalf("points: true = %+v", s)
+	}
+	wm, _ := GetWorkloadMetrics(&fakeSource{workload: &capability.Workload{}}, m)
+	_, out, err = runTool(t, wm, `{"environment":"production","namespace":"shop","kind":"Deployment","name":"api","metric":"cpu"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := out.(*WorkloadMetricsResult); len(r.Usage.Series[0].Points) != 0 || len(r.Requests.Series[0].Points) != 0 {
+		t.Fatalf("workload metrics = %+v", r)
+	}
+}
+
+// Without a namespace, a query is cluster-wide: the engine decides whether it may be.
+func TestQueryToolsAcceptClusterWideCalls(t *testing.T) {
+	m, l := &fakeMetrics{}, &fakeLogs{}
+	qm, _ := QueryMetrics(m)
+	ql, _ := QueryLogs(l)
+	for _, tl := range []engine.Tool{qm, ql} {
+		if !tl.ClusterWide {
+			t.Fatalf("%s is not cluster-wide", tl.Name)
+		}
+	}
+	p, _, err := runTool(t, qm, `{"environment":"production","query":"sum(node_load1)"}`)
+	if err != nil || p.Scope.Namespace != "" || m.namespace != "" {
+		t.Fatalf("query_metrics without namespace: %+v, %v", p, err)
+	}
+	if _, _, err := runTool(t, ql, `{"environment":"production","query":"{app=\"api\"}"}`); err != nil {
+		t.Fatalf("query_logs without namespace: %v", err)
 	}
 }

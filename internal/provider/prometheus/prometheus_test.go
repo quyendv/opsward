@@ -88,7 +88,7 @@ func TestRangeMatrixWithSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := res.Series[0]
-	if f.paths[0] != "/api/v1/query_range" || len(s.Points) != 3 || *s.Min != 1 || *s.Max != 3 || *s.Last != 2 {
+	if f.paths[0] != "/api/v1/query_range" || len(s.Points) != 3 || *s.Min != 1 || *s.Max != 3 || *s.Last != 2 || *s.Avg != 2 || s.Samples != 3 {
 		t.Fatalf("path %s series %+v", f.paths[0], s)
 	}
 }

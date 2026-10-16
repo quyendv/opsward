@@ -14,13 +14,17 @@ type Point struct {
 // Series is one metric series with its summary; non-finite samples are left out.
 type Series struct {
 	Labels map[string]string `json:"labels"`
-	Points []Point           `json:"points"` // the newest points, at most 60
-	// PointsOmitted counts older points left out; Min and Max still cover them.
+	// The summary covers every finite sample, and is absent when there is none (only NaN
+	// or Inf). Samples counts them.
+	Min     *float64 `json:"min,omitempty"`
+	Max     *float64 `json:"max,omitempty"`
+	Avg     *float64 `json:"avg,omitempty"`
+	Last    *float64 `json:"last,omitempty"`
+	Samples int      `json:"samples"`
+	// Points are the newest samples, at most 60; tools leave them out unless asked.
+	Points []Point `json:"points,omitempty"`
+	// PointsOmitted counts older points left out of Points.
 	PointsOmitted int `json:"pointsOmitted,omitempty"`
-	// The summary is absent when the series has no finite sample (only NaN or Inf).
-	Min  *float64 `json:"min,omitempty"`
-	Max  *float64 `json:"max,omitempty"`
-	Last *float64 `json:"last,omitempty"`
 }
 
 // MetricsQuery is an instant query (Range false, at Time) or a range query.

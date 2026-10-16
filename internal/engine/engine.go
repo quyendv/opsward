@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"slices"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +40,13 @@ type Tool struct {
 	// engine skips scope validation and label lookup, and authorizes them with an empty
 	// scope.
 	Global bool
+	// List tools are authorized per item of their result (docs/design/0006): the call
+	// must be reachable before anything is read, and each item is kept only when policy
+	// allows the tool on the item's scope. They implement RunList, not Run.
+	List bool
+	// ClusterWide tools read across namespaces when the call names none. Such a call is
+	// refused in an environment limited to some namespaces.
+	ClusterWide bool
 	// Prepare decodes and validates arguments without touching any backend.
 	Prepare func(args json.RawMessage) (*Prepared, error)
 }
@@ -52,6 +61,24 @@ type Prepared struct {
 	Resolve func(ctx context.Context) (map[string]string, error)
 	// Run performs the call with the named profile.
 	Run func(ctx context.Context, profile string) (any, error)
+	// RunList performs a List tool's call with the named profile.
+	RunList func(ctx context.Context, profile string) ([]Item, error)
+	// Wrap, if set, shapes a List tool's kept items into its result; by default the
+	// result is the list of their data.
+	Wrap func(kept []any) any
+}
+
+// Item is one element of a listing, with the scope policy decides it on.
+type Item struct {
+	Scope core.Scope
+	Data  any
+}
+
+// Reacher is implemented by an Authorizer that can tell whether a principal could be
+// allowed a tool anywhere within a scope (policy.Policy.Reachable). Listings need it;
+// without it they are denied.
+type Reacher interface {
+	Reachable(core.Request) bool
 }
 
 // Authorizer decides calls. policy.Policy implements it.
@@ -234,6 +261,13 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		if err := st.validateScope(prep.Scope); err != nil {
 			return nil, finish(audit.StatusInvalid, fmt.Errorf("%w: %w", ErrInvalidArguments, err))
 		}
+		if tool.ClusterWide && prep.Scope.Namespace == "" && !st.unlimited(prep.Scope.Environment) {
+			return nil, finish(audit.StatusInvalid, fmt.Errorf("%w: environment %q is limited to namespaces %s; name one",
+				ErrInvalidArguments, prep.Scope.Environment, strings.Join(st.envs[prep.Scope.Environment].Namespaces, ", ")))
+		}
+	}
+	if tool.List {
+		return e.list(ctx, st, tool, prep, &rec, finish, core.Request{Principal: p, Tool: name, Risk: tool.Risk, Scope: prep.Scope, Args: prep.Args, Now: start})
 	}
 
 	scope := prep.Scope
@@ -296,6 +330,60 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		res.Notes = st.ann.Annotate(req, data)
 	}
 	return res, nil
+}
+
+// list runs a List tool: reachable first, then each item decided on its own scope.
+func (e *Engine) list(ctx context.Context, st *state, tool Tool, prep *Prepared, rec *audit.Record, finish func(string, error) error, req core.Request) (*Result, error) {
+	// A global listing (environments) reads only configuration, so it needs no
+	// reachable scope before running; its items are still decided one by one.
+	reacher, ok := st.authz.(Reacher)
+	if !ok || (!tool.Global && !reacher.Reachable(req)) {
+		dec := core.Decision{Effect: core.EffectDeny, Rule: core.DefaultDenyRule}
+		rec.Decision = &dec
+		return nil, finish(audit.StatusDenied, &DeniedError{Decision: dec})
+	}
+	rec.Decision = &core.Decision{Effect: core.EffectAllow, Rule: core.PerItemRule}
+	if prep.RunList == nil {
+		return nil, finish(audit.StatusError, fmt.Errorf("tool %s lists but has no RunList", tool.Name))
+	}
+	items, err := prep.RunList(ctx, ProfileReader)
+	if errors.Is(err, core.ErrInvalidInput) {
+		return nil, finish(audit.StatusInvalid, err)
+	}
+	if err != nil {
+		return nil, finish(audit.StatusError, err)
+	}
+	kept := []any{}
+	for _, it := range items {
+		ireq := req
+		ireq.Scope = it.Scope
+		allowed := false
+		if it.Scope.Name != "" {
+			allowed = st.authz.Decide(ireq).Effect == core.EffectAllow
+		} else {
+			allowed = reacher.Reachable(ireq)
+		}
+		if allowed {
+			kept = append(kept, it.Data)
+		}
+	}
+	var out any = kept
+	if prep.Wrap != nil {
+		out = prep.Wrap(kept)
+	}
+	data, err := normalize(out)
+	if err != nil {
+		return nil, finish(audit.StatusError, err)
+	}
+	if err := finish(audit.StatusOK, nil); err != nil {
+		return nil, err
+	}
+	return &Result{Data: data}, nil
+}
+
+// unlimited reports whether an environment spans every namespace.
+func (s *state) unlimited(env string) bool {
+	return slices.Contains(s.envs[env].Namespaces, "*")
 }
 
 func (s *state) validateScope(sc core.Scope) error {

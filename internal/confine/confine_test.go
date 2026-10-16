@@ -201,3 +201,23 @@ func TestOutOfScopeIsInvalidInput(t *testing.T) {
 		t.Fatalf("syntax error: %v", err)
 	}
 }
+
+// A cluster-wide call names no namespace: only the cluster is enforced, and a query's
+// own namespace matchers stand.
+func TestClusterWideScope(t *testing.T) {
+	cw := Scope{NamespaceLabel: "namespace", ClusterLabel: "cluster", Cluster: "prod-a"}
+	got, err := PromQL(`sum by (namespace) (rate(x{namespace=~"team-.*"}[5m])) / node_memory_MemTotal_bytes`, cw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, `namespace=""`) || strings.Count(got, `cluster="prod-a"`) != 2 || !strings.Contains(got, `namespace=~"team-.*"`) {
+		t.Fatalf("PromQL = %s", got)
+	}
+	if got, err := LogQL(`{app="api"}`, cw); err != nil || got != `{app="api", cluster="prod-a"}` {
+		t.Fatalf("LogQL = %s, %v", got, err)
+	}
+	single := Scope{NamespaceLabel: "namespace"}
+	if got, err := PromQL(`up`, single); err != nil || got != "up" {
+		t.Fatalf("one cluster, no namespace: %s, %v", got, err)
+	}
+}

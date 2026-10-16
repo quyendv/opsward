@@ -119,6 +119,9 @@ func diagnose(ctx context.Context, w capability.Workloads, ms capability.Metrics
 				d.Unavailable["metrics"] = err.Error()
 				break
 			}
+			summarize(r.Usage)
+			summarize(r.Requests)
+			summarize(r.Limits)
 			d.Metrics[metric] = r
 		}
 		if len(d.Metrics) == 0 {

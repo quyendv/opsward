@@ -14,7 +14,8 @@ Status: **pre-alpha.** Nothing is stable. Read-only workload, metrics and logs t
 Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0001](docs/design/0001-architecture.md) for the architecture,
 [0002](docs/design/0002-identity-policy-storage.md) for identity, policy and storage,
-[0005](docs/design/0005-remote-access.md) for remote access.
+[0005](docs/design/0005-remote-access.md) for remote access,
+[0006](docs/design/0006-discovery-and-summaries.md) for discovery and per-item authorization.
 
 ## Layout
 
