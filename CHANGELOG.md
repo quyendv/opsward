@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-16
+
+Agent mode: an alert's diagnosis is followed by a model's analysis, made with Opsward's
+read tools under the same policy and audit, pinned to the alert's workload.
+
 ### Added
 
 - Agent mode for alerts (`agent`, `alerts.agent: true`; off by default): after the
@@ -201,7 +206,8 @@ First release: a single-user, read-only gateway over MCP stdio.
   and cluster before they are sent.
 - `diagnose_workload`: status, events, failing containers' logs and resource use in one call.
 
-[Unreleased]: https://github.com/quyendv/opsward/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/quyendv/opsward/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/quyendv/opsward/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/quyendv/opsward/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/quyendv/opsward/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/quyendv/opsward/compare/v0.3.0...v0.4.0

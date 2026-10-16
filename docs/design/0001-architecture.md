@@ -391,7 +391,8 @@ in force. See [0002](0002-identity-policy-storage.md#loading-the-file).
 | v0.4 | narrow write verbs with approvals ([0007](0007-operate-and-approvals.md)), `suggest` and `pull-request` strategies ([0008](0008-propose-change.md)) |
 | v0.5 | `opsward rbac render` ([0009](0009-rbac-render.md)), delivery status ([0010](0010-delivery-status.md)) |
 | v0.6 | Helm chart ([0011](0011-running-in-a-cluster.md)), alert investigation ([0012](0012-alert-investigation.md)) |
-| later | optional agent mode, web console (audit, approvals, policy), snapshots, impersonation and token passthrough credential sources |
+| v0.7 | agent mode for alerts ([0013](0013-agent-mode.md)) |
+| later | web console (audit, approvals, policy), snapshots, impersonation and token passthrough credential sources |
 
 ## Alternatives considered
 
