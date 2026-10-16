@@ -72,6 +72,9 @@ and `propose_change`, which turn a change into a diff or a pull request against 
 workload's GitOps source; with Argo CD configured, `get_delivery_status`; with a
 Prometheus-compatible
 metrics backend also `get_workload_metrics` and `query_metrics`, and with Loki `query_logs`.
+In remote mode Opsward can also take Alertmanager's alerts (`alerts` in the
+configuration, design note [0012](docs/design/0012-alert-investigation.md)): each firing
+alert is mapped to its workload and diagnosed, and the result goes to a webhook or Slack.
 Free-form queries are rewritten so that they cannot leave the caller's namespace and
 cluster; without a namespace they span the cluster, where the environment and policy allow. Results that match a knowledge document carry its
 summary as a note. Edits to the configuration file apply without a restart; after editing

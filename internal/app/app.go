@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/quyendv/opsward/internal/adapter/alertmanager"
 	"github.com/quyendv/opsward/internal/audit"
 	"github.com/quyendv/opsward/internal/capability"
 	"github.com/quyendv/opsward/internal/config"
@@ -54,6 +55,9 @@ type App struct {
 	Store     store.Store
 	// Identity authenticates bearer tokens in remote mode.
 	Identity *identity.Authenticator
+	// Alerts receives Alertmanager's webhook; nil without alerts. Its Run must be
+	// running for alerts to be investigated.
+	Alerts   *alertmanager.Receiver
 	Warnings []string
 
 	retention time.Duration
@@ -72,6 +76,7 @@ type App struct {
 	logs       *logsRoutes    // nil without any logs backend
 	changes    *changeRoutes  // nil without a forge or providers.delivery
 	envs       environments
+	alertEnvs  alertEnvironments
 	tools      []engine.Tool
 }
 
@@ -86,6 +91,7 @@ type derived struct {
 	// clusterValues maps each environment to its value of a backend's cluster label.
 	clusterValues map[string]string
 	envInfo       []tool.EnvironmentInfo
+	alertEnvs     []alertmanager.Environment
 	// metricsPaths and logsPaths map each environment with a backend to its path.
 	metricsPaths, logsPaths map[string]string
 	warnings                []string
@@ -120,6 +126,7 @@ func derive(cfg *config.Config, tools []engine.Tool, log *slog.Logger) (*derived
 		return nil, err
 	}
 	d.policy, d.pack = pol, pack
+	d.alertEnvs = alertEnvs(cfg)
 	d.warnings = append(append(cfg.Warnings(), pw...), kw...)
 	for _, e := range cfg.Environments {
 		d.envs = append(d.envs, engine.Environment{Name: e.Name, Namespaces: e.Namespaces})
@@ -258,6 +265,10 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 		return nil, err
 	}
 	a.Principal = core.Principal{Subject: cfg.Identity.Principal.Subject, Groups: cfg.Identity.Principal.Groups}
+	if a.Alerts, err = openAlerts(cfg, a.Engine, &a.alertEnvs, opt.Logger); err != nil {
+		_ = a.Close()
+		return nil, err
+	}
 	return a, nil
 }
 
@@ -309,6 +320,7 @@ func (a *App) Reload(next *config.Config) error {
 func (a *App) apply(d *derived) {
 	a.source.Update(d.envCluster, d.profiles)
 	a.envs.p.Store(&d.envInfo)
+	a.alertEnvs.p.Store(&d.alertEnvs)
 	a.lib.Set(d.pack)
 	if a.metrics != nil {
 		a.metrics.update(d.metricsPaths, d.clusterValues)

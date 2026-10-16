@@ -15,6 +15,13 @@ All notable changes to this project are documented here. The format follows
   ServiceAccount with a token and a kubeconfig for each profile in `localProfiles`, the
   subjects `opsward rbac render` binds; its reviewed output can ship as `rbac.rendered`.
   The pod runs as non-root with a read-only filesystem and no token of its own.
+- Alert investigation: `POST /alerts/alertmanager` takes Alertmanager's webhook, maps each
+  firing alert to a workload from its labels (`alerts.environmentLabel`, `namespaceLabel`,
+  `workloadLabels`), runs `diagnose_workload` through the engine as `alerts.principal`, under
+  policy and audit, and sends the result to a webhook (JSON) or Slack (a short summary:
+  readiness, waiting reasons, warning events, the crashed container's last lines). Alerts
+  are investigated once per `alerts.dedupe` window; ones that map to no workload are
+  reported with the reason. No model is called.
 - `opsward rbac render --cluster NAME` prints one cluster's RBAC.
 - `sourceResolution.annotationPaths` bounds, per environment, the repository paths a
   workload's `opsward/source` annotation may name.

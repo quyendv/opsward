@@ -59,10 +59,16 @@ type HTTPOptions struct {
 	// ShutdownTimeout is how long calls in flight may finish once serving stops;
 	// default 30 seconds.
 	ShutdownTimeout time.Duration
+	// Routes are other endpoints, such as the alert webhook (docs/design/0012), served
+	// for the principal of the request's bearer token like /mcp.
+	Routes map[string]PrincipalHandler
 	// Resource, when set, is advertised as RFC 9728 protected resource metadata and in
 	// every 401 challenge, so that OAuth clients can find the authorization server.
 	Resource *Resource
 }
+
+// PrincipalHandler serves a request for an authenticated principal.
+type PrincipalHandler func(w http.ResponseWriter, r *http.Request, p core.Principal)
 
 // Resource describes the MCP endpoint as an OAuth protected resource.
 type Resource struct {
@@ -129,6 +135,12 @@ func newHTTPHandler(e *engine.Engine, opt HTTPOptions, stop context.Context) htt
 		}
 	}
 	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(authenticate(opt.Authenticate, challenge, log, singleMessage(carry(h)))))
+	for pattern, h := range opt.Routes {
+		mux.Handle(pattern, authenticate(opt.Authenticate, challenge, log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			a, _ := r.Context().Value(principalKey{}).(authenticated)
+			h(w, r, a.p)
+		})))
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if opt.Ready != nil {
