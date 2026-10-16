@@ -56,6 +56,9 @@ const (
 // DefaultDenyRule names the decision taken when no binding matches.
 const DefaultDenyRule = "default-deny"
 
+// PerItemRule names the decision of a listing, whose items are authorized one by one.
+const PerItemRule = "per-item"
+
 // Principal is who is calling.
 type Principal struct {
 	Subject string   `json:"subject"`

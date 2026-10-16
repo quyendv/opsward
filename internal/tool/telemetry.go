@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
 
@@ -24,7 +25,85 @@ const (
 	maxLogQueryLength = 2048
 	defaultLogLines   = 100
 	maxLogLines       = 1000
+	// maxLogLineChars cuts single lines, such as structured JSON, that would crowd out
+	// the rest; maxLogResultBytes bounds a log result, as JSON-encoded, to what an agent
+	// can read at once: clients cap a tool result at some 25,000 tokens, and escaped JSON
+	// is dense in tokens.
+	maxLogLineChars   = 2000
+	maxLogResultBytes = 32 << 10
 )
+
+// cutLine shortens a line beyond maxLogLineChars bytes, on a character boundary, and
+// says by how many bytes.
+func cutLine(s string) string {
+	if len(s) <= maxLogLineChars {
+		return s
+	}
+	end := maxLogLineChars
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return fmt.Sprintf("%s … [%d more bytes]", s[:end], len(s)-end)
+}
+
+// encodedLen is the length of s as a JSON string, the form the agent receives.
+func encodedLen(s string) int {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return len(s)
+	}
+	return len(b)
+}
+
+// cutContainerLines cuts long lines of container logs, which are already bounded per
+// container in bytes.
+func cutContainerLines(logs []capability.ContainerLog) {
+	for i := range logs {
+		for j, l := range logs[i].Lines {
+			logs[i].Lines[j] = cutLine(l)
+		}
+	}
+}
+
+// boundLogs cuts long lines and, past maxLogResultBytes, leaves out lines oldest first:
+// streams come most recently active first, so their newest lines are kept first. A
+// stream's labels count against the budget, and a stream left without lines is dropped.
+func boundLogs(r *capability.LogsResult) {
+	if r == nil {
+		return
+	}
+	const perLine = 4 // the separators the encoding adds around a line
+	budget := maxLogResultBytes
+	kept := r.Streams[:0]
+	for _, st := range r.Streams {
+		lines := st.Lines
+		labels, _ := json.Marshal(st.Labels)
+		cost := len(labels) + 32 // labels plus the stream's own structure
+		if budget < cost {
+			r.LinesOmitted += len(lines)
+			continue
+		}
+		budget -= cost
+		keep := 0
+		for j := len(lines) - 1; j >= 0; j-- {
+			lines[j] = cutLine(lines[j])
+			c := encodedLen(lines[j]) + perLine
+			if budget < c {
+				break
+			}
+			budget -= c
+			keep++
+		}
+		r.LinesOmitted += len(lines) - keep
+		if keep == 0 {
+			budget += cost // the stream is not returned
+			continue
+		}
+		st.Lines = lines[len(lines)-keep:]
+		kept = append(kept, st)
+	}
+	r.Streams = kept
+}
 
 // window parses a range such as "30m" or "6h"; empty means the default.
 func window(s string) (time.Duration, error) {
@@ -55,26 +134,39 @@ func rangeQuery(query string, d time.Duration) capability.MetricsQuery {
 	return capability.MetricsQuery{Query: query, Range: true, Start: end.Add(-d), End: end, Step: step}
 }
 
-type namespaceInput struct {
+// queryScope is the scope of a query tool: a namespace, or the whole cluster where the
+// environment and policy allow it (docs/design/0006).
+type queryScope struct {
 	Environment string `json:"environment" jsonschema:"name of a configured environment"`
-	Namespace   string `json:"namespace" jsonschema:"namespace the query is confined to"`
+	Namespace   string `json:"namespace,omitempty" jsonschema:"namespace the query is confined to; omit for the whole cluster, where your permissions allow"`
 }
 
-func refineNamespaceInput(s *jsonschema.Schema) {
+func refineQueryScope(s *jsonschema.Schema) {
 	s.Properties["environment"].MinLength = jsonschema.Ptr(1)
 	s.Properties["namespace"].MinLength = jsonschema.Ptr(1)
 }
 
 type queryMetricsInput struct {
-	namespaceInput
-	Query string `json:"query" jsonschema:"PromQL expression; every selector is limited to the namespace (and cluster) automatically"`
-	Range string `json:"range,omitempty" jsonschema:"for a range query, how far back from now, such as 1h; at most 24h. Omit for an instant query"`
+	queryScope
+	Query  string `json:"query" jsonschema:"PromQL expression; every selector is limited to the namespace (if given) and the cluster automatically"`
+	Range  string `json:"range,omitempty" jsonschema:"for a range query, how far back from now, such as 1h; at most 24h. Omit for an instant query"`
+	Points bool   `json:"points,omitempty" jsonschema:"also return the points of each series (at most 60), not only min, max, avg and last"`
+}
+
+// summarize leaves only each series' summary: an overview needs no points.
+func summarize(r *capability.MetricsResult) {
+	if r == nil {
+		return
+	}
+	for i := range r.Series {
+		r.Series[i].Points, r.Series[i].PointsOmitted = nil, 0
+	}
 }
 
 // QueryMetrics is query_metrics.
 func QueryMetrics(src capability.MetricsSource) (engine.Tool, error) {
 	in, err := newInput[queryMetricsInput](func(s *jsonschema.Schema) {
-		refineNamespaceInput(s)
+		refineQueryScope(s)
 		s.Properties["query"].MinLength = jsonschema.Ptr(1)
 		s.Properties["query"].MaxLength = jsonschema.Ptr(maxQueryLength)
 	})
@@ -83,9 +175,11 @@ func QueryMetrics(src capability.MetricsSource) (engine.Tool, error) {
 	}
 	return engine.Tool{
 		Name: "query_metrics",
-		Description: "Run a PromQL query, instant or over a range, limited to one namespace. Each series comes with " +
-			"min, max and last. Prefer get_workload_metrics for a workload's CPU, memory or restarts.",
+		Description: "Run a PromQL query, instant or over a range, limited to one namespace, or to the whole cluster " +
+			"without one. Each series comes with min, max, avg and last; points only on request. Prefer " +
+			"get_workload_metrics for a workload's CPU, memory or restarts.",
 		Risk:        core.RiskRead,
+		ClusterWide: true,
 		InputSchema: in.schema,
 		Args:        in.names,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
@@ -109,7 +203,12 @@ func QueryMetrics(src capability.MetricsSource) (engine.Tool, error) {
 					if err != nil {
 						return nil, err
 					}
-					return m.Query(ctx, v.Namespace, q)
+					q.AllNamespaces = v.Namespace == ""
+					r, err := m.Query(ctx, v.Namespace, q)
+					if err == nil && !v.Points {
+						summarize(r)
+					}
+					return r, err
 				},
 			}, nil
 		},
@@ -117,7 +216,7 @@ func QueryMetrics(src capability.MetricsSource) (engine.Tool, error) {
 }
 
 type queryLogsInput struct {
-	namespaceInput
+	queryScope
 	Query string `json:"query" jsonschema:"LogQL log query: one {stream selector} and an optional pipeline, such as {app=\"api\"} |= \"error\"; limited to the namespace automatically"`
 	Since string `json:"since,omitempty" jsonschema:"how far back, such as 30m; default 1h, at most 24h"`
 	Limit int    `json:"limit,omitempty" jsonschema:"newest lines to return; default 100"`
@@ -126,7 +225,7 @@ type queryLogsInput struct {
 // QueryLogs is query_logs.
 func QueryLogs(src capability.LogsSource) (engine.Tool, error) {
 	in, err := newInput[queryLogsInput](func(s *jsonschema.Schema) {
-		refineNamespaceInput(s)
+		refineQueryScope(s)
 		s.Properties["query"].MinLength = jsonschema.Ptr(1)
 		s.Properties["query"].MaxLength = jsonschema.Ptr(maxLogQueryLength)
 		s.Properties["limit"].Minimum = jsonschema.Ptr(1.0)
@@ -139,8 +238,10 @@ func QueryLogs(src capability.LogsSource) (engine.Tool, error) {
 		Name: "query_logs",
 		Description: "Search a namespace's logs with a LogQL log query. Returns the newest matching lines, grouped by " +
 			"stream (pod, container): the most recently active stream first, lines oldest first within a stream. " +
-			"Metric queries over logs (rate, count_over_time) are not supported.",
+			"Metric queries over logs (rate, count_over_time) are not supported. Omit namespace to search the whole " +
+			"cluster, where your permissions allow.",
 		Risk:        core.RiskRead,
+		ClusterWide: true,
 		InputSchema: in.schema,
 		Args:        in.names,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
@@ -164,7 +265,9 @@ func QueryLogs(src capability.LogsSource) (engine.Tool, error) {
 					if err != nil {
 						return nil, err
 					}
-					return l.Query(ctx, v.Namespace, capability.LogsQuery{Query: v.Query, Since: since, Limit: limit})
+					r, err := l.Query(ctx, v.Namespace, capability.LogsQuery{Query: v.Query, Since: since, Limit: limit, AllNamespaces: v.Namespace == ""})
+					boundLogs(r)
+					return r, err
 				},
 			}, nil
 		},
@@ -175,6 +278,7 @@ type workloadMetricsInput struct {
 	workloadInput
 	Metric string `json:"metric" jsonschema:"cpu (cores), memory (working-set bytes) or restarts"`
 	Range  string `json:"range,omitempty" jsonschema:"how far back from now; default 1h, at most 24h"`
+	Points bool   `json:"points,omitempty" jsonschema:"also return the points of each series (at most 60), not only min, max, avg and last"`
 }
 
 type metricTemplate struct {
@@ -247,7 +351,13 @@ func GetWorkloadMetrics(ws capability.WorkloadSource, ms capability.MetricsSourc
 					if err != nil {
 						return nil, err
 					}
-					return workloadMetrics(ctx, m, v.Namespace, pods, v.Metric, d)
+					r, err := workloadMetrics(ctx, m, v.Namespace, pods, v.Metric, d)
+					if err == nil && !v.Points {
+						summarize(r.Usage)
+						summarize(r.Requests)
+						summarize(r.Limits)
+					}
+					return r, err
 				},
 			}, nil
 		},

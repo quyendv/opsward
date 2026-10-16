@@ -88,7 +88,7 @@ func TestRangeMatrixWithSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := res.Series[0]
-	if f.paths[0] != "/api/v1/query_range" || len(s.Points) != 3 || *s.Min != 1 || *s.Max != 3 || *s.Last != 2 {
+	if f.paths[0] != "/api/v1/query_range" || len(s.Points) != 3 || *s.Min != 1 || *s.Max != 3 || *s.Last != 2 || *s.Avg != 2 || s.Samples != 3 {
 		t.Fatalf("path %s series %+v", f.paths[0], s)
 	}
 }
@@ -188,5 +188,17 @@ func TestNonFiniteSeriesHasNoSummary(t *testing.T) {
 	b, _ := json.Marshal(res.Series[0])
 	if strings.Contains(string(b), `"min"`) || strings.Contains(string(b), `"last"`) {
 		t.Fatalf("series = %s", b)
+	}
+}
+
+// An empty namespace means every namespace only when the query says so: a tool that
+// forgets a namespace must not go unconfined.
+func TestEmptyNamespaceNeedsAllNamespaces(t *testing.T) {
+	f := &fakeProm{t: t, reply: `{"status":"success","data":{"resultType":"vector","result":[]}}`}
+	src, done := source(t, f)
+	defer done()
+	m, _ := src.Metrics("production")
+	if _, err := m.Query(context.Background(), "", capability.MetricsQuery{Query: "up"}); err == nil || len(f.paths) != 0 {
+		t.Fatalf("err = %v, requests %d", err, len(f.paths))
 	}
 }

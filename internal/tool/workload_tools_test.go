@@ -119,7 +119,7 @@ func TestWorkloadLogsTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := src.logOptions; got != (capability.LogOptions{TailLines: 100, MaxPods: 10, MaxBytes: 256 << 10, TotalBytes: 1 << 20}) {
+	if got := src.logOptions; got != (capability.LogOptions{TailLines: 100, MaxPods: 10, MaxBytes: 16 << 10, TotalBytes: 32 << 10}) {
 		t.Fatalf("defaults = %+v", got)
 	}
 	if b, _ := json.Marshal(out); !strings.Contains(string(b), "boom") {
@@ -135,5 +135,17 @@ func TestWorkloadLogsTool(t *testing.T) {
 	}
 	if got := src.logOptions; got.Pod != "api-7d9f-a" || got.Container != "app" || got.TailLines != 20 || !got.Previous {
 		t.Fatalf("options = %+v", got)
+	}
+}
+
+func TestWorkloadLogsCutLongLines(t *testing.T) {
+	src := &fakeSource{workload: &capability.Workload{}, logs: &capability.WorkloadLogs{Logs: []capability.ContainerLog{{Pod: "a", Container: "c", Lines: []string{strings.Repeat("z", 9000)}}}}}
+	tl, _ := WorkloadLogs(src)
+	_, out, err := runTool(t, tl, `{"environment":"staging","namespace":"shop","kind":"Deployment","name":"api"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := out.(*capability.WorkloadLogs).Logs[0].Lines[0]; len(l) > maxLogLineChars+64 {
+		t.Fatalf("line of %d chars", len(l))
 	}
 }

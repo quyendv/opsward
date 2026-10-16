@@ -14,13 +14,17 @@ type Point struct {
 // Series is one metric series with its summary; non-finite samples are left out.
 type Series struct {
 	Labels map[string]string `json:"labels"`
-	Points []Point           `json:"points"` // the newest points, at most 60
-	// PointsOmitted counts older points left out; Min and Max still cover them.
+	// The summary covers every finite sample, and is absent when there is none (only NaN
+	// or Inf). Samples counts them.
+	Min     *float64 `json:"min,omitempty"`
+	Max     *float64 `json:"max,omitempty"`
+	Avg     *float64 `json:"avg,omitempty"`
+	Last    *float64 `json:"last,omitempty"`
+	Samples int      `json:"samples"`
+	// Points are the newest samples, at most 60; tools leave them out unless asked.
+	Points []Point `json:"points,omitempty"`
+	// PointsOmitted counts older points left out of Points.
 	PointsOmitted int `json:"pointsOmitted,omitempty"`
-	// The summary is absent when the series has no finite sample (only NaN or Inf).
-	Min  *float64 `json:"min,omitempty"`
-	Max  *float64 `json:"max,omitempty"`
-	Last *float64 `json:"last,omitempty"`
 }
 
 // MetricsQuery is an instant query (Range false, at Time) or a range query.
@@ -30,6 +34,10 @@ type MetricsQuery struct {
 	Time       time.Time
 	Start, End time.Time
 	Step       time.Duration
+	// AllNamespaces must be set for a query without a namespace, which then spans every
+	// namespace of the cluster; without it an empty namespace is an error, so a tool that
+	// forgets one cannot go unconfined.
+	AllNamespaces bool
 }
 
 // MetricsResult is the answer to a metrics query.
@@ -56,6 +64,8 @@ type LogsQuery struct {
 	Since time.Duration
 	Limit int
 	End   time.Time
+	// AllNamespaces: as for MetricsQuery.
+	AllNamespaces bool
 }
 
 // LogStream is the lines of one stream (such as one container), oldest first, each
@@ -69,6 +79,8 @@ type LogStream struct {
 type LogsResult struct {
 	Query   string      `json:"query"` // as sent, after confinement
 	Streams []LogStream `json:"streams"`
+	// LinesOmitted counts lines left out, oldest first, to keep the result readable.
+	LinesOmitted int `json:"linesOmitted,omitempty"`
 }
 
 // Logs queries one environment's logs. Implementations confine every query.

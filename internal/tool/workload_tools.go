@@ -18,8 +18,9 @@ const (
 	defaultTailLines  = 100
 	maxTailLines      = 1000
 	maxLogPods        = 10
-	maxLogBytes       = 256 << 10 // per container
-	maxLogTotalBytes  = 1 << 20   // per call
+	// Bounded so that a result fits what an agent reads at once (see maxLogResultBytes).
+	maxLogBytes      = 16 << 10 // per container
+	maxLogTotalBytes = 32 << 10 // per call
 )
 
 type eventsInput struct {
@@ -102,7 +103,11 @@ func WorkloadLogs(src capability.WorkloadSource) (engine.Tool, error) {
 				opt.TailLines = defaultTailLines
 			}
 			return workloadPrepared(src, v.workloadInput, obj, func(ctx context.Context, w capability.Workloads, ref capability.WorkloadRef) (any, error) {
-				return w.WorkloadLogs(ctx, ref, opt)
+				logs, err := w.WorkloadLogs(ctx, ref, opt)
+				if err == nil {
+					cutContainerLines(logs.Logs)
+				}
+				return logs, err
 			}), nil
 		},
 	}, nil

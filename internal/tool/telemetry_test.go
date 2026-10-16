@@ -34,18 +34,25 @@ func (f *fakeMetrics) Query(ctx context.Context, ns string, q capability.Metrics
 		return nil, f.fail.err
 	}
 	one := 1.0
-	return &capability.MetricsResult{Query: q.Query, Series: []capability.Series{{Labels: map[string]string{"pod": "api-a"}, Last: &one}}}, nil
+	return &capability.MetricsResult{Query: q.Query, Series: []capability.Series{{
+		Labels: map[string]string{"pod": "api-a"}, Last: &one, Samples: 1,
+		Points: []capability.Point{{Time: q.End, Value: one}},
+	}}}, nil
 }
 
 type fakeLogs struct {
 	namespace string
 	q         capability.LogsQuery
+	result    *capability.LogsResult
 }
 
 func (f *fakeLogs) Logs(string) (capability.Logs, error) { return f, nil }
 
 func (f *fakeLogs) Query(_ context.Context, ns string, q capability.LogsQuery) (*capability.LogsResult, error) {
 	f.namespace, f.q = ns, q
+	if f.result != nil {
+		return f.result, nil
+	}
 	return &capability.LogsResult{Query: q.Query}, nil
 }
 
@@ -85,7 +92,6 @@ func TestQueryMetrics(t *testing.T) {
 	for _, bad := range []string{
 		`{"environment":"production","namespace":"shop","query":"up","range":"25h"}`,
 		`{"environment":"production","namespace":"shop","query":"up","range":"soon"}`,
-		`{"environment":"production","query":"up"}`,
 		`{"environment":"production","namespace":"shop","query":""}`,
 		`{"environment":"production","namespace":"shop","query":"` + strings.Repeat("u", 4097) + `"}`,
 	} {
@@ -200,5 +206,127 @@ func TestQueryLogsLengthLimit(t *testing.T) {
 	long, _ := json.Marshal(map[string]string{"environment": "production", "namespace": "shop", "query": "{a=\"b\"} |= \"" + strings.Repeat("x", 2048) + "\""})
 	if _, err := tl.Prepare(long); err == nil {
 		t.Fatal("a query over 2048 characters was accepted")
+	}
+}
+
+// An overview needs min, max, avg and last; every point costs tokens.
+func TestMetricsAreSummariesUnlessPointsAreAsked(t *testing.T) {
+	m := &fakeMetrics{}
+	qm, _ := QueryMetrics(m)
+	_, out, err := runTool(t, qm, `{"environment":"production","namespace":"shop","query":"up","range":"1h"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := out.(*capability.MetricsResult).Series[0]; len(s.Points) != 0 || s.Samples != 1 || s.Last == nil {
+		t.Fatalf("default series = %+v", s)
+	}
+	_, out, _ = runTool(t, qm, `{"environment":"production","namespace":"shop","query":"up","range":"1h","points":true}`)
+	if s := out.(*capability.MetricsResult).Series[0]; len(s.Points) != 1 {
+		t.Fatalf("points: true = %+v", s)
+	}
+	wm, _ := GetWorkloadMetrics(&fakeSource{workload: &capability.Workload{}}, m)
+	_, out, err = runTool(t, wm, `{"environment":"production","namespace":"shop","kind":"Deployment","name":"api","metric":"cpu"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := out.(*WorkloadMetricsResult); len(r.Usage.Series[0].Points) != 0 || len(r.Requests.Series[0].Points) != 0 {
+		t.Fatalf("workload metrics = %+v", r)
+	}
+}
+
+// Without a namespace, a query is cluster-wide: the engine decides whether it may be.
+func TestQueryToolsAcceptClusterWideCalls(t *testing.T) {
+	m, l := &fakeMetrics{}, &fakeLogs{}
+	qm, _ := QueryMetrics(m)
+	ql, _ := QueryLogs(l)
+	for _, tl := range []engine.Tool{qm, ql} {
+		if !tl.ClusterWide {
+			t.Fatalf("%s is not cluster-wide", tl.Name)
+		}
+	}
+	p, _, err := runTool(t, qm, `{"environment":"production","query":"sum(node_load1)"}`)
+	if err != nil || p.Scope.Namespace != "" || m.namespace != "" || !m.queries[len(m.queries)-1].AllNamespaces {
+		t.Fatalf("query_metrics without namespace: %+v, %v", p, err)
+	}
+	if _, _, err := runTool(t, ql, `{"environment":"production","query":"{app=\"api\"}"}`); err != nil || !l.q.AllNamespaces {
+		t.Fatalf("query_logs without namespace: %v", err)
+	}
+}
+
+// Long log lines (structured JSON) and many of them must fit what an agent can read: each
+// line is cut, and the oldest lines go first when the whole result is too large.
+func TestQueryLogsBoundsLineLengthAndResultSize(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	var lines []string
+	for i := range 600 {
+		lines = append(lines, fmt.Sprintf("line-%03d %s", i, strings.Repeat("y", 1500)))
+	}
+	lines = append(lines, long)
+	l := &fakeLogs{result: &capability.LogsResult{Streams: []capability.LogStream{{Labels: map[string]string{"pod": "a"}, Lines: lines}}}}
+	tl, _ := QueryLogs(l)
+	_, out, err := runTool(t, tl, `{"environment":"production","namespace":"shop","query":"{a=\"b\"}","limit":1000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := out.(*capability.LogsResult)
+	if b, _ := json.Marshal(r); len(b) > maxLogResultBytes+4096 {
+		t.Fatalf("result is %d bytes encoded", len(b))
+	}
+	got := r.Streams[0].Lines
+	last := got[len(got)-1]
+	if len(last) > maxLogLineChars+64 || !strings.Contains(last, "more bytes") {
+		t.Fatalf("long line kept as %d chars: %.80s", len(last), last)
+	}
+	if r.LinesOmitted == 0 || strings.HasPrefix(got[0], "line-000") {
+		t.Fatalf("omitted %d; first kept line %.20s: the oldest should go first", r.LinesOmitted, got[0])
+	}
+}
+
+// The budget is what the agent receives: JSON-encoded, where every quote of a structured
+// log line doubles.
+func TestQueryLogsBudgetCountsEncodedSize(t *testing.T) {
+	var lines []string
+	for i := range 400 {
+		lines = append(lines, fmt.Sprintf(`{"i":%d,"level":"ERROR","msg":"%s"}`, i, strings.Repeat(`\"q\" `, 60)))
+	}
+	l := &fakeLogs{result: &capability.LogsResult{Streams: []capability.LogStream{{Labels: map[string]string{"pod": "a"}, Lines: lines}}}}
+	tl, _ := QueryLogs(l)
+	_, out, err := runTool(t, tl, `{"environment":"production","namespace":"shop","query":"{a=\"b\"}","limit":1000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(out); len(b) > maxLogResultBytes+4096 {
+		t.Fatalf("encoded result is %d bytes", len(b))
+	}
+}
+
+// Many streams of few lines: their labels count against the budget too, and a stream
+// left without lines is not returned.
+func TestQueryLogsBudgetCountsStreamLabels(t *testing.T) {
+	var streams []capability.LogStream
+	for i := range 300 {
+		labels := map[string]string{}
+		for j := range 10 {
+			labels[fmt.Sprintf("label_%d", j)] = fmt.Sprintf("value-%d-%d", i, j)
+		}
+		streams = append(streams, capability.LogStream{Labels: labels, Lines: []string{"short line"}})
+	}
+	l := &fakeLogs{result: &capability.LogsResult{Streams: streams}}
+	tl, _ := QueryLogs(l)
+	_, out, err := runTool(t, tl, `{"environment":"production","namespace":"shop","query":"{a=\"b\"}","limit":1000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := out.(*capability.LogsResult)
+	if b, _ := json.Marshal(r); len(b) > maxLogResultBytes+4096 {
+		t.Fatalf("encoded result is %d bytes", len(b))
+	}
+	for _, s := range r.Streams {
+		if len(s.Lines) == 0 {
+			t.Fatal("a stream without lines is returned")
+		}
+	}
+	if r.LinesOmitted == 0 || len(r.Streams)+r.LinesOmitted != 300 {
+		t.Fatalf("streams %d, omitted %d", len(r.Streams), r.LinesOmitted)
 	}
 }

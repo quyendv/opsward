@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `list_environments`, `list_namespaces` and `list_workloads`, authorized per item: each
+  shows only what the caller may work on, through bindings that use the reader profile.
+  The reader needs `list` on namespaces, and on Deployments, StatefulSets and DaemonSets
+  cluster-wide for environments that span every namespace.
+  `list_workloads` without a namespace spans the environment, and `unhealthy` keeps only
+  workloads with fewer ready replicas than desired.
+- Metrics and logs backends per cluster (`providers.kubernetes.clusters.<name>.metrics`
+  and `.logs`), used instead of the shared `providers.metrics` and `providers.logs`; a
+  cluster label is needed only where one backend serves several clusters.
+- `query_metrics` and `query_logs` without a namespace query the whole cluster, where the
+  environment spans every namespace and a binding not restricted to namespaces allows it.
+
+### Changed
+
+- Metrics results are summaries by default: each series has `min`, `max`, `avg`, `last`
+  and `samples`; points are returned with `points: true`.
+- Log lines longer than 2,000 bytes are cut; `query_logs` results past 32 KiB
+  (JSON-encoded) leave out the oldest lines, counted in `linesOmitted`; container logs are
+  capped at 16 KiB per container and 32 KiB per call (were 256 KiB and 1 MiB).
+
 ## [0.2.0] - 2026-10-16
 
 A gateway a team can share: MCP over HTTP with API tokens or OIDC, internal groups, and a

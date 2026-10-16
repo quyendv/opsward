@@ -15,8 +15,8 @@ const (
 	diagnoseEvents   = 20
 	diagnosePods     = 3
 	diagnoseTail     = 50
-	diagnoseLogBytes = 64 << 10
-	diagnoseLogTotal = 256 << 10
+	diagnoseLogBytes = 8 << 10
+	diagnoseLogTotal = 24 << 10
 	// diagnoseRecent is how long ago a container may have crashed for a pod that is
 	// healthy now to count as failing: older crash logs would read as current.
 	diagnoseRecent = time.Hour
@@ -99,6 +99,7 @@ func diagnose(ctx context.Context, w capability.Workloads, ms capability.Metrics
 			d.Unavailable["logs."+p.Name] = err.Error()
 			continue
 		}
+		cutContainerLines(logs.Logs)
 		d.Logs = append(d.Logs, logs.Logs...)
 	}
 
@@ -119,6 +120,9 @@ func diagnose(ctx context.Context, w capability.Workloads, ms capability.Metrics
 				d.Unavailable["metrics"] = err.Error()
 				break
 			}
+			summarize(r.Usage)
+			summarize(r.Requests)
+			summarize(r.Limits)
 			d.Metrics[metric] = r
 		}
 		if len(d.Metrics) == 0 {

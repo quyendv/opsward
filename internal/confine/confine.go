@@ -30,8 +30,14 @@ type Scope struct {
 	Cluster        string
 }
 
+// required lists the label values every selector must carry. A scope without a
+// namespace is cluster-wide: only the cluster is enforced, and the engine has already
+// checked that the call may read every namespace.
 func (s Scope) required() [][2]string {
-	req := [][2]string{{s.NamespaceLabel, s.Namespace}}
+	var req [][2]string
+	if s.Namespace != "" {
+		req = append(req, [2]string{s.NamespaceLabel, s.Namespace})
+	}
 	if s.ClusterLabel != "" {
 		req = append(req, [2]string{s.ClusterLabel, s.Cluster})
 	}

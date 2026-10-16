@@ -135,9 +135,12 @@ type Kubernetes struct {
 	Clusters map[string]Cluster `yaml:"clusters"`
 }
 
-// Cluster holds one credential per profile.
+// Cluster holds one credential per profile and, optionally, the cluster's own metrics
+// and logs backends, used instead of the shared ones (docs/design/0006).
 type Cluster struct {
 	Profiles map[string]Profile `yaml:"profiles"`
+	Metrics  *Backend           `yaml:"metrics"`
+	Logs     *Backend           `yaml:"logs"`
 }
 
 // Profile references a kubeconfig; credentials are never inline.
@@ -228,8 +231,8 @@ func (c *Config) applyDefaults() {
 			e.ClusterLabelValue = e.Cluster
 		}
 	}
-	for _, b := range []*Backend{c.Providers.Metrics, c.Providers.Logs} {
-		if b != nil && b.NamespaceLabel == "" {
+	for _, b := range c.backends() {
+		if b.NamespaceLabel == "" {
 			b.NamespaceLabel = "namespace"
 		}
 	}
@@ -273,8 +276,12 @@ func (c *Config) validate() error {
 		}
 	}
 
-	c.validateBackend("metrics", c.Providers.Metrics, "prometheus", fail)
-	c.validateBackend("logs", c.Providers.Logs, "loki", fail)
+	c.validateBackend("providers.metrics", c.Providers.Metrics, "prometheus", c.sharedClusters(kindMetrics), fail)
+	c.validateBackend("providers.logs", c.Providers.Logs, "loki", c.sharedClusters(kindLogs), fail)
+	for name, cl := range c.Providers.Kubernetes.Clusters {
+		c.validateBackend("providers.kubernetes.clusters."+name+".metrics", cl.Metrics, "prometheus", map[string]bool{name: true}, fail)
+		c.validateBackend("providers.kubernetes.clusters."+name+".logs", cl.Logs, "loki", map[string]bool{name: true}, fail)
+	}
 
 	for _, p := range c.Knowledge.Paths {
 		switch {
@@ -342,20 +349,17 @@ func (c *Config) Warnings() []string {
 		}
 	}
 	labelled := false
-	for _, b := range []*Backend{c.Providers.Metrics, c.Providers.Logs} {
-		labelled = labelled || (b != nil && b.ClusterLabel != "")
+	for _, b := range c.backends() {
+		labelled = labelled || b.ClusterLabel != ""
 	}
 	for _, e := range c.Environments {
 		if !labelled && e.ClusterLabelValue != e.Cluster {
 			out = append(out, fmt.Sprintf("environment %q: clusterLabelValue is ignored, no backend sets clusterLabel", e.Name))
 		}
 	}
-	for name, b := range map[string]*Backend{"metrics": c.Providers.Metrics, "logs": c.Providers.Logs} {
-		if b == nil {
-			continue
-		}
+	for name, b := range c.backends() {
 		if strings.HasPrefix(b.URL, "http://") && (b.Auth.BearerTokenFile != "" || b.Auth.Basic != nil) {
-			out = append(out, fmt.Sprintf("providers.%s sends credentials over plain http", name))
+			out = append(out, fmt.Sprintf("%s sends credentials over plain http", name))
 		}
 		// Warnings are logged on every reload: they name the field, not the path, which
 		// for a credential file is better kept out of logs.
@@ -364,7 +368,7 @@ func (c *Config) Warnings() []string {
 				continue
 			}
 			if _, err := os.Stat(f); err != nil {
-				out = append(out, fmt.Sprintf("providers.%s.%s does not exist here", name, field))
+				out = append(out, fmt.Sprintf("%s.%s does not exist here", name, field))
 			}
 		}
 	}
@@ -401,55 +405,64 @@ func (c *Config) RestartRequired(next *Config) []string {
 	if !reflect.DeepEqual(c.Providers.Logs, next.Providers.Logs) {
 		out = append(out, "providers.logs")
 	}
+	for name, cl := range c.Providers.Kubernetes.Clusters {
+		other := next.Providers.Kubernetes.Clusters[name]
+		if !reflect.DeepEqual(cl.Metrics, other.Metrics) {
+			out = append(out, "providers.kubernetes.clusters."+name+".metrics")
+		}
+		if !reflect.DeepEqual(cl.Logs, other.Logs) {
+			out = append(out, "providers.kubernetes.clusters."+name+".logs")
+		}
+	}
+	for name, cl := range next.Providers.Kubernetes.Clusters {
+		if _, ok := c.Providers.Kubernetes.Clusters[name]; !ok && (cl.Metrics != nil || cl.Logs != nil) {
+			out = append(out, "providers.kubernetes.clusters."+name)
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
 // labelName is the label syntax both Prometheus and Loki accept unquoted.
 var labelName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-func (c *Config) validateBackend(name string, b *Backend, wantType string, fail func(string, ...any)) {
+func (c *Config) validateBackend(name string, b *Backend, wantType string, serves map[string]bool, fail func(string, ...any)) {
 	if b == nil {
 		return
 	}
 	if b.Type != wantType {
-		fail("providers.%s.type: %q is not available; use %s", name, b.Type, wantType)
+		fail("%s.type: %q is not available; use %s", name, b.Type, wantType)
 	}
 	if b.URL == "" {
-		fail("providers.%s.url is required", name)
+		fail("%s.url is required", name)
 	} else if u, err := url.Parse(b.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		fail("providers.%s.url %q must be an http or https URL", name, b.URL)
+		fail("%s.url %q must be an http or https URL", name, b.URL)
 	} else {
 		if u.User != nil {
 			// Not echoed: it may hold a password. Credentials are referenced by file.
-			fail("providers.%s.url must not contain credentials; use auth with a file", name)
+			fail("%s.url must not contain credentials; use auth with a file", name)
 		}
 		if u.RawQuery != "" || u.Fragment != "" {
-			fail("providers.%s.url must not have a query or fragment", name)
+			fail("%s.url must not have a query or fragment", name)
 		}
 	}
-	if b.ClusterLabel == "" {
-		clusters := map[string]bool{}
-		for _, e := range c.Environments {
-			clusters[e.Cluster] = true
-		}
-		if len(clusters) > 1 {
-			fail("providers.%s.clusterLabel is required when environments use more than one cluster: without it a query cannot be limited to one cluster", name)
-		}
+	if b.ClusterLabel == "" && len(serves) > 1 {
+		fail("%s.clusterLabel is required when it serves more than one cluster: without it a query cannot be limited to one cluster", name)
 	}
 	for field, label := range map[string]string{"namespaceLabel": b.NamespaceLabel, "clusterLabel": b.ClusterLabel} {
 		if label != "" && !labelName.MatchString(label) {
-			fail("providers.%s.%s: %q is not a valid label name ([a-zA-Z_][a-zA-Z0-9_]*)", name, field, label)
+			fail("%s.%s: %q is not a valid label name ([a-zA-Z_][a-zA-Z0-9_]*)", name, field, label)
 		}
 	}
 	if b.Auth.BearerTokenFile != "" && b.Auth.Basic != nil {
-		fail("providers.%s.auth: set one of bearerTokenFile and basic", name)
+		fail("%s.auth: set one of bearerTokenFile and basic", name)
 	}
 	if b.Auth.Basic != nil && (b.Auth.Basic.Username == "" || b.Auth.Basic.PasswordFile == "") {
-		fail("providers.%s.auth.basic: username and passwordFile is required", name)
+		fail("%s.auth.basic: username and passwordFile is required", name)
 	}
 	for field, f := range b.files() {
 		if strings.HasPrefix(f, "~") {
-			fail("providers.%s.%s: ~ is not expanded, use an absolute path", name, field)
+			fail("%s.%s: ~ is not expanded, use an absolute path", name, field)
 		}
 	}
 }

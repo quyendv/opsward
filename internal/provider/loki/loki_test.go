@@ -136,3 +136,14 @@ func TestQueryAsksForCategorizedLabels(t *testing.T) {
 		t.Fatalf("streams = %+v", res.Streams)
 	}
 }
+
+func TestEmptyNamespaceNeedsAllNamespaces(t *testing.T) {
+	src, err := NewSource(Options{HTTP: httpapi.Options{URL: "http://127.0.0.1:1"}, NamespaceLabel: "namespace"}, map[string]string{"production": "prod-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, _ := src.Logs("production")
+	if _, err := l.Query(context.Background(), "", capability.LogsQuery{Query: `{app="api"}`, Since: time.Hour, Limit: 1}); err == nil || !strings.Contains(err.Error(), "namespace") {
+		t.Fatalf("err = %v", err)
+	}
+}

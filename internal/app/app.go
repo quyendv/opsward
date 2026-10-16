@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quyendv/opsward/internal/audit"
@@ -25,8 +26,6 @@ import (
 	"github.com/quyendv/opsward/internal/policy"
 	"github.com/quyendv/opsward/internal/provider/httpapi"
 	"github.com/quyendv/opsward/internal/provider/kubernetes"
-	"github.com/quyendv/opsward/internal/provider/loki"
-	"github.com/quyendv/opsward/internal/provider/prometheus"
 	"github.com/quyendv/opsward/internal/store"
 	"github.com/quyendv/opsward/internal/store/postgres"
 	"github.com/quyendv/opsward/internal/store/sqlite"
@@ -69,8 +68,9 @@ type App struct {
 	cfg        *config.Config
 	source     *kubernetes.Source
 	lib        *knowledge.Library
-	metrics    *prometheus.Source // nil without providers.metrics
-	logs       *loki.Source       // nil without providers.logs
+	metrics    *metricsRoutes // nil without any metrics backend
+	logs       *logsRoutes    // nil without any logs backend
+	envs       environments
 	tools      []engine.Tool
 }
 
@@ -84,11 +84,29 @@ type derived struct {
 	profiles   map[string]map[string]kubernetes.Profile
 	// clusterValues maps each environment to its value of a backend's cluster label.
 	clusterValues map[string]string
-	warnings      []string
+	envInfo       []tool.EnvironmentInfo
+	// metricsPaths and logsPaths map each environment with a backend to its path.
+	metricsPaths, logsPaths map[string]string
+	warnings                []string
+}
+
+// environments is what list_environments reads; a reload replaces it.
+type environments struct {
+	p atomic.Pointer[[]tool.EnvironmentInfo]
+}
+
+func (e *environments) Environments() []tool.EnvironmentInfo {
+	if p := e.p.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 func derive(cfg *config.Config, tools []engine.Tool, log *slog.Logger) (*derived, error) {
-	d := &derived{envCluster: map[string]string{}, profiles: map[string]map[string]kubernetes.Profile{}, clusterValues: map[string]string{}}
+	d := &derived{
+		envCluster: map[string]string{}, profiles: map[string]map[string]kubernetes.Profile{}, clusterValues: map[string]string{},
+		metricsPaths: map[string]string{}, logsPaths: map[string]string{},
+	}
 	pol, pw, perr := policy.Compile(cfg.Policy, catalog(cfg, tools), log)
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {
@@ -106,6 +124,16 @@ func derive(cfg *config.Config, tools []engine.Tool, log *slog.Logger) (*derived
 		d.envs = append(d.envs, engine.Environment{Name: e.Name, Namespaces: e.Namespaces})
 		d.envCluster[e.Name] = e.Cluster
 		d.clusterValues[e.Name] = e.ClusterLabelValue
+		mp, lp := cfg.MetricsBackendPath(e.Name), cfg.LogsBackendPath(e.Name)
+		if mp != "" {
+			d.metricsPaths[e.Name] = mp
+		}
+		if lp != "" {
+			d.logsPaths[e.Name] = lp
+		}
+		d.envInfo = append(d.envInfo, tool.EnvironmentInfo{
+			Name: e.Name, Cluster: e.Cluster, Namespaces: e.Namespaces, Metrics: mp != "", Logs: lp != "",
+		})
 	}
 	for name, cl := range cfg.Providers.Kubernetes.Clusters {
 		d.profiles[name] = map[string]kubernetes.Profile{}
@@ -123,13 +151,13 @@ func Check(cfg *config.Config) ([]string, error) {
 	// reading credential or CA files, which may exist only where Opsward runs.
 	var ms capability.MetricsSource
 	var ls capability.LogsSource
-	if cfg.Providers.Metrics != nil {
+	if len(cfg.MetricsBackends()) > 0 {
 		ms = placeholder{}
 	}
-	if cfg.Providers.Logs != nil {
+	if len(cfg.LogsBackends()) > 0 {
 		ls = placeholder{}
 	}
-	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls)
+	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{})
 	if err != nil {
 		return nil, err
 	}
@@ -161,19 +189,16 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	// capability.MetricsSource would be a non-nil interface.
 	var ms capability.MetricsSource
 	var ls capability.LogsSource
-	if b := cfg.Providers.Metrics; b != nil {
-		if a.metrics, err = prometheus.NewSource(prometheus.Options{HTTP: httpOptions(b), NamespaceLabel: b.NamespaceLabel, ClusterLabel: b.ClusterLabel}, nil); err != nil {
-			return nil, err
-		}
+	if a.metrics, a.logs, err = openBackends(cfg); err != nil {
+		return nil, err
+	}
+	if a.metrics != nil {
 		ms = a.metrics
 	}
-	if b := cfg.Providers.Logs; b != nil {
-		if a.logs, err = loki.NewSource(loki.Options{HTTP: httpOptions(b), NamespaceLabel: b.NamespaceLabel, ClusterLabel: b.ClusterLabel}, nil); err != nil {
-			return nil, err
-		}
+	if a.logs != nil {
 		ls = a.logs
 	}
-	if a.tools, err = buildTools(a.source, a.lib, ms, ls); err != nil {
+	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs); err != nil {
 		return nil, err
 	}
 	d, err := derive(cfg, a.tools, opt.Logger)
@@ -245,12 +270,13 @@ func (a *App) Reload(next *config.Config) error {
 // apply hands a derived configuration to the providers and the knowledge library.
 func (a *App) apply(d *derived) {
 	a.source.Update(d.envCluster, d.profiles)
+	a.envs.p.Store(&d.envInfo)
 	a.lib.Set(d.pack)
 	if a.metrics != nil {
-		a.metrics.Update(d.clusterValues)
+		a.metrics.update(d.metricsPaths, d.clusterValues)
 	}
 	if a.logs != nil {
-		a.logs.Update(d.clusterValues)
+		a.logs.update(d.logsPaths, d.clusterValues)
 	}
 }
 
@@ -430,8 +456,11 @@ func (a *App) Close() error {
 
 // buildTools registers the tools whose backends are configured (docs/design/0001,
 // "Registration follows capability"). ms and ls are nil when not configured.
-func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource) ([]engine.Tool, error) {
+func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments) ([]engine.Tool, error) {
 	builders := []func() (engine.Tool, error){
+		func() (engine.Tool, error) { return tool.ListEnvironments(envs) },
+		func() (engine.Tool, error) { return tool.ListNamespaces(envs, src) },
+		func() (engine.Tool, error) { return tool.ListWorkloads(envs, src) },
 		func() (engine.Tool, error) { return tool.WorkloadStatus(src) },
 		func() (engine.Tool, error) { return tool.WorkloadEvents(src) },
 		func() (engine.Tool, error) { return tool.WorkloadLogs(src) },

@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -600,5 +601,49 @@ func TestWorkloadLogsMarkPreviousInstance(t *testing.T) {
 	cur, _ := NewWorkloads(c).WorkloadLogs(context.Background(), ref, capability.LogOptions{Container: "app", TailLines: 10, MaxPods: 1})
 	if cur.Logs[0].Previous {
 		t.Fatal("current logs marked previous")
+	}
+}
+
+func TestListNamespacesAndWorkloads(t *testing.T) {
+	c := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system"}},
+		deployment(),
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", Labels: map[string]string{"app": "db"}},
+			Spec:       appsv1.StatefulSetSpec{Replicas: ptr(int32(3))}, Status: appsv1.StatefulSetStatus{ReadyReplicas: 3},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "shop"},
+			Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 2, NumberReady: 1},
+		},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "elsewhere", Namespace: "kube-system"}},
+	)
+	w := NewWorkloads(c)
+	ns, err := w.ListNamespaces(context.Background())
+	if err != nil || strings.Join(ns, ",") != "kube-system,shop" {
+		t.Fatalf("ListNamespaces = %v, %v", ns, err)
+	}
+	ws, err := w.ListWorkloads(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, x := range ws {
+		got = append(got, fmt.Sprintf("%s/%s %d/%d", x.Kind, x.Name, x.Ready, x.Desired))
+	}
+	if strings.Join(got, ",") != "DaemonSet/agent 1/2,Deployment/api 1/2,StatefulSet/db 3/3" {
+		t.Fatalf("ListWorkloads = %v", got)
+	}
+	if ws[1].Labels["app.kubernetes.io/part-of"] != "checkout" {
+		t.Fatalf("labels for policy are missing: %+v", ws[1])
+	}
+}
+
+func TestListWorkloadsInEveryNamespace(t *testing.T) {
+	c := fake.NewClientset(deployment(), &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "kube-system"}})
+	ws, err := NewWorkloads(c).ListWorkloads(context.Background(), "")
+	if err != nil || len(ws) != 2 || ws[0].Namespace != "kube-system" || ws[1].Namespace != "shop" {
+		t.Fatalf("ListWorkloads(all) = %+v, %v", ws, err)
 	}
 }
