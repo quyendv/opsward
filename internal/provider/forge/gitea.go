@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,16 +16,16 @@ import (
 type gitea struct{ *client }
 
 func (g *gitea) file(ctx context.Context, repo, ref, path string) (content []byte, sha string, found bool, err error) {
-	var out struct{ Type, Encoding, Content, SHA string }
-	err = g.do(ctx, http.MethodGet, "/api/v1/repos/"+repo+"/contents/"+pathEscape(path)+"?ref="+url.QueryEscape(ref), nil, &out)
+	var raw json.RawMessage
+	err = g.do(ctx, http.MethodGet, "/api/v1/repos/"+repo+"/contents/"+pathEscape(path)+"?ref="+url.QueryEscape(ref), nil, &raw)
 	if errors.Is(err, errNotFound) {
 		return nil, "", false, nil
 	}
 	if err != nil {
 		return nil, "", false, err
 	}
-	b, err := decodeContent(out.Encoding, out.Content)
-	return b, out.SHA, err == nil, err
+	b, sha, err := fileFrom(raw, path)
+	return b, sha, err == nil, err
 }
 
 func (g *gitea) ReadFile(ctx context.Context, repo, ref, path string) ([]byte, bool, error) {
@@ -59,10 +60,10 @@ func (g *gitea) Propose(ctx context.Context, repo string, p capability.Proposal)
 	var pr struct {
 		HTMLURL string `json:"html_url"`
 	}
-	if err := g.do(ctx, http.MethodPost, r+"/pulls", map[string]any{"title": p.Title, "head": p.Branch, "base": p.Base, "body": p.Body}, &pr); err != nil {
-		return "", err
-	}
-	return pr.HTMLURL, nil
+	err := g.do(ctx, http.MethodPost, r+"/pulls", map[string]any{"title": p.Title, "head": p.Branch, "base": p.Base, "body": p.Body}, &pr)
+	return opened(ctx, pr.HTMLURL, err, func(ctx context.Context) error {
+		return g.do(ctx, http.MethodDelete, r+"/branches/"+pathEscape(p.Branch), nil, nil)
+	})
 }
 
 func (g *gitea) DefaultBranch(ctx context.Context, repo string) (string, error) {

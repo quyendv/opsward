@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,15 +14,15 @@ import (
 type github struct{ *client }
 
 func (g *github) ReadFile(ctx context.Context, repo, ref, path string) ([]byte, bool, error) {
-	var out struct{ Type, Encoding, Content string }
-	err := g.do(ctx, http.MethodGet, "/repos/"+repo+"/contents/"+pathEscape(path)+"?ref="+url.QueryEscape(ref), nil, &out)
+	var raw json.RawMessage
+	err := g.do(ctx, http.MethodGet, "/repos/"+repo+"/contents/"+pathEscape(path)+"?ref="+url.QueryEscape(ref), nil, &raw)
 	if errors.Is(err, errNotFound) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	b, err := decodeContent(out.Encoding, out.Content)
+	b, _, err := fileFrom(raw, path)
 	return b, err == nil, err
 }
 
@@ -33,9 +34,29 @@ func (g *github) Propose(ctx context.Context, repo string, p capability.Proposal
 	if err := g.do(ctx, http.MethodGet, r+"/git/commits/"+p.BaseCommit, nil, &base); err != nil {
 		return "", err
 	}
+	// Each entry keeps its mode: a file written with the wrong one loses its executable
+	// bit, or a symlink becomes a file.
+	var old struct {
+		Tree []struct{ Path, Mode string }
+	}
+	if err := g.do(ctx, http.MethodGet, r+"/git/trees/"+base.Tree.SHA+"?recursive=1", nil, &old); err != nil {
+		return "", err
+	}
+	modes := map[string]string{}
+	for _, e := range old.Tree {
+		modes[e.Path] = e.Mode
+	}
 	entries := make([]map[string]string, 0, len(p.Files))
 	for path, content := range p.Files {
-		entries = append(entries, map[string]string{"path": path, "mode": "100644", "type": "blob", "content": string(content)})
+		mode := modes[path]
+		switch mode {
+		case "100644", "100755":
+		case "":
+			mode = "100644" // not in a truncated listing
+		default:
+			return "", fmt.Errorf("%s is not a regular file", path)
+		}
+		entries = append(entries, map[string]string{"path": path, "mode": mode, "type": "blob", "content": string(content)})
 	}
 	var tree, commit struct{ SHA string }
 	if err := g.do(ctx, http.MethodPost, r+"/git/trees", map[string]any{"base_tree": base.Tree.SHA, "tree": entries}, &tree); err != nil {
@@ -50,10 +71,10 @@ func (g *github) Propose(ctx context.Context, repo string, p capability.Proposal
 	var pr struct {
 		HTMLURL string `json:"html_url"`
 	}
-	if err := g.do(ctx, http.MethodPost, r+"/pulls", map[string]any{"title": p.Title, "head": p.Branch, "base": p.Base, "body": p.Body}, &pr); err != nil {
-		return "", err
-	}
-	return pr.HTMLURL, nil
+	err := g.do(ctx, http.MethodPost, r+"/pulls", map[string]any{"title": p.Title, "head": p.Branch, "base": p.Base, "body": p.Body}, &pr)
+	return opened(ctx, pr.HTMLURL, err, func(ctx context.Context) error {
+		return g.do(ctx, http.MethodDelete, r+"/git/refs/heads/"+pathEscape(p.Branch), nil, nil)
+	})
 }
 
 func (g *github) DefaultBranch(ctx context.Context, repo string) (string, error) {

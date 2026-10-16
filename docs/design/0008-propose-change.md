@@ -106,8 +106,9 @@ open pull requests nowhere. The pull request names the principal who proposed it
 audit record id; its commit is authored by the forge credential. A pull request is
 review, so policy usually allows it outright; `approve` still works.
 
-If nothing resolves, `propose_change` falls back to `suggest` with the resolution failure,
-and never falls forward to a direct change.
+If nothing resolves, `propose_change` proposes nothing and says why: under `suggest` as its
+answer, under `pull-request` as a refusal before any approval is requested. It never falls
+forward to a direct change.
 
 ## Forges
 
