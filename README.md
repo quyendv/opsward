@@ -53,7 +53,9 @@ The client stores that header in its configuration; give each person their own t
 
 Tools: `list_environments`, `list_namespaces`, `list_workloads` (each showing only what the
 caller may work on), `get_workload_status`, `list_workload_events`, `list_workload_logs`,
-`diagnose_workload`, `search_knowledge`, `get_knowledge`; with a Prometheus-compatible
+`diagnose_workload`, `search_knowledge`, `get_knowledge`, `restart_workload` and
+`scale_workload` (previewed, and approved by someone else where policy says so; approvers
+use `list_approvals` and `decide_approval`); with a Prometheus-compatible
 metrics backend also `get_workload_metrics` and `query_metrics`, and with Loki `query_logs`.
 Free-form queries are rewritten so that they cannot leave the caller's namespace and
 cluster; without a namespace they span the cluster, where the environment and policy allow. Results that match a knowledge document carry its

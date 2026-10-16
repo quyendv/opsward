@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `restart_workload` and `scale_workload`: narrow changes applied with the binding's
+  profile (`operator` by default) and the field manager `opsward`, each a server-side dry
+  run first, with the diff and previous values recorded in the audit (`change`). Scaling
+  is refused on workloads Argo CD, Flux or Helm manage, or an autoscaler targets.
+- Approvals (`effect: approve`): the call becomes an approval request answered with its
+  id and diff; an approver named by the binding decides with `decide_approval`
+  (`list_approvals` shows requests); the requester calls again with `approval: <id>`,
+  which runs once, only for the same arguments and an unchanged target, before
+  `approvals.ttl` (1h by default). Remote mode only.
+
 ## [0.3.0] - 2026-10-16
 
 What an agent needs to find its way: discovery tools that show each caller only what it may

@@ -3,6 +3,7 @@
 package mcpadapter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -78,11 +79,13 @@ func handler(e *engine.Engine, principal func(*mcp.CallToolRequest) (core.Princi
 			// Tool-level errors go in the result, so the agent can read them and adjust.
 			return errorResult(err.Error()), nil
 		}
-		b, err := json.Marshal(res.Data)
-		if err != nil {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false) // read by agents, not browsers
+		if err := enc.Encode(res.Data); err != nil {
 			return errorResult(fmt.Sprintf("encode result: %v", err)), nil
 		}
-		content := []mcp.Content{&mcp.TextContent{Text: string(b)}}
+		content := []mcp.Content{&mcp.TextContent{Text: strings.TrimSuffix(buf.String(), "\n")}}
 		if len(res.Notes) > 0 {
 			content = append(content, &mcp.TextContent{Text: notesText(res.Notes)})
 		}

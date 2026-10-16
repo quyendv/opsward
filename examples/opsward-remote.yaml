@@ -43,14 +43,22 @@ providers:
       cluster-a:
         profiles:
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
+          # patch on deployments and statefulsets (restart, scale), list on
+          # horizontalpodautoscalers; nothing else.
+          operator: { kubeconfig: /etc/opsward/cluster-a-operator.kubeconfig }
 
 environments:
   - name: staging
     cluster: cluster-a
 
+approvals:
+  ttl: 1h
+
 policy:
   roles:
     viewer: { risk: [read] }
+    operator: { tools: [restart_workload, scale_workload] }
+    approver: { tools: [list_approvals, decide_approval] }
   bindings:
     - name: platform-view-everything
       subjects: { groups: [platform] }
@@ -60,3 +68,14 @@ policy:
       role: viewer
       scope:
         namespaces: ["team-a-*"]
+    # Changes in the team's namespaces need a platform engineer's approval.
+    - name: team-a-operate-with-approval
+      subjects: { groups: [team-a] }
+      role: operator
+      scope:
+        namespaces: ["team-a-*"]
+      effect: approve
+      approvers: { groups: [platform] }
+    - name: platform-approves
+      subjects: { groups: [platform] }
+      role: approver
