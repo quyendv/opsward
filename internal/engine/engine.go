@@ -73,11 +73,11 @@ type Item struct {
 	Data  any
 }
 
-// Reacher is implemented by an Authorizer that can tell whether a principal could be
-// allowed a tool anywhere within a scope (policy.Policy.Reachable). Listings need it;
-// without it they are denied.
+// Reacher is implemented by an Authorizer that can tell through which profiles a
+// principal could be allowed a tool anywhere within a scope
+// (policy.Policy.ReachableProfiles). Listings need it; without it they are denied.
 type Reacher interface {
-	Reachable(core.Request) bool
+	ReachableProfiles(core.Request) []string
 }
 
 // Authorizer decides calls. policy.Policy implements it.
@@ -228,7 +228,11 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	actx := context.WithoutCancel(ctx)
 	rec := audit.Record{Phase: audit.PhaseOutcome, Principal: p, Tool: name}
 	finish := func(status string, cause error) error {
-		rec.Outcome = &audit.Outcome{Status: status, DurationMs: e.now().Sub(start).Milliseconds()}
+		outcome := &audit.Outcome{Status: status, DurationMs: e.now().Sub(start).Milliseconds()}
+		if rec.Outcome != nil {
+			outcome.Listed = rec.Outcome.Listed
+		}
+		rec.Outcome = outcome
 		var out error
 		if cause != nil {
 			out = &redactedError{msg: redact.String(cause.Error()), cause: cause}
@@ -332,47 +336,82 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	return res, nil
 }
 
-// list runs a List tool: reachable first, then each item decided on its own scope.
+// list runs a List tool (docs/design/0006): once per profile through which the call is
+// reachable, keeping each item only when policy allows it through the profile it was read
+// with.
 func (e *Engine) list(ctx context.Context, st *state, tool Tool, prep *Prepared, rec *audit.Record, finish func(string, error) error, req core.Request) (*Result, error) {
-	// A global listing (environments) reads only configuration, so it needs no
-	// reachable scope before running; its items are still decided one by one.
-	reacher, ok := st.authz.(Reacher)
-	if !ok || (!tool.Global && !reacher.Reachable(req)) {
+	deny := func() (*Result, error) {
 		dec := core.Decision{Effect: core.EffectDeny, Rule: core.DefaultDenyRule}
 		rec.Decision = &dec
 		return nil, finish(audit.StatusDenied, &DeniedError{Decision: dec})
+	}
+	reacher, ok := st.authz.(Reacher)
+	if !ok {
+		return deny()
+	}
+	// A global listing (environments) reads only configuration, so it needs no profile
+	// and no reachable scope before running; its items are still decided one by one.
+	profiles := []string{ProfileReader}
+	if !tool.Global {
+		if profiles = reacher.ReachableProfiles(req); len(profiles) == 0 {
+			return deny()
+		}
 	}
 	rec.Decision = &core.Decision{Effect: core.EffectAllow, Rule: core.PerItemRule}
 	if prep.RunList == nil {
 		return nil, finish(audit.StatusError, fmt.Errorf("tool %s lists but has no RunList", tool.Name))
 	}
-	items, err := prep.RunList(ctx, ProfileReader)
-	if errors.Is(err, core.ErrInvalidInput) {
-		return nil, finish(audit.StatusInvalid, err)
-	}
-	if err != nil {
-		return nil, finish(audit.StatusError, err)
-	}
 	kept := []any{}
-	for _, it := range items {
-		// Defence in depth: the tool filters by the environment, and so does the engine.
-		if !tool.Global && st.validateScope(it.Scope) != nil {
+	seen := map[string]bool{}
+	read, listed := 0, false
+	var failed error
+	for _, profile := range profiles {
+		items, err := prep.RunList(ctx, profile)
+		if errors.Is(err, core.ErrInvalidInput) {
+			return nil, finish(audit.StatusInvalid, err)
+		}
+		if err != nil {
+			// A narrower profile may not list what the reader can; the others still count.
+			failed = errors.Join(failed, fmt.Errorf("profile %s: %w", profile, err))
 			continue
 		}
-		ireq := req
-		ireq.Scope = it.Scope
-		allowed := false
-		if it.Scope.Name != "" {
-			// Read with the reader profile, so shown only when allowed through it.
-			d := st.authz.Decide(ireq)
-			allowed = d.Effect == core.EffectAllow && (d.Profile == "" || d.Profile == ProfileReader)
-		} else {
-			allowed = reacher.Reachable(ireq)
-		}
-		if allowed {
-			kept = append(kept, it.Data)
+		listed = true
+		read += len(items)
+		for _, it := range items {
+			key := it.Scope.Environment + "/" + it.Scope.Namespace + "/" + it.Scope.Kind + "/" + it.Scope.Name
+			// Defence in depth: the tool filters by the environment, and so does the engine.
+			if seen[key] || (!tool.Global && st.validateScope(it.Scope) != nil) {
+				continue
+			}
+			ireq := req
+			ireq.Scope = it.Scope
+			var allowed bool
+			switch {
+			case tool.Global:
+				allowed = len(reacher.ReachableProfiles(ireq)) > 0
+			case it.Scope.Name != "":
+				d := st.authz.Decide(ireq)
+				p := d.Profile
+				if p == "" {
+					p = ProfileReader
+				}
+				allowed = d.Effect == core.EffectAllow && p == profile
+			default:
+				allowed = slices.Contains(reacher.ReachableProfiles(ireq), profile)
+			}
+			if allowed {
+				seen[key] = true
+				kept = append(kept, it.Data)
+			}
 		}
 	}
+	if !listed {
+		return nil, finish(audit.StatusError, failed)
+	}
+	if failed != nil {
+		e.log.Warn("a listing failed with some profiles; their items are left out", "tool", tool.Name, "error", failed)
+	}
+	rec.Outcome = &audit.Outcome{Listed: &audit.Listed{Read: read, Kept: len(kept)}}
 	// Listings carry no knowledge notes: notes describe a target, and a listing has none.
 	var out any = kept
 	if prep.Wrap != nil {
