@@ -21,3 +21,15 @@ func TestHourlyLimit(t *testing.T) {
 		t.Fatal("maxPerHour 0 allowed one")
 	}
 }
+
+// An investigation that failed before doing anything gives its slot back.
+func TestHourlyRefund(t *testing.T) {
+	l := &hourly{max: 1, now: time.Now}
+	if !l.take() {
+		t.Fatal("first take refused")
+	}
+	l.refund()
+	if !l.take() {
+		t.Fatal("the refunded slot is not free")
+	}
+}

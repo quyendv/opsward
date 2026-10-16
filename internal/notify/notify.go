@@ -15,8 +15,11 @@ type Notification struct {
 	// investigated or the investigation failed, and Error says why.
 	Diagnosis any    `json:"diagnosis,omitempty"`
 	Error     string `json:"error,omitempty"`
-	// Analysis is agent mode's answer (docs/design/0013): untrusted model text. When there
-	// is none although the agent is on, AnalysisNote says why.
+	// FollowUp marks the second notification of an alert with agent mode on
+	// (docs/design/0013): it carries the analysis, after the diagnosis went out at once.
+	FollowUp bool `json:"followUp,omitempty"`
+	// Analysis is agent mode's answer: untrusted model text. When there is none,
+	// AnalysisNote says why.
 	Analysis     string `json:"analysis,omitempty"`
 	AnalysisNote string `json:"analysisNote,omitempty"`
 }

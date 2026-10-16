@@ -45,9 +45,18 @@ func (h *hourly) take() bool {
 	return true
 }
 
+// refund gives back a slot taken in the current window.
+func (h *hourly) refund() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.count > 0 {
+		h.count--
+	}
+}
+
 // openAnalyzer builds agent mode's analysis of diagnosed alerts (docs/design/0013), or
 // nil when alerts.agent is off.
-func openAnalyzer(cfg *config.Config, inv agent.Invoker, tools []engine.Tool, log *slog.Logger) func(context.Context, core.Principal, notify.Notification) (string, string) {
+func openAnalyzer(cfg *config.Config, e *engine.Engine, log *slog.Logger) func(context.Context, core.Principal, notify.Notification) (string, string) {
 	if cfg.Alerts == nil || !cfg.Alerts.Agent || cfg.Agent == nil || *cfg.Agent.MaxPerHour == 0 {
 		return nil
 	}
@@ -56,7 +65,9 @@ func openAnalyzer(cfg *config.Config, inv agent.Invoker, tools []engine.Tool, lo
 	model := llm.NewAnthropic(llm.AnthropicOptions{
 		URL: c.URL, Model: c.Model, APIKey: func() (string, error) { return key.Resolve("agent.apiKey") },
 	})
-	ag := agent.New(agent.Options{Model: model, Invoker: inv, Tools: tools, MaxSteps: c.MaxSteps, Timeout: c.Timeout.Std(), Logger: log})
+	ag := agent.New(agent.Options{
+		Model: model, Invoker: e, Tools: e.Tools(), Allowed: e.Allowed, MaxSteps: c.MaxSteps, Timeout: c.Timeout.Std(), Logger: log,
+	})
 	limit := &hourly{max: *c.MaxPerHour, now: time.Now}
 	return func(ctx context.Context, p core.Principal, n notify.Notification) (string, string) {
 		if !limit.take() {
@@ -70,6 +81,10 @@ func openAnalyzer(cfg *config.Config, inv agent.Invoker, tools []engine.Tool, lo
 		// The model's text is untrusted; it is redacted like every result before it goes
 		// anywhere, and escaped by notifiers.
 		a.Text = redact.String(a.Text)
+		if a.Stopped == "model error" && a.Steps == 0 {
+			// Nothing ran, such as an unreadable key: the slot is not spent.
+			limit.refund()
+		}
 		log.Info("agent analysis", "alert", n.Alert.Name, "steps", a.Steps, "stopped", a.Stopped,
 			"input_tokens", a.Usage.InputTokens, "output_tokens", a.Usage.OutputTokens)
 		if a.Text == "" {

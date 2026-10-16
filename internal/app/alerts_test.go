@@ -219,13 +219,15 @@ alerts:
 	go a.Alerts.Run(ctx)
 	body := `{"version":"4","alerts":[{"status":"firing","fingerprint":"f1","labels":{"alertname":"KubeDeploymentReplicasMismatch","namespace":"shop","deployment":"api"}}]}`
 	a.Alerts.Handle(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/alerts/alertmanager", strings.NewReader(body)), core.Principal{Subject: "alertmanager"})
-	select {
-	case n := <-got:
-		if n.Analysis != "No pods are running: the Deployment has no replicas ready." {
-			t.Fatalf("notification = %+v", n)
+	for _, followUp := range []bool{false, true} {
+		select {
+		case n := <-got:
+			if n.FollowUp != followUp || (followUp && n.Analysis != "No pods are running: the Deployment has no replicas ready.") {
+				t.Fatalf("notification = %+v", n)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("no notification")
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("no notification")
 	}
 	// The model was told the alert and the diagnosis; only read tools were offered, and
 	// its call went through the engine as the alerts principal, adapter agent.

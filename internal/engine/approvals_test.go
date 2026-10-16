@@ -515,3 +515,21 @@ func TestUnattendedCallsAreNotApproved(t *testing.T) {
 		t.Fatalf("err = %v, stored %d", err, len(store.m))
 	}
 }
+
+// Allowed asks the current policy whether a principal may run a tool in a scope.
+func TestAllowed(t *testing.T) {
+	tl := Tool{Name: "peek", Risk: core.RiskRead, InputSchema: &jsonschema.Schema{Type: "object"}, Prepare: func(json.RawMessage) (*Prepared, error) { return nil, nil }}
+	e, _ := New(Options{
+		Tools: []Tool{tl}, Environments: []Environment{{Name: "staging", Namespaces: []string{"*"}}},
+		Authorizer: authorizerFunc(func(r core.Request) core.Decision {
+			if r.Principal.Subject == "alice@example.com" && r.Scope.Environment == "staging" && r.Risk == core.RiskRead {
+				return core.Decision{Effect: core.EffectAllow, Rule: "b"}
+			}
+			return core.Decision{Effect: core.EffectDeny, Rule: core.DefaultDenyRule}
+		}),
+		Auditor: &recordingAuditor{},
+	})
+	if !e.Allowed(alice, "peek", core.Scope{Environment: "staging"}) || e.Allowed(alice, "peek", core.Scope{Environment: "production"}) || e.Allowed(alice, "nope", core.Scope{Environment: "staging"}) {
+		t.Fatal("Allowed disagrees with policy")
+	}
+}

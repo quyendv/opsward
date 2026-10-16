@@ -313,7 +313,8 @@ func TestReceiverAuditsRefusals(t *testing.T) {
 	}
 }
 
-// With an analyzer, a diagnosed alert also carries its analysis.
+// With an analyzer, a diagnosed alert is notified at once, and its analysis follows: a
+// page does not wait for a model.
 func TestReceiverAddsTheAnalysis(t *testing.T) {
 	notes := make(chanNotifier, 4)
 	var analyzed []string
@@ -329,13 +330,21 @@ func TestReceiverAddsTheAnalysis(t *testing.T) {
 	defer cancel()
 	go r.Run(ctx)
 	post(t, r, "alertmanager", webhook)
-	got := map[string]notify.Notification{}
-	for range 2 {
+	var first, follow, unmapped notify.Notification
+	for range 3 {
 		n := receive(t, notes)
-		got[n.Alert.Fingerprint] = n
+		switch {
+		case n.Alert.Fingerprint == "f2":
+			unmapped = n
+		case n.FollowUp:
+			follow = n
+		default:
+			first = n
+		}
 	}
-	if got["f1"].Analysis != "The api crashes on a bad password." || got["f2"].Analysis != "" || len(analyzed) != 1 || analyzed[0] != "alertmanager api" {
-		t.Fatalf("notifications %+v, analyzed %v", got, analyzed)
+	if first.Diagnosis == nil || first.Analysis != "" || follow.Analysis != "The api crashes on a bad password." || follow.Diagnosis != nil ||
+		follow.Workload == nil || unmapped.FollowUp || len(analyzed) != 1 || analyzed[0] != "alertmanager api" {
+		t.Fatalf("first %+v\nfollow-up %+v\nunmapped %+v\nanalyzed %v", first, follow, unmapped, analyzed)
 	}
 }
 
@@ -356,9 +365,12 @@ func TestReceiverStopsTheAnalysisOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go r.Run(ctx)
 	post(t, r, "alertmanager", `{"version":"4","alerts":[{"status":"firing","fingerprint":"f1","labels":{"alertname":"A","cluster":"cluster-a","namespace":"team-a-api","deployment":"api"}}]}`)
+	if n := receive(t, notes); n.Diagnosis == nil {
+		t.Fatalf("first notification = %+v", n)
+	}
 	<-started
 	cancel()
-	if n := receive(t, notes); n.Diagnosis == nil || n.AnalysisNote != "stopped: shutting down" {
-		t.Fatalf("notification = %+v", n)
+	if n := receive(t, notes); !n.FollowUp || n.AnalysisNote != "stopped: shutting down" {
+		t.Fatalf("follow-up = %+v", n)
 	}
 }
