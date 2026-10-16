@@ -96,8 +96,11 @@ type LogOptions struct {
 
 // ContainerLog is one container's recent output, or why it could not be read.
 type ContainerLog struct {
-	Pod       string   `json:"pod"`
-	Container string   `json:"container"`
+	Pod       string `json:"pod"`
+	Container string `json:"container"`
+	// Previous marks the output of the instance before the last restart, which can be
+	// days old.
+	Previous  bool     `json:"previous,omitempty"`
 	Lines     []string `json:"lines,omitempty"`
 	Truncated bool     `json:"truncated,omitempty"` // older lines were dropped to fit MaxBytes
 	Error     string   `json:"error,omitempty"`

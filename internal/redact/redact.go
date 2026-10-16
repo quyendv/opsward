@@ -33,8 +33,16 @@ var rules = []rule{
 	{regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)["']?(?::|\s*=)\s*["']?)[^\s"',;&]+`), "${1}" + Placeholder},
 }
 
-// String returns s with credential-shaped content replaced.
+// terminalEscape matches ANSI control sequences, such as the colours many images log
+// with: they carry nothing for an agent and cost tokens.
+var terminalEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+// String returns s with credential-shaped content replaced and terminal escape
+// sequences removed.
 func String(s string) string {
+	if strings.IndexByte(s, 0x1b) >= 0 {
+		s = terminalEscape.ReplaceAllString(s, "")
+	}
 	for _, r := range rules {
 		s = r.re.ReplaceAllString(s, r.repl)
 	}

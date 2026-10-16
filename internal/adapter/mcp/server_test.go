@@ -101,7 +101,7 @@ func TestCallAllowedAndDenied(t *testing.T) {
 	}, aud, echoTool())
 
 	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"name": "api"}})
-	if err != nil || res.IsError || !strings.Contains(text(t, res), `"name": "api"`) {
+	if err != nil || res.IsError || !strings.Contains(text(t, res), `"name":"api"`) {
 		t.Fatalf("allowed call = %+v, %v", res, err)
 	}
 
@@ -149,5 +149,14 @@ func TestCallSendsNotesAsASecondBlock(t *testing.T) {
 		if !strings.Contains(notes, want) {
 			t.Errorf("notes %q missing %q", notes, want)
 		}
+	}
+}
+
+// Results are compact JSON: indentation costs an agent tokens and tells it nothing.
+func TestCallResultIsCompactJSON(t *testing.T) {
+	cs := connect(t, func(core.Request) core.Decision { return core.Decision{Effect: core.EffectAllow} }, &nopAuditor{}, echoTool())
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"name": "api"}})
+	if err != nil || res.IsError || text(t, res) != `{"name":"api"}` {
+		t.Fatalf("result = %+v, %v", res, err)
 	}
 }

@@ -11,13 +11,15 @@ import (
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
+
+	"github.com/quyendv/opsward/internal/core"
 )
 
 var (
 	// ErrOutOfScope is returned for a query that selects outside the call's scope.
-	ErrOutOfScope = errors.New("query selects outside the call's scope")
+	ErrOutOfScope = core.InvalidInput("query selects outside the call's scope")
 	// ErrNotLogQuery is returned for LogQL that is not a single-selector log query.
-	ErrNotLogQuery = errors.New("only log queries are supported: one {stream selector} followed by an optional pipeline")
+	ErrNotLogQuery = core.InvalidInput("only log queries are supported: one {stream selector} followed by an optional pipeline")
 )
 
 // Scope is what every selector must be restricted to.
@@ -41,7 +43,7 @@ func (s Scope) required() [][2]string {
 func PromQL(query string, s Scope) (string, error) {
 	expr, err := parser.NewParser(parser.Options{}).ParseExpr(query)
 	if err != nil {
-		return "", fmt.Errorf("invalid PromQL: %w", err)
+		return "", core.AsInvalidInput(fmt.Errorf("invalid PromQL: %w", err))
 	}
 	var outErr error
 	parser.Inspect(expr, func(n parser.Node, _ []parser.Node) error {
@@ -92,7 +94,7 @@ func LogQL(query string, s Scope) (string, error) {
 	}
 	matchers, rest, err := parseSelector(q)
 	if err != nil {
-		return "", fmt.Errorf("invalid LogQL stream selector: %w", err)
+		return "", core.AsInvalidInput(fmt.Errorf("invalid LogQL stream selector: %w", err))
 	}
 	if hasBraceOutsideStrings(rest) {
 		return "", ErrNotLogQuery

@@ -360,7 +360,7 @@ func containerNames(p *corev1.Pod) []string {
 
 // containerLog reads one container's tail and returns it with the bytes it kept.
 func (w *workloads) containerLog(ctx context.Context, p *corev1.Pod, container string, opt capability.LogOptions) (capability.ContainerLog, int) {
-	entry := capability.ContainerLog{Pod: p.Name, Container: container}
+	entry := capability.ContainerLog{Pod: p.Name, Container: container, Previous: opt.Previous}
 	if !slices.Contains(containerNames(p), container) {
 		entry.Error = fmt.Sprintf("pod %s has no container %q", p.Name, container)
 		return entry, 0
