@@ -45,8 +45,8 @@ func (s *Store) Approval(ctx context.Context, id string) (store.Approval, bool, 
 }
 
 // ListApprovals implements store.Store.
-func (s *Store) ListApprovals(ctx context.Context, since time.Time) ([]store.Approval, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+approvalColumns+` FROM approvals WHERE created_ns >= $1 ORDER BY created_ns DESC, id`, since.UnixNano())
+func (s *Store) ListApprovals(ctx context.Context, since time.Time, limit int) ([]store.Approval, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+approvalColumns+` FROM approvals WHERE created_ns >= $1 ORDER BY created_ns DESC, id LIMIT $2`, since.UnixNano(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: list approvals: %w", err)
 	}
@@ -57,6 +57,26 @@ func (s *Store) ListApprovals(ctx context.Context, since time.Time) ([]store.App
 	return out, nil
 }
 
+// CountPendingApprovals implements store.Store.
+func (s *Store) CountPendingApprovals(ctx context.Context, requester string, now time.Time) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM approvals WHERE requester = $1 AND status = $2 AND expires_ns > $3`,
+		requester, store.ApprovalPending, now.UnixNano()).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: count approvals: %w", err)
+	}
+	return n, nil
+}
+
+// PruneApprovals implements store.Store.
+func (s *Store) PruneApprovals(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM approvals WHERE expires_ns < $1`, before.UnixNano())
+	if err != nil {
+		return 0, fmt.Errorf("postgres: prune approvals: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DecideApproval implements store.Store.
 func (s *Store) DecideApproval(ctx context.Context, id, status, by string, byGroups []string, reason string, at time.Time) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE approvals SET status = $1, decided_by = $2, decided_groups = $3, reason = $4, decided_ns = $5
@@ -64,6 +84,17 @@ func (s *Store) DecideApproval(ctx context.Context, id, status, by string, byGro
 		status, by, nonNil(byGroups), reason, at.UnixNano(), id, store.ApprovalPending)
 	if err != nil {
 		return false, fmt.Errorf("postgres: decide approval: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// WithdrawApproval implements store.Store.
+func (s *Store) WithdrawApproval(ctx context.Context, id, by string, byGroups []string, reason string, at time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE approvals SET status = $1, decided_by = $2, decided_groups = $3, reason = $4, decided_ns = $5
+		WHERE id = $6 AND status = $7 AND expires_ns > $5`,
+		store.ApprovalDenied, by, nonNil(byGroups), reason, at.UnixNano(), id, store.ApprovalApproved)
+	if err != nil {
+		return false, fmt.Errorf("postgres: withdraw approval: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
 }

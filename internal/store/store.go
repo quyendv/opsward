@@ -54,13 +54,21 @@ type Store interface {
 	CreateApproval(ctx context.Context, a Approval) error
 	// Approval returns the request with id.
 	Approval(ctx context.Context, id string) (Approval, bool, error)
-	// ListApprovals returns the requests created at or after since, newest first.
-	ListApprovals(ctx context.Context, since time.Time) ([]Approval, error)
+	// ListApprovals returns at most limit requests created at or after since, newest first.
+	ListApprovals(ctx context.Context, since time.Time, limit int) ([]Approval, error)
+	// CountPendingApprovals counts a requester's requests that are pending and unexpired
+	// at now.
+	CountPendingApprovals(ctx context.Context, requester string, now time.Time) (int, error)
+	// PruneApprovals deletes requests that expired before before.
+	PruneApprovals(ctx context.Context, before time.Time) (int64, error)
 	// DecideApproval sets a pending request's status to approved or denied. It reports
 	// whether it did: a request that is not pending is left as it is.
 	// The decider's groups are kept, so that the approval can be checked against policy
 	// when it is used. A request past its expiry at is not decided.
 	DecideApproval(ctx context.Context, id, status, by string, byGroups []string, reason string, at time.Time) (bool, error)
+	// WithdrawApproval turns an approved, unused and unexpired request into a denied one,
+	// recording who withdrew it and why. It reports whether it did.
+	WithdrawApproval(ctx context.Context, id, by string, byGroups []string, reason string, at time.Time) (bool, error)
 	// UseApproval marks an approved request used, in one atomic step, and reports whether
 	// it did: a request runs at most once, and not after its expiry.
 	UseApproval(ctx context.Context, id string, at time.Time) (bool, error)

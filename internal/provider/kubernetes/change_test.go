@@ -31,7 +31,9 @@ func patches(c *fake.Clientset) *[]k8stesting.PatchActionImpl {
 var apiRef = capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"}
 
 func TestScaleWorkload(t *testing.T) {
-	c := fake.NewClientset(deployment())
+	d := deployment()
+	d.ResourceVersion = "7" // what Get read: the patch fails if the object changed since
+	c := fake.NewClientset(d)
 	got := patches(c)
 	w := NewWorkloads(c)
 	ch, err := w.ScaleWorkload(context.Background(), apiRef, 5, true)
@@ -42,7 +44,7 @@ func TestScaleWorkload(t *testing.T) {
 		t.Fatalf("change = %+v", ch)
 	}
 	p := (*got)[0]
-	if p.GetPatchType() != "application/merge-patch+json" || string(p.GetPatch()) != `{"spec":{"replicas":5}}` {
+	if p.GetPatchType() != "application/merge-patch+json" || string(p.GetPatch()) != `{"metadata":{"resourceVersion":"7"},"spec":{"replicas":5}}` {
 		t.Fatalf("patch = %s %s", p.GetPatchType(), p.GetPatch())
 	}
 	opts := p.PatchOptions
@@ -147,5 +149,51 @@ func TestScaleRefusesEveryKnownReconciler(t *testing.T) {
 				t.Fatalf("err = %v", err)
 			}
 		})
+	}
+}
+
+// A restart that rolls no pod must not report success.
+func TestRestartRefusesWhatWouldNotRoll(t *testing.T) {
+	paused := deployment()
+	paused.Spec.Paused = true
+	onDelete := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop"},
+		Spec:       appsv1.StatefulSetSpec{UpdateStrategy: appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}},
+	}
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "shop"},
+		Spec:       appsv1.DaemonSetSpec{UpdateStrategy: appsv1.DaemonSetUpdateStrategy{Type: appsv1.OnDeleteDaemonSetStrategyType}},
+	}
+	c := fake.NewClientset(paused, onDelete, ds)
+	got := patches(c)
+	w := NewWorkloads(c)
+	for _, tt := range []struct {
+		ref  capability.WorkloadRef
+		want string
+	}{
+		{apiRef, "paused"},
+		{capability.WorkloadRef{Namespace: "shop", Kind: "StatefulSet", Name: "db"}, "OnDelete"},
+		{capability.WorkloadRef{Namespace: "shop", Kind: "DaemonSet", Name: "agent"}, "OnDelete"},
+	} {
+		if _, err := w.RestartWorkload(context.Background(), tt.ref, true); err == nil || !strings.Contains(err.Error(), tt.want) || !errors.Is(err, core.ErrInvalidInput) {
+			t.Errorf("%s: err = %v", tt.ref.Kind, err)
+		}
+	}
+	if len(*got) != 0 {
+		t.Fatalf("patched %d times", len(*got))
+	}
+}
+
+// The diff shows what the API server would store, mutating webhooks included.
+func TestScaleDiffComesFromTheServersAnswer(t *testing.T) {
+	c := fake.NewClientset(deployment())
+	c.PrependReactor("patch", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		d := deployment()
+		d.Spec.Replicas = ptr(int32(6)) // a webhook rounded the request up
+		return true, d, nil
+	})
+	ch, err := NewWorkloads(c).ScaleWorkload(context.Background(), apiRef, 5, true)
+	if err != nil || ch.Diff != "spec.replicas: 2 -> 6" {
+		t.Fatalf("change = %+v, %v", ch, err)
 	}
 }

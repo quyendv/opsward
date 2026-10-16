@@ -68,7 +68,7 @@ func (s *memApprovalStore) Approval(_ context.Context, id string) (store.Approva
 	return a, ok, nil
 }
 
-func (s *memApprovalStore) ListApprovals(context.Context, time.Time) ([]store.Approval, error) {
+func (s *memApprovalStore) ListApprovals(context.Context, time.Time, int) ([]store.Approval, error) {
 	var out []store.Approval
 	for _, a := range s.m {
 		out = append(out, a)
@@ -83,6 +83,16 @@ func (s *memApprovalStore) DecideApproval(_ context.Context, id, status, by stri
 		return false, nil
 	}
 	a.Status, a.DecidedBy, a.Reason, a.DecidedAt = status, by, reason, at
+	s.m[id] = a
+	return true, nil
+}
+
+func (s *memApprovalStore) WithdrawApproval(_ context.Context, id, by string, _ []string, reason string, at time.Time) (bool, error) {
+	a := s.m[id]
+	if a.Status != store.ApprovalApproved {
+		return false, nil
+	}
+	a.Status, a.DecidedBy, a.Reason, a.DecidedAt = store.ApprovalDenied, by, reason, at
 	s.m[id] = a
 	return true, nil
 }
@@ -133,6 +143,12 @@ func TestDecideApproval(t *testing.T) {
 	}
 	if err := call(lead, `{"id":"r1","decision":"deny"}`); err == nil || !strings.Contains(err.Error(), "already") {
 		t.Fatalf("decided twice: %v", err)
+	}
+	if err := call(lead, `{"id":"r1","decision":"withdraw","reason":"wrong target"}`); err != nil {
+		t.Fatalf("withdraw: %v", err)
+	}
+	if a := st.m["r1"]; a.Status != store.ApprovalDenied || a.Reason != "wrong target" {
+		t.Fatalf("withdrawn = %+v", a)
 	}
 }
 

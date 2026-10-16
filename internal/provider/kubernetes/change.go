@@ -44,6 +44,16 @@ func reconciler(m metav1.Object) string {
 	return ""
 }
 
+// withPrecondition adds the resourceVersion that was read to a merge patch: the API server
+// refuses it with a conflict if the object changed since, so the previous values recorded
+// are the ones replaced.
+func withPrecondition(m metav1.Object, patch map[string]any) map[string]any {
+	if rv := m.GetResourceVersion(); rv != "" {
+		patch["metadata"] = map[string]any{"resourceVersion": rv}
+	}
+	return patch
+}
+
 func patchOptions(dryRun bool) metav1.PatchOptions {
 	o := metav1.PatchOptions{FieldManager: fieldManager}
 	if dryRun {
@@ -63,6 +73,7 @@ func notFound(ref capability.WorkloadRef, err error) error {
 func (w *workloads) RestartWorkload(ctx context.Context, ref capability.WorkloadRef, dryRun bool) (*capability.WorkloadChange, error) {
 	var meta metav1.Object
 	var annotations map[string]string
+	var still string // why setting the annotation would roll no pod
 	apps := w.c.AppsV1()
 	var err error
 	switch ref.Kind {
@@ -70,16 +81,25 @@ func (w *workloads) RestartWorkload(ctx context.Context, ref capability.Workload
 		var d *appsv1.Deployment
 		if d, err = apps.Deployments(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{}); err == nil {
 			meta, annotations = d, d.Spec.Template.Annotations
+			if d.Spec.Paused {
+				still = "its rollout is paused"
+			}
 		}
 	case "StatefulSet":
 		var s *appsv1.StatefulSet
 		if s, err = apps.StatefulSets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{}); err == nil {
 			meta, annotations = s, s.Spec.Template.Annotations
+			if s.Spec.UpdateStrategy.Type == appsv1.OnDeleteStatefulSetStrategyType {
+				still = "its update strategy is OnDelete: pods change only when deleted"
+			}
 		}
 	case "DaemonSet":
 		var d *appsv1.DaemonSet
 		if d, err = apps.DaemonSets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{}); err == nil {
 			meta, annotations = d, d.Spec.Template.Annotations
+			if d.Spec.UpdateStrategy.Type == appsv1.OnDeleteDaemonSetStrategyType {
+				still = "its update strategy is OnDelete: pods change only when deleted"
+			}
 		}
 	default:
 		return nil, core.InvalidInput(fmt.Sprintf("kind %q cannot be restarted", ref.Kind))
@@ -87,10 +107,13 @@ func (w *workloads) RestartWorkload(ctx context.Context, ref capability.Workload
 	if err != nil {
 		return nil, notFound(ref, err)
 	}
+	if still != "" {
+		return nil, core.InvalidInput(fmt.Sprintf("restarting %s %s/%s would roll no pod: %s", ref.Kind, ref.Namespace, ref.Name, still))
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	patch, err := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
+	patch, err := json.Marshal(withPrecondition(meta, map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 		"annotations": map[string]string{restartAnnotation: now},
-	}}}})
+	}}}}))
 	if err != nil {
 		return nil, err
 	}
@@ -161,18 +184,29 @@ func (w *workloads) ScaleWorkload(ctx context.Context, ref capability.WorkloadRe
 				h.Name, ref.Kind, ref.Namespace, ref.Name))
 		}
 	}
-	patch := fmt.Appendf(nil, `{"spec":{"replicas":%d}}`, replicas)
+	patch, err := json.Marshal(withPrecondition(meta, map[string]any{"spec": map[string]any{"replicas": replicas}}))
+	if err != nil {
+		return nil, err
+	}
 	opts := patchOptions(dryRun)
+	// What the API server stores, or would store, admission included.
+	after := replicas
 	if ref.Kind == "Deployment" {
-		_, err = apps.Deployments(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, patch, opts)
+		var d *appsv1.Deployment
+		if d, err = apps.Deployments(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, patch, opts); err == nil && d != nil && d.Spec.Replicas != nil {
+			after = *d.Spec.Replicas
+		}
 	} else {
-		_, err = apps.StatefulSets(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, patch, opts)
+		var s *appsv1.StatefulSet
+		if s, err = apps.StatefulSets(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, patch, opts); err == nil && s != nil && s.Spec.Replicas != nil {
+			after = *s.Spec.Replicas
+		}
 	}
 	if err != nil {
 		return nil, notFound(ref, err)
 	}
 	return &capability.WorkloadChange{
-		Diff:     fmt.Sprintf("spec.replicas: %d -> %d", current, replicas),
+		Diff:     fmt.Sprintf("spec.replicas: %d -> %d", current, after),
 		Previous: map[string]any{"spec.replicas": current},
 	}, nil
 }

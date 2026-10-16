@@ -41,8 +41,8 @@ func (s *Store) Approval(ctx context.Context, id string) (store.Approval, bool, 
 }
 
 // ListApprovals implements store.Store.
-func (s *Store) ListApprovals(ctx context.Context, since time.Time) ([]store.Approval, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+approvalColumns+` FROM approvals WHERE created_ns >= ? ORDER BY created_ns DESC, id`, since.UnixNano())
+func (s *Store) ListApprovals(ctx context.Context, since time.Time, limit int) ([]store.Approval, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+approvalColumns+` FROM approvals WHERE created_ns >= ? ORDER BY created_ns DESC, id LIMIT ?`, since.UnixNano(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: list approvals: %w", err)
 	}
@@ -61,6 +61,26 @@ func (s *Store) ListApprovals(ctx context.Context, since time.Time) ([]store.App
 	return out, nil
 }
 
+// CountPendingApprovals implements store.Store.
+func (s *Store) CountPendingApprovals(ctx context.Context, requester string, now time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM approvals WHERE requester = ? AND status = ? AND expires_ns > ?`,
+		requester, store.ApprovalPending, now.UnixNano()).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: count approvals: %w", err)
+	}
+	return n, nil
+}
+
+// PruneApprovals implements store.Store.
+func (s *Store) PruneApprovals(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM approvals WHERE expires_ns < ?`, before.UnixNano())
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: prune approvals: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // DecideApproval implements store.Store.
 func (s *Store) DecideApproval(ctx context.Context, id, status, by string, byGroups []string, reason string, at time.Time) (bool, error) {
 	groups, _ := json.Marshal(nonNil(byGroups))
@@ -69,6 +89,19 @@ func (s *Store) DecideApproval(ctx context.Context, id, status, by string, byGro
 		status, by, string(groups), reason, at.UnixNano(), id, store.ApprovalPending, at.UnixNano())
 	if err != nil {
 		return false, fmt.Errorf("sqlite: decide approval: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// WithdrawApproval implements store.Store.
+func (s *Store) WithdrawApproval(ctx context.Context, id, by string, byGroups []string, reason string, at time.Time) (bool, error) {
+	groups, _ := json.Marshal(nonNil(byGroups))
+	res, err := s.db.ExecContext(ctx, `UPDATE approvals SET status = ?, decided_by = ?, decided_groups = ?, reason = ?, decided_ns = ?
+		WHERE id = ? AND status = ? AND expires_ns > ?`,
+		store.ApprovalDenied, by, string(groups), reason, at.UnixNano(), id, store.ApprovalApproved, at.UnixNano())
+	if err != nil {
+		return false, fmt.Errorf("sqlite: withdraw approval: %w", err)
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err

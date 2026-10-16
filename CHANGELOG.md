@@ -16,7 +16,8 @@ All notable changes to this project are documented here. The format follows
   id and diff; an approver named by the binding decides with `decide_approval`
   (`list_approvals` shows requests); the requester calls again with `approval: <id>`,
   which runs once, only for the same arguments and an unchanged target, before
-  `approvals.ttl` (1h by default). Remote mode only.
+  `approvals.ttl` (1h by default). Approvers can withdraw an approval before it is used;
+  a requester has at most 20 pending requests. Remote mode only.
 
 ## [0.3.0] - 2026-10-16
 

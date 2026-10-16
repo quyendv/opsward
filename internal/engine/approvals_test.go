@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -49,6 +50,18 @@ func (s *memApprovals) UseApproval(_ context.Context, id string, at time.Time) (
 	a.Status, a.UsedAt = store.ApprovalUsed, at
 	s.m[id] = a
 	return true, nil
+}
+
+func (s *memApprovals) CountPendingApprovals(_ context.Context, requester string, now time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, a := range s.m {
+		if a.Requester == requester && a.Status == store.ApprovalPending && now.Before(a.ExpiresAt) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (s *memApprovals) set(id string, f func(*store.Approval)) {
@@ -331,5 +344,45 @@ func TestApprovalIsCheckedAgainstPolicyWhenUsed(t *testing.T) {
 				t.Fatalf("err = %v, ran %d", err, st.ran)
 			}
 		})
+	}
+}
+
+// The outcome records what the write did, as its Run reports it, not only the preview.
+func TestOutcomeRecordsTheAppliedChange(t *testing.T) {
+	tl := Tool{
+		Name: "w", Risk: core.RiskWrite, InputSchema: &jsonschema.Schema{Type: "object"},
+		Prepare: func(json.RawMessage) (*Prepared, error) {
+			return &Prepared{
+				Scope: core.Scope{Environment: "staging", Namespace: "team-a-api", Kind: "Deployment", Name: "api"}, Args: map[string]any{},
+				Preview: func(context.Context, string) (*core.Change, error) { return &core.Change{Diff: "previewed"}, nil },
+				Run:     func(context.Context, string) (any, error) { return &core.Change{Diff: "applied"}, nil },
+			}, nil
+		},
+	}
+	aud := &recordingAuditor{}
+	e, _ := New(Options{Tools: []Tool{tl}, Environments: []Environment{{Name: "staging", Namespaces: []string{"*"}}}, Authorizer: authorizerFunc(allowAll), Auditor: aud})
+	if _, err := e.Invoke(context.Background(), alice, "w", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if aud.records[0].Change.Diff != "previewed" || aud.records[1].Change.Diff != "applied" {
+		t.Fatalf("intent %q, outcome %q", aud.records[0].Change.Diff, aud.records[1].Change.Diff)
+	}
+}
+
+// One requester cannot flood approvers: past a number of pending requests, new ones are
+// refused until some are decided or expire.
+func TestPendingApprovalsAreCapped(t *testing.T) {
+	st := &scaleTool{diff: "d"}
+	e := approvalEngine(t, st, core.EffectApprove, &recordingAuditor{}, &memApprovals{})
+	for i := range MaxPendingApprovals {
+		_, err := e.Invoke(context.Background(), alice, "scale", json.RawMessage(fmt.Sprintf(`{"replicas":%d}`, i)))
+		var req *ApprovalRequiredError
+		if !errors.As(err, &req) {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+	_, err := e.Invoke(context.Background(), alice, "scale", json.RawMessage(`{"replicas":999}`))
+	if err == nil || !strings.Contains(err.Error(), "pending") {
+		t.Fatalf("err = %v", err)
 	}
 }

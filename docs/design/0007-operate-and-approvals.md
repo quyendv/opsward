@@ -23,13 +23,18 @@ Both verbs run with the binding's profile, `operator` by default, and change onl
 they name, through a merge patch with the field manager `opsward`:
 
 - `restart_workload` sets the pod template annotation `kubectl.kubernetes.io/restartedAt`,
-  as `kubectl rollout restart` does, so the workload's own rollout strategy applies.
+  as `kubectl rollout restart` does, so the workload's own rollout strategy applies. A
+  restart that would roll no pod is refused: a paused Deployment, or a StatefulSet or
+  DaemonSet whose update strategy is `OnDelete`.
 - `scale_workload` sets `spec.replicas` (0 to 1,000). A workload that a
   HorizontalPodAutoscaler targets is refused: the autoscaler would undo it.
 
 **Preview.** Before anything is changed, the patch is applied as a server-side dry run.
 The difference between the live object and the dry-run result, limited to the fields the
-verb changes, is the call's diff: it is shown to approvers and recorded in the audit.
+verb changes, is the call's diff: it is shown to approvers and recorded in the audit. The
+patch carries the `resourceVersion` that was read, so it fails with a conflict if the object
+changed in between, and the previous values recorded are the ones replaced. The intent
+record carries the preview, the outcome record what the write did.
 
 **Snapshot.** The previous values of those fields are recorded with the change, so the
 change can be reversed with the same verb (`scale_workload` back to the previous
@@ -95,6 +100,13 @@ issuer uses.
 
 The tools that list and decide approvals cannot themselves require approval: a binding
 that would require it denies them, with the reason.
+
+An approver can also withdraw an approval before it is used (`decide_approval` with
+`withdraw`), which turns it into a denial.
+
+A requester has at most 20 pending requests: one principal, or an agent in a loop, must
+not flood approvers. Requests leave the store a week after they expire; the audit keeps
+every request and decision.
 
 Requests expire after an hour unless `approvals.ttl` says otherwise; expiry counts from the
 request, so a slow approval leaves less time to run. An approval is bound to the exact
