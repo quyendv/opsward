@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync/atomic"
 
 	"github.com/quyendv/opsward/internal/config"
@@ -21,7 +22,9 @@ type changeRoutes struct {
 	appNS  string
 	appNSs []string
 	labels bool
-	cur    atomic.Pointer[tool.Changes]
+	// dests maps a cluster to how Applications name it as their destination.
+	dests map[string][]string
+	cur   atomic.Pointer[tool.Changes]
 }
 
 // openChanges builds the forges and the Argo CD reader; it returns nil when neither is
@@ -44,6 +47,11 @@ func openChanges(cfg *config.Config, k8s *kubernetes.Source) (*changeRoutes, err
 	if d := cfg.Providers.Delivery; d != nil {
 		cluster, profile := d.Cluster, d.Profile
 		c.appNS, c.appNSs, c.labels = d.Namespace, d.ApplicationNamespaces, d.LabelTracking
+		c.dests = map[string][]string{}
+		for cluster, names := range d.Destinations {
+			c.dests[cluster] = slices.Clone(names)
+		}
+		c.dests[d.Cluster] = append(c.dests[d.Cluster], "https://kubernetes.default.svc", "in-cluster")
 		// The reader is looked up per call, so a reloaded profile is used once it changes.
 		c.apps = func(ctx context.Context, namespace, name string) (*source.Application, error) {
 			read, err := k8s.Applications(cluster, profile)
@@ -65,10 +73,12 @@ func (c *changeRoutes) update(cfg *config.Config) {
 		Resolve: source.Options{
 			AnnotationKeys: cfg.SourceResolution.Annotations, Applications: c.apps, ApplicationNamespace: c.appNS,
 			LabelTracking: c.labels, ApplicationNamespaces: c.appNSs,
+			Destinations: map[string][]string{},
 		},
 	}
 	for _, e := range cfg.Environments {
 		ch.Strategies[e.Name] = e.Change.Strategy
+		ch.Resolve.Destinations[e.Name] = c.dests[e.Cluster]
 	}
 	for _, s := range cfg.SourceResolution.Static {
 		ch.Resolve.Static = append(ch.Resolve.Static, source.Static{

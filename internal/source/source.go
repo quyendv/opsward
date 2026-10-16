@@ -139,6 +139,10 @@ type Options struct {
 	// ApplicationNamespaces are the other namespaces Applications may be read from,
 	// named <namespace>_<name>; any other is refused.
 	ApplicationNamespaces []string
+	// Destinations maps each environment to the Argo CD destinations (a server URL or a
+	// cluster name) of its cluster. An Application deploying anywhere else manages no
+	// workload of the environment.
+	Destinations map[string][]string
 	// LabelTracking: Argo CD tracks resources by the app.kubernetes.io/instance label,
 	// which is read only then: charts set it too.
 	LabelTracking bool
@@ -179,6 +183,9 @@ func Managing(ctx context.Context, w Workload, opt Options) (*Managed, error) {
 		// Argo CD would not let this Application manage the workload either.
 		return nil, fmt.Errorf("%w: Argo CD Application %s/%s deploys to namespace %s, not %s",
 			ErrUnresolved, ns, name, app.Spec.Destination.Namespace, w.Namespace)
+	case !deploysTo(app, opt.Destinations[w.Environment]):
+		return nil, fmt.Errorf("%w: Argo CD Application %s/%s deploys to cluster %s, not environment %s's",
+			ErrUnresolved, ns, name, app.destination(), w.Environment)
 	}
 	return &Managed{Namespace: ns, Name: name, App: app}, nil
 }
@@ -268,6 +275,8 @@ type Application struct {
 		Source      *ApplicationSource  `json:"source"`
 		Sources     []ApplicationSource `json:"sources"`
 		Destination struct {
+			Server    string `json:"server"`
+			Name      string `json:"name"`
 			Namespace string `json:"namespace"`
 		} `json:"destination"`
 	} `json:"spec"`
@@ -277,8 +286,9 @@ type Application struct {
 // ApplicationStatus is what Argo CD reports about an Application (docs/design/0010).
 type ApplicationStatus struct {
 	Sync struct {
-		Status   string `json:"status"`
-		Revision string `json:"revision"`
+		Status    string   `json:"status"`
+		Revision  string   `json:"revision"`
+		Revisions []string `json:"revisions"` // multi-source: one per source
 	} `json:"sync"`
 	Health struct {
 		Status  string `json:"status"`
@@ -290,7 +300,8 @@ type ApplicationStatus struct {
 		StartedAt  string `json:"startedAt"`
 		FinishedAt string `json:"finishedAt"`
 		SyncResult *struct {
-			Revision string `json:"revision"`
+			Revision  string   `json:"revision"`
+			Revisions []string `json:"revisions"`
 		} `json:"syncResult"`
 	} `json:"operationState"`
 	Conditions []struct {
@@ -309,20 +320,38 @@ type ApplicationStatus struct {
 		} `json:"health"`
 	} `json:"resources"`
 	History []struct {
-		Revision   string `json:"revision"`
-		DeployedAt string `json:"deployedAt"`
+		Revision   string   `json:"revision"`
+		Revisions  []string `json:"revisions"`
+		DeployedAt string   `json:"deployedAt"`
 	} `json:"history"`
+	// ResourceHealthSource is appTree when Argo CD keeps resource health out of
+	// Resources, as Argo CD 3 does by default.
+	ResourceHealthSource string `json:"resourceHealthSource"`
 }
 
-// TargetRevision is the revision the Application's first source targets.
-func (a *Application) TargetRevision() string {
+// deploysTo reports whether the Application's destination is one of dests.
+func deploysTo(a *Application, dests []string) bool {
+	d := a.Spec.Destination
+	return (d.Server != "" && slices.Contains(dests, d.Server)) || (d.Name != "" && slices.Contains(dests, d.Name))
+}
+
+func (a *Application) destination() string {
+	if a.Spec.Destination.Name != "" {
+		return a.Spec.Destination.Name
+	}
+	return a.Spec.Destination.Server
+}
+
+// TargetRevisions are the revisions the Application's sources target, in order.
+func (a *Application) TargetRevisions() []string {
 	if a.Spec.Source != nil {
-		return a.Spec.Source.TargetRevision
+		return []string{a.Spec.Source.TargetRevision}
 	}
-	if len(a.Spec.Sources) > 0 {
-		return a.Spec.Sources[0].TargetRevision
+	out := make([]string, 0, len(a.Spec.Sources))
+	for _, s := range a.Spec.Sources {
+		out = append(out, s.TargetRevision)
 	}
-	return ""
+	return out
 }
 
 // ApplicationSource is one source of an Application.

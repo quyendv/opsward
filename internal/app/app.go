@@ -70,7 +70,7 @@ type App struct {
 	lib        *knowledge.Library
 	metrics    *metricsRoutes // nil without any metrics backend
 	logs       *logsRoutes    // nil without any logs backend
-	changes    *changeRoutes  // nil without any forge
+	changes    *changeRoutes  // nil without a forge or providers.delivery
 	envs       environments
 	tools      []engine.Tool
 }
@@ -176,6 +176,8 @@ func checkTools(cfg *config.Config) ([]engine.Tool, error) {
 	if cfg.Identity.Mode == config.ModeRemote {
 		approvals = noApprovals{}
 	}
+	// An empty changeRoutes registers the tools; its Changes is nil, so they must not
+	// be run from here.
 	var changes tool.ChangeConfig
 	if f := featuresOf(cfg); f.proposals || f.delivery {
 		changes = &changeRoutes{}

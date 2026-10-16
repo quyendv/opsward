@@ -22,6 +22,9 @@ type Delivery struct {
 	// ApplicationNamespaces are other namespaces Applications may live in (Argo CD's
 	// applications in any namespace); the delivery profile needs get there too.
 	ApplicationNamespaces []string `yaml:"applicationNamespaces"`
+	// Destinations names, for clusters other than Cluster, how Applications name them as
+	// their destination (a server URL or a cluster name). Cluster itself is in-cluster.
+	Destinations map[string][]string `yaml:"destinations"`
 	// LabelTracking: Argo CD tracks resources by the app.kubernetes.io/instance label
 	// rather than its tracking-id annotation.
 	LabelTracking bool `yaml:"labelTracking"`
@@ -78,6 +81,11 @@ func (c *Config) validateChange(envs map[string]bool, fail func(string, ...any))
 		for _, ns := range d.ApplicationNamespaces {
 			if !dnsLabel.MatchString(ns) || ns == d.Namespace {
 				fail("providers.delivery.applicationNamespaces: %q is not a namespace besides %s", ns, d.Namespace)
+			}
+		}
+		for cluster := range d.Destinations {
+			if _, ok := c.Providers.Kubernetes.Clusters[cluster]; !ok {
+				fail("providers.delivery.destinations: unknown cluster %q", cluster)
 			}
 		}
 		if cl, ok := c.Providers.Kubernetes.Clusters[d.Cluster]; !ok {

@@ -59,7 +59,7 @@ func TestToolsDeclareWhatTheyUse(t *testing.T) {
 			return ResolveSource(s, cfg)
 		}, `{` + w + `}`},
 		{func(s *fakeSource) (engine.Tool, error) {
-			return DeliveryStatus(s, staticChanges{&Changes{Resolve: source.Options{ApplicationNamespace: "argocd", Applications: appWith("Synced", 0)}}})
+			return DeliveryStatus(s, staticChanges{&Changes{Resolve: source.Options{ApplicationNamespace: "argocd", Applications: appWith("Synced", 0), Destinations: inCluster}}})
 		}, `{` + w + `}`},
 		{func(s *fakeSource) (engine.Tool, error) {
 			_, _, cfg := changeFixture("pull-request")

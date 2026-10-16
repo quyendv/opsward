@@ -7,8 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/quyendv/opsward/internal/config"
+	"github.com/quyendv/opsward/internal/provider/kubernetes"
 )
 
 // giteaRepo serves one repository, team-a/gitops, with one file, through the Gitea API.
@@ -107,5 +111,28 @@ func TestDeliveryToolNeedsOnlyDelivery(t *testing.T) {
 	got := strings.Join(names, ",")
 	if !strings.Contains(got, "get_delivery_status") || strings.Contains(got, "propose_change") {
 		t.Fatalf("tools = %s", got)
+	}
+}
+
+// Environments on the delivery cluster accept Applications deploying in-cluster; others
+// only the destinations configured for their cluster.
+func TestDeliveryDestinationsPerEnvironment(t *testing.T) {
+	doc := strings.Replace(base, "%DB%", filepath.Join(t.TempDir(), "o.db"), 1)
+	doc = strings.Replace(doc, "%GROUP%", "team-a", 1)
+	doc = strings.Replace(doc, "          reader: { kubeconfig: /unused }\n",
+		"          reader: { kubeconfig: /unused }\n      cluster-b:\n        profiles:\n          reader: { kubeconfig: /unused }\n      cluster-c:\n        profiles:\n          reader: { kubeconfig: /unused }\n"+
+			"  delivery: { type: argocd, cluster: cluster-a, destinations: { cluster-b: [https://b.example.com] } }\n", 1)
+	doc = strings.Replace(doc, "environments:\n", "environments:\n  - { name: production, cluster: cluster-b }\n  - { name: lab, cluster: cluster-c }\n", 1)
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := openChanges(cfg, kubernetes.NewSource(nil, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := c.Changes().Resolve.Destinations
+	if !slices.Contains(d["staging"], "in-cluster") || !slices.Equal(d["production"], []string{"https://b.example.com"}) || len(d["lab"]) != 0 {
+		t.Fatalf("destinations = %v", d)
 	}
 }

@@ -243,3 +243,24 @@ func TestRenderRBACApplicationNamespaces(t *testing.T) {
 		}
 	}
 }
+
+// providers.delivery alone (no forge) still needs the delivery profile's get on
+// Applications: get_delivery_status reads them.
+func TestRenderRBACDeliveryWithoutForges(t *testing.T) {
+	forgesAt, envsAt := strings.Index(rbacConfig, "  forges:\n"), strings.Index(rbacConfig, "environments:\n")
+	if forgesAt < 0 || envsAt < forgesAt {
+		t.Fatal("the fixture has no forges section before environments")
+	}
+	doc := rbacConfig[:forgesAt] + rbacConfig[envsAt:]
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := RenderRBAC(cfg, RBACOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "kind: Role\nmetadata:\n  name: opsward:reader:delivery\n  namespace: argocd") {
+		t.Fatalf("no delivery Role:\n%s", out)
+	}
+}
