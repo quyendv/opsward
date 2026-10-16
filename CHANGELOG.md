@@ -20,6 +20,15 @@ All notable changes to this project are documented here. The format follows
   than one replica: migrations under an advisory lock, one audit chain shared by replicas.
 - Audit records name the credential behind a call (`principal.credential`).
 
+### Fixed
+
+- `diagnose_workload` reads crash logs only for pods failing now or whose container ended
+  within the hour, and logs of a previous instance are marked `previous`.
+- `query_logs` asks Loki for categorized labels, so per-line metadata no longer splits
+  every line into its own stream.
+- Tool output drops terminal escape sequences and is compact JSON.
+- Out-of-scope or malformed queries are audited as `invalid`, not `error`.
+
 ## [0.1.0] - 2026-10-15
 
 First release: a single-user, read-only gateway over MCP stdio.
