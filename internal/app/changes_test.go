@@ -93,3 +93,19 @@ func TestProposeChangeRiskFollowsTheStrategy(t *testing.T) {
 		t.Fatalf("pull-request with a read-only role: err = %v, want denied", err)
 	}
 }
+
+// get_delivery_status needs providers.delivery and no forge; the change tools need a
+// forge.
+func TestDeliveryToolNeedsOnlyDelivery(t *testing.T) {
+	f := newFixture(t, "team-a")
+	f.extra = "  delivery: { type: argocd, cluster: cluster-a }\n"
+	f.reopen()
+	var names []string
+	for _, tl := range f.app.Engine.Tools() {
+		names = append(names, tl.Name)
+	}
+	got := strings.Join(names, ",")
+	if !strings.Contains(got, "get_delivery_status") || strings.Contains(got, "propose_change") {
+		t.Fatalf("tools = %s", got)
+	}
+}

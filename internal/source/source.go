@@ -1,5 +1,6 @@
 // Package source finds the repository files that declare a workload: through the Argo CD
-// Application that manages it, an annotation on it, or a static map. docs/design/0008.
+// Application that manages it, an annotation on it, or a static map (docs/design/0008);
+// and that Application, with its status (docs/design/0010).
 package source
 
 import (
@@ -143,40 +144,59 @@ type Options struct {
 	LabelTracking bool
 }
 
+// Managed is the Argo CD Application that manages a workload.
+type Managed struct {
+	Namespace, Name string
+	App             *Application
+}
+
+// Managing returns the Argo CD Application that manages the workload, or nil when no
+// Application tracks it (or, with label tracking, the label names none). A tracking id
+// that names another workload, an Application in a namespace not listed, or one deploying
+// elsewhere is ErrUnresolved: the workload cannot borrow another Application.
+func Managing(ctx context.Context, w Workload, opt Options) (*Managed, error) {
+	if opt.Applications == nil {
+		return nil, nil
+	}
+	ns, name, byAnnotation, err := application(w, opt.ApplicationNamespace, opt.LabelTracking)
+	if err != nil || name == "" {
+		return nil, err
+	}
+	if ns != opt.ApplicationNamespace && !slices.Contains(opt.ApplicationNamespaces, ns) {
+		return nil, fmt.Errorf("%w: Argo CD Application %s/%s is in a namespace providers.delivery.applicationNamespaces does not list",
+			ErrUnresolved, ns, name)
+	}
+	app, err := opt.Applications(ctx, ns, name)
+	switch {
+	case errors.Is(err, ErrNoApplication) && !byAnnotation:
+		// The label is also a chart convention: nothing manages the workload.
+		return nil, nil
+	case errors.Is(err, ErrNoApplication):
+		return nil, fmt.Errorf("%w: the workload names Argo CD Application %s/%s, which does not exist", ErrUnresolved, ns, name)
+	case err != nil:
+		return nil, fmt.Errorf("reading Argo CD Application %s/%s: %w", ns, name, err)
+	case app.Spec.Destination.Namespace != w.Namespace:
+		// Argo CD would not let this Application manage the workload either.
+		return nil, fmt.Errorf("%w: Argo CD Application %s/%s deploys to namespace %s, not %s",
+			ErrUnresolved, ns, name, app.Spec.Destination.Namespace, w.Namespace)
+	}
+	return &Managed{Namespace: ns, Name: name, App: app}, nil
+}
+
 // Resolve tries Argo CD, then the annotations, then the static map.
 func Resolve(ctx context.Context, w Workload, opt Options) (*Source, error) {
-	if opt.Applications != nil {
-		ns, name, byAnnotation, err := application(w, opt.ApplicationNamespace, opt.LabelTracking)
-		if err != nil {
-			return nil, err
-		}
-		if name != "" && ns != opt.ApplicationNamespace && !slices.Contains(opt.ApplicationNamespaces, ns) {
-			return nil, fmt.Errorf("%w: Argo CD Application %s/%s is in a namespace providers.delivery.applicationNamespaces does not list",
-				ErrUnresolved, ns, name)
-		}
-		if name != "" {
-			app, err := opt.Applications(ctx, ns, name)
-			switch {
-			case errors.Is(err, ErrNoApplication) && !byAnnotation:
-				// The label is also a chart convention: try the other resolvers.
-			case errors.Is(err, ErrNoApplication):
-				return nil, fmt.Errorf("%w: the workload names Argo CD Application %s/%s, which does not exist", ErrUnresolved, ns, name)
-			case err != nil:
-				return nil, fmt.Errorf("reading Argo CD Application %s/%s: %w", ns, name, err)
-			case app.Spec.Destination.Namespace != w.Namespace:
-				// Argo CD would not let this Application manage the workload either.
-				return nil, fmt.Errorf("%w: Argo CD Application %s/%s deploys to namespace %s, not %s",
-					ErrUnresolved, ns, name, app.Spec.Destination.Namespace, w.Namespace)
-			default:
-				locs := app.locations()
-				for i := range locs {
-					if err := locs[i].check(); err != nil {
-						return nil, fmt.Errorf("argo CD Application %s/%s: %w", ns, name, err)
-					}
-				}
-				return &Source{Resolver: "argocd", Application: ns + "/" + name, Locations: locs}, nil
+	m, err := Managing(ctx, w, opt)
+	if err != nil {
+		return nil, err
+	}
+	if m != nil {
+		locs := m.App.locations()
+		for i := range locs {
+			if err := locs[i].check(); err != nil {
+				return nil, fmt.Errorf("argo CD Application %s/%s: %w", m.Namespace, m.Name, err)
 			}
 		}
+		return &Source{Resolver: "argocd", Application: m.Namespace + "/" + m.Name, Locations: locs}, nil
 	}
 	for _, k := range opt.AnnotationKeys {
 		if v := w.Annotations[k]; v != "" {
@@ -251,6 +271,58 @@ type Application struct {
 			Namespace string `json:"namespace"`
 		} `json:"destination"`
 	} `json:"spec"`
+	Status ApplicationStatus `json:"status"`
+}
+
+// ApplicationStatus is what Argo CD reports about an Application (docs/design/0010).
+type ApplicationStatus struct {
+	Sync struct {
+		Status   string `json:"status"`
+		Revision string `json:"revision"`
+	} `json:"sync"`
+	Health struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	} `json:"health"`
+	OperationState *struct {
+		Phase      string `json:"phase"`
+		Message    string `json:"message"`
+		StartedAt  string `json:"startedAt"`
+		FinishedAt string `json:"finishedAt"`
+		SyncResult *struct {
+			Revision string `json:"revision"`
+		} `json:"syncResult"`
+	} `json:"operationState"`
+	Conditions []struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"conditions"`
+	Resources []struct {
+		Group     string `json:"group"`
+		Kind      string `json:"kind"`
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+		Status    string `json:"status"`
+		Health    *struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		} `json:"health"`
+	} `json:"resources"`
+	History []struct {
+		Revision   string `json:"revision"`
+		DeployedAt string `json:"deployedAt"`
+	} `json:"history"`
+}
+
+// TargetRevision is the revision the Application's first source targets.
+func (a *Application) TargetRevision() string {
+	if a.Spec.Source != nil {
+		return a.Spec.Source.TargetRevision
+	}
+	if len(a.Spec.Sources) > 0 {
+		return a.Spec.Sources[0].TargetRevision
+	}
+	return ""
 }
 
 // ApplicationSource is one source of an Application.

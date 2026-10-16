@@ -252,3 +252,35 @@ func TestApplicationNamespacesAreListed(t *testing.T) {
 		t.Fatalf("a listed namespace: %+v, %v", got, err)
 	}
 }
+
+// Managing finds the Application that manages a workload with the same checks as source
+// resolution, and nothing when nothing tracks the workload.
+func TestManaging(t *testing.T) {
+	read := apps(map[string]string{
+		"argocd/api": `{"spec":{"source":{"repoURL":"https://github.com/example-org/gitops.git","path":"apps/api","targetRevision":"main"},"destination":{"namespace":"shop"}},
+			"status":{"sync":{"status":"OutOfSync","revision":"abc123"},"health":{"status":"Degraded","message":"1 pod crashing"},
+			"operationState":{"phase":"Failed","message":"one or more objects failed to apply","startedAt":"2026-10-16T08:00:00Z","finishedAt":"2026-10-16T08:00:05Z","syncResult":{"revision":"abc123"}},
+			"conditions":[{"type":"SyncError","message":"Failed sync attempt"}],
+			"resources":[{"group":"apps","kind":"Deployment","namespace":"shop","name":"api","status":"OutOfSync","health":{"status":"Degraded"}},{"kind":"Service","namespace":"shop","name":"api","status":"Synced","health":{"status":"Healthy"}}],
+			"history":[{"revision":"aaa111","deployedAt":"2026-10-15T08:00:00Z"},{"revision":"abc123","deployedAt":"2026-10-16T08:00:05Z"}]}}`,
+	})
+	opt := Options{ApplicationNamespace: "argocd", Applications: read}
+	if m, err := Managing(context.Background(), api, opt); m != nil || err != nil {
+		t.Fatalf("untracked workload: %+v, %v", m, err)
+	}
+	w := api
+	w.Annotations = map[string]string{"argocd.argoproj.io/tracking-id": "api:apps/Deployment:shop/api"}
+	m, err := Managing(context.Background(), w, opt)
+	if err != nil || m.Namespace != "argocd" || m.Name != "api" {
+		t.Fatalf("Managing = %+v, %v", m, err)
+	}
+	st := m.App.Status
+	if st.Sync.Status != "OutOfSync" || st.Health.Message != "1 pod crashing" || st.OperationState.Phase != "Failed" ||
+		len(st.Conditions) != 1 || len(st.Resources) != 2 || st.History[1].Revision != "abc123" {
+		t.Fatalf("status = %+v", st)
+	}
+	w.Annotations["argocd.argoproj.io/tracking-id"] = "api:apps/Deployment:shop/other"
+	if _, err := Managing(context.Background(), w, opt); !errors.Is(err, ErrUnresolved) {
+		t.Fatalf("a tracking id naming another workload: err = %v", err)
+	}
+}

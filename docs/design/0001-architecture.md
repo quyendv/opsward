@@ -389,7 +389,7 @@ in force. See [0002](0002-identity-policy-storage.md#loading-the-file).
 | v0.2 | OIDC, API tokens, internal groups, remote MCP over HTTP, multiple principals, Postgres |
 | v0.3 | discovery tools authorized per item, metrics summaries, cluster-wide queries, per-cluster backends ([0006](0006-discovery-and-summaries.md)) |
 | v0.4 | narrow write verbs with approvals ([0007](0007-operate-and-approvals.md)), `suggest` and `pull-request` strategies ([0008](0008-propose-change.md)) |
-| v0.5 | `opsward rbac render` ([0009](0009-rbac-render.md)), delivery provider depth |
+| v0.5 | `opsward rbac render` ([0009](0009-rbac-render.md)), delivery status ([0010](0010-delivery-status.md)) |
 | later | alert webhook, optional agent mode, web console (audit, approvals, policy), snapshots, impersonation and token passthrough credential sources |
 
 ## Alternatives considered

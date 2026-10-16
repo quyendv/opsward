@@ -46,9 +46,9 @@ providers:
         profiles:
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
           operator: { kubeconfig: /etc/opsward/cluster-a-operator.kubeconfig }
-  # Where Argo CD keeps its Applications; the reader profile needs get on
-  # applications.argoproj.io there. Optional: annotations and the static map below also
-  # find a workload's source.
+  # Where Argo CD keeps its Applications: get_delivery_status reads them, and source
+  # resolution finds a workload's files through them. The reader profile needs get on
+  # applications.argoproj.io there (opsward rbac render includes it).
   delivery: { type: argocd, cluster: cluster-a, namespace: argocd }
   # Forges Opsward reads from and opens pull requests on, each limited to the
   # repositories it lists. The token needs read and write on their contents and pull

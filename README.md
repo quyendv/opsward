@@ -58,7 +58,8 @@ caller may work on), `get_workload_status`, `list_workload_events`, `list_worklo
 `scale_workload` (previewed, and approved by someone else where policy says so; approvers
 use `list_approvals` and `decide_approval`); with a forge configured, `resolve_source`
 and `propose_change`, which turn a change into a diff or a pull request against the
-workload's GitOps source; with a Prometheus-compatible
+workload's GitOps source; with Argo CD configured, `get_delivery_status`; with a
+Prometheus-compatible
 metrics backend also `get_workload_metrics` and `query_metrics`, and with Loki `query_logs`.
 Free-form queries are rewritten so that they cannot leave the caller's namespace and
 cluster; without a namespace they span the cluster, where the environment and policy allow. Results that match a knowledge document carry its

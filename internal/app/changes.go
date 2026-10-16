@@ -24,10 +24,11 @@ type changeRoutes struct {
 	cur    atomic.Pointer[tool.Changes]
 }
 
-// openChanges builds the forges; it returns nil when none is configured, and the change
-// tools are then not registered.
+// openChanges builds the forges and the Argo CD reader; it returns nil when neither is
+// configured. The change tools need a forge (docs/design/0008), get_delivery_status the
+// reader (docs/design/0010).
 func openChanges(cfg *config.Config, k8s *kubernetes.Source) (*changeRoutes, error) {
-	if len(cfg.Providers.Forges) == 0 {
+	if len(cfg.Providers.Forges) == 0 && cfg.Providers.Delivery == nil {
 		return nil, nil
 	}
 	c := &changeRoutes{}

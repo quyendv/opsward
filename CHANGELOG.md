@@ -15,6 +15,11 @@ All notable changes to this project are documented here. The format follows
   for the delivery profile. Objects are named `opsward:<profile>`; subjects default to
   ServiceAccounts `opsward-<profile>` (`--service-account-namespace`, `--subject`).
   Nothing is applied.
+- `get_delivery_status`: how Argo CD sees a workload, from the Application that manages
+  it: sync status with the live and target revisions, health, the last sync operation and
+  its error, conditions, the resources out of sync or unhealthy (unhealthy first, at most
+  50) and the last 5 deployments. Registered with `providers.delivery`, which no longer
+  needs a forge.
 
 ### Changed
 
