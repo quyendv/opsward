@@ -41,10 +41,10 @@ providers:
   kubernetes:
     clusters:
       cluster-a:
+        # The RBAC each profile needs for what the policy below allows:
+        #   opsward rbac render --config examples/opsward-remote.yaml
         profiles:
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
-          # get and patch on deployments, statefulsets and daemonsets (restart, scale),
-          # list on horizontalpodautoscalers; nothing else.
           operator: { kubeconfig: /etc/opsward/cluster-a-operator.kubeconfig }
   # Where Argo CD keeps its Applications; the reader profile needs get on
   # applications.argoproj.io there. Optional: annotations and the static map below also

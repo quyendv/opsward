@@ -32,6 +32,7 @@ commands:
   validate --config FILE       check a configuration file and its policy
   audit verify --config FILE   check the stored audit chain
   token create|list|revoke     manage API tokens (opsward token for details)
+  rbac render --config FILE    print the Kubernetes RBAC each profile needs
   version                      print version
 `
 
@@ -64,6 +65,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = verify(ctx, args[2:], stdout)
 	case "token":
 		err = token(ctx, args[1:], stdout, stderr)
+	case "rbac":
+		err = rbac(args[1:], stdout)
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2

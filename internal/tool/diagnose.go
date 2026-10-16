@@ -46,6 +46,7 @@ func DiagnoseWorkload(ws capability.WorkloadSource, ms capability.MetricsSource)
 			"failing containers (the crashed instance, marked previous, when a container restarted within the hour) and, when metrics are available, " +
 			"CPU and memory over the last hour. Parts that cannot be read are listed under unavailable.",
 		Risk:        core.RiskRead,
+		Needs:       []string{capability.OpWorkloadsGet, capability.OpWorkloadsPods, capability.OpWorkloadsEvents, capability.OpWorkloadsLogs},
 		InputSchema: in.schema,
 		Args:        in.names,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {

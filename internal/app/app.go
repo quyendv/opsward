@@ -148,6 +148,20 @@ func derive(cfg *config.Config, tools []engine.Tool, log *slog.Logger) (*derived
 // Check validates everything that can be validated without opening the store or
 // reaching a backend, and returns warnings.
 func Check(cfg *config.Config) ([]string, error) {
+	tools, err := checkTools(cfg)
+	if err != nil {
+		return nil, err
+	}
+	d, err := derive(cfg, tools, slog.New(slog.DiscardHandler))
+	if err != nil {
+		return nil, err
+	}
+	return d.warnings, nil
+}
+
+// checkTools registers the tools a configuration enables, as Open does, without
+// building a backend client.
+func checkTools(cfg *config.Config) ([]engine.Tool, error) {
 	// Placeholders stand in for the backends: they register the same tools without
 	// reading credential or CA files, which may exist only where Opsward runs.
 	var ms capability.MetricsSource
@@ -166,15 +180,7 @@ func Check(cfg *config.Config) ([]string, error) {
 	if len(cfg.Providers.Forges) > 0 {
 		changes = &changeRoutes{}
 	}
-	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals, changes)
-	if err != nil {
-		return nil, err
-	}
-	d, err := derive(cfg, tools, slog.New(slog.DiscardHandler))
-	if err != nil {
-		return nil, err
-	}
-	return d.warnings, nil
+	return buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals, changes)
 }
 
 // Open builds the App: store, audit writer, providers, tools, policy, knowledge and engine.

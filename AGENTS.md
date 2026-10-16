@@ -17,12 +17,13 @@ Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0005](docs/design/0005-remote-access.md) for remote access,
 [0006](docs/design/0006-discovery-and-summaries.md) for discovery and per-item authorization,
 [0007](docs/design/0007-operate-and-approvals.md) for writes and approvals,
-[0008](docs/design/0008-propose-change.md) for proposing changes.
+[0008](docs/design/0008-propose-change.md) for proposing changes,
+[0009](docs/design/0009-rbac-render.md) for rendering backend permissions.
 
 ## Layout
 
 ```
-cmd/opsward/                 CLI: serve, validate, audit verify, version
+cmd/opsward/                 CLI: serve, validate, audit verify, token, rbac render, version
 internal/core/               vocabulary shared by engine, policy and audit
 internal/engine/             the pipeline: validate, authorize, run, redact, audit
 internal/policy/             roles, bindings, CEL conditions

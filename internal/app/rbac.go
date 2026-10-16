@@ -1,0 +1,209 @@
+package app
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
+
+	"github.com/quyendv/opsward/internal/capability"
+	"github.com/quyendv/opsward/internal/config"
+	"github.com/quyendv/opsward/internal/core"
+	"github.com/quyendv/opsward/internal/policy"
+	"github.com/quyendv/opsward/internal/provider/kubernetes"
+)
+
+// RBACOptions names who the rendered RBAC is bound to.
+type RBACOptions struct {
+	// ServiceAccountNamespace holds the default subjects, ServiceAccounts named
+	// opsward-<profile>; default opsward.
+	ServiceAccountNamespace string
+	// Subjects replace the default subject of a profile.
+	Subjects map[string]rbacv1.Subject
+}
+
+// ParseRBACSubject reads <profile>=<User|Group|ServiceAccount>:<name>, where a
+// ServiceAccount's name is <namespace>/<name>.
+func ParseRBACSubject(s string) (string, rbacv1.Subject, error) {
+	profile, rest, ok := strings.Cut(s, "=")
+	kind, name, ok2 := strings.Cut(rest, ":")
+	if !ok || !ok2 || profile == "" || name == "" {
+		return "", rbacv1.Subject{}, fmt.Errorf("subject %q: want <profile>=<User|Group|ServiceAccount>:<name>", s)
+	}
+	switch kind {
+	case rbacv1.UserKind, rbacv1.GroupKind:
+		return profile, rbacv1.Subject{Kind: kind, APIGroup: rbacv1.GroupName, Name: name}, nil
+	case rbacv1.ServiceAccountKind:
+		ns, n, found := strings.Cut(name, "/")
+		if !found || ns == "" || n == "" {
+			return "", rbacv1.Subject{}, fmt.Errorf("subject %q: a ServiceAccount is <namespace>/<name>", s)
+		}
+		return profile, rbacv1.Subject{Kind: kind, Namespace: ns, Name: n}, nil
+	}
+	return "", rbacv1.Subject{}, fmt.Errorf("subject %q: kind %q is not User, Group or ServiceAccount", s, kind)
+}
+
+const rbacPrefix = "opsward-"
+
+// RenderRBAC prints, per cluster and profile, the Kubernetes RBAC that the tools policy
+// lets run through the profile need (docs/design/0009). Nothing is applied.
+func RenderRBAC(cfg *config.Config, opt RBACOptions) (string, error) {
+	if opt.ServiceAccountNamespace == "" {
+		opt.ServiceAccountNamespace = "opsward"
+	}
+	tools, err := checkTools(cfg)
+	if err != nil {
+		return "", err
+	}
+	needs := map[string][]string{}
+	for _, t := range tools {
+		needs[t.Name] = t.Needs
+	}
+	pol, _, err := policy.Compile(cfg.Policy, catalog(cfg, tools), nil)
+	if err != nil {
+		return "", err
+	}
+	grants := pol.Grants(catalog(cfg, tools))
+
+	var b strings.Builder
+	b.WriteString("# Rendered by opsward rbac render. Review it, then apply it with an administrator's\n" +
+		"# credentials for each cluster; Opsward never applies it.\n")
+	clusters := make([]string, 0, len(cfg.Providers.Kubernetes.Clusters))
+	for name := range cfg.Providers.Kubernetes.Clusters {
+		clusters = append(clusters, name)
+	}
+	slices.Sort(clusters)
+	for _, cluster := range clusters {
+		objs, err := clusterRBAC(cfg, cluster, grants, needs, opt)
+		if err != nil {
+			return "", err
+		}
+		if len(objs) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\n# Cluster %s\n", cluster)
+		for _, o := range objs {
+			y, err := yaml.Marshal(o)
+			if err != nil {
+				return "", err
+			}
+			b.WriteString("---\n")
+			b.Write(y)
+		}
+	}
+	return b.String(), nil
+}
+
+// profileUse is what one profile does on one cluster.
+type profileUse struct {
+	ops        []string
+	namespaces []string // of the environments it serves
+	wide       bool     // an environment it serves has namespace patterns
+}
+
+func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[string][]string, needs map[string][]string, opt RBACOptions) ([]any, error) {
+	declared := cfg.Providers.Kubernetes.Clusters[cluster].Profiles
+	uses := map[string]*profileUse{}
+	use := func(profile string, env config.Environment, ops ...string) {
+		u := uses[profile]
+		if u == nil {
+			u = &profileUse{}
+			uses[profile] = u
+		}
+		for _, op := range ops {
+			if !slices.Contains(u.ops, op) {
+				u.ops = append(u.ops, op)
+			}
+		}
+		for _, ns := range env.Namespaces {
+			if strings.ContainsAny(ns, "*?[") {
+				u.wide = true
+			} else if !slices.Contains(u.namespaces, ns) {
+				u.namespaces = append(u.namespaces, ns)
+			}
+		}
+	}
+	for _, env := range cfg.Environments {
+		if env.Cluster != cluster {
+			continue
+		}
+		for profile, tools := range grants[env.Name] {
+			for _, t := range tools {
+				use(profile, env, needs[t]...)
+				// The engine reads a targeted workload's labels with the reader before
+				// authorization, whatever profile the call then runs with.
+				if slices.Contains(needs[t], capability.OpWorkloadsGet) {
+					if _, ok := declared[core.ProfileReader]; ok {
+						use(core.ProfileReader, env, capability.OpWorkloadsGet)
+					}
+				}
+			}
+		}
+	}
+
+	subject := func(profile string) rbacv1.Subject {
+		if s, ok := opt.Subjects[profile]; ok {
+			return s
+		}
+		return rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: opt.ServiceAccountNamespace, Name: rbacPrefix + profile}
+	}
+	var objs []any
+	profiles := make([]string, 0, len(uses))
+	for p := range uses {
+		profiles = append(profiles, p)
+	}
+	slices.Sort(profiles)
+	for _, profile := range profiles {
+		if _, ok := declared[profile]; !ok {
+			return nil, fmt.Errorf("cluster %s: policy uses profile %q, which the cluster does not declare", cluster, profile)
+		}
+		u := uses[profile]
+		namespaced, clusterRules := kubernetes.Rules(u.ops)
+		name := rbacPrefix + profile
+		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name}
+		subjects := []rbacv1.Subject{subject(profile)}
+		if len(namespaced) > 0 {
+			objs = append(objs, clusterRole(name, namespaced))
+			if u.wide {
+				objs = append(objs, clusterRoleBinding(name, ref, subjects))
+			} else {
+				slices.Sort(u.namespaces)
+				for _, ns := range u.namespaces {
+					objs = append(objs, roleBinding(name, ns, ref, subjects))
+				}
+			}
+		}
+		if len(clusterRules) > 0 {
+			cname := name + "-cluster"
+			objs = append(objs, clusterRole(cname, clusterRules),
+				clusterRoleBinding(cname, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: cname}, subjects))
+		}
+	}
+	if d := cfg.Providers.Delivery; d != nil && d.Cluster == cluster && len(cfg.Providers.Forges) > 0 {
+		rules, _ := kubernetes.Rules([]string{capability.OpApplicationsGet})
+		name := rbacPrefix + d.Profile + "-delivery"
+		objs = append(objs,
+			&rbacv1.Role{TypeMeta: typeMeta("Role"), ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: d.Namespace}, Rules: rules},
+			roleBinding(name, d.Namespace, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name}, []rbacv1.Subject{subject(d.Profile)}))
+	}
+	return objs, nil
+}
+
+func typeMeta(kind string) metav1.TypeMeta {
+	return metav1.TypeMeta{APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: kind}
+}
+
+func clusterRole(name string, rules []rbacv1.PolicyRule) *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{TypeMeta: typeMeta("ClusterRole"), ObjectMeta: metav1.ObjectMeta{Name: name}, Rules: rules}
+}
+
+func clusterRoleBinding(name string, ref rbacv1.RoleRef, subjects []rbacv1.Subject) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{TypeMeta: typeMeta("ClusterRoleBinding"), ObjectMeta: metav1.ObjectMeta{Name: name}, RoleRef: ref, Subjects: subjects}
+}
+
+func roleBinding(name, ns string, ref rbacv1.RoleRef, subjects []rbacv1.Subject) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{TypeMeta: typeMeta("RoleBinding"), ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, RoleRef: ref, Subjects: subjects}
+}

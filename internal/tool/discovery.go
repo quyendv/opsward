@@ -80,6 +80,7 @@ func ListNamespaces(envs Environments, ws capability.WorkloadSource) (engine.Too
 		Name:        "list_namespaces",
 		Description: "List the namespaces of an environment that you can work in.",
 		Risk:        core.RiskRead, InputSchema: in.schema, Args: in.names, List: true,
+		Needs: []string{capability.OpNamespacesList},
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
 			if err != nil {
@@ -144,6 +145,7 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 			"replicas: in one namespace, or across the environment without one. unhealthy keeps only those with " +
 			"fewer ready replicas than desired, the quickest way to find what is broken.",
 		Risk: core.RiskRead, InputSchema: in.schema, Args: in.names, List: true,
+		Needs: []string{capability.OpWorkloadsList},
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
 			if err != nil {

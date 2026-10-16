@@ -49,6 +49,9 @@ type Tool struct {
 	// ClusterWide tools read across namespaces when the call names none. Such a call is
 	// refused in an environment limited to some namespaces.
 	ClusterWide bool
+	// Needs are the backend operations the tool performs (capability.Op*), from which
+	// opsward rbac render derives each profile's permissions (docs/design/0009).
+	Needs []string
 	// Prepare decodes and validates arguments without touching any backend.
 	Prepare func(args json.RawMessage) (*Prepared, error)
 }

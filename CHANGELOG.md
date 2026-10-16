@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `opsward rbac render --config FILE` prints the Kubernetes RBAC each profile needs for
+  the tools policy lets run through it: RoleBindings where an environment lists its
+  namespaces, ClusterRoleBindings where it has patterns, `list` on namespaces cluster-wide
+  where `list_namespaces` is allowed, and `get` on Argo CD Applications for the delivery
+  profile. Subjects default to ServiceAccounts `opsward-<profile>`
+  (`--service-account-namespace`, `--subject`). Nothing is applied.
+
 ## [0.4.0] - 2026-10-16
 
 The write path: narrow changes to workloads, previewed and audited, with approvals by

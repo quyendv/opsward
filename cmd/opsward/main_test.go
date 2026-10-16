@@ -144,3 +144,22 @@ func TestValidateRemoteExampleConfig(t *testing.T) {
 		t.Fatalf("code %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }
+
+func TestRBACRender(t *testing.T) {
+	code, out, errOut := runCLI("rbac", "render", "--config", "../../examples/opsward-remote.yaml",
+		"--service-account-namespace", "platform", "--subject", "operator=User:opsward-operator")
+	if code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errOut)
+	}
+	for _, want := range []string{"# Cluster cluster-a", "name: opsward-reader\n  namespace: platform", "kind: User\n  name: opsward-operator", "name: opsward-reader-delivery"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output misses %q:\n%s", want, out)
+		}
+	}
+	if code, _, _ := runCLI("rbac", "render", "--config", "../../examples/opsward-remote.yaml", "--subject", "operator"); code == 0 {
+		t.Error("a malformed --subject was accepted")
+	}
+	if code, _, errOut := runCLI("rbac"); code != 2 || !strings.Contains(errOut, "rbac render") {
+		t.Errorf("rbac without an action: code %d, stderr %q", code, errOut)
+	}
+}
