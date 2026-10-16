@@ -278,6 +278,9 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		}
 	}
 	out, err := prep.Run(ctx, profile)
+	if errors.Is(err, core.ErrInvalidInput) {
+		return nil, finish(audit.StatusInvalid, err)
+	}
 	if err != nil {
 		return nil, finish(audit.StatusError, err)
 	}

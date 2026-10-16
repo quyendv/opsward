@@ -520,3 +520,17 @@ func TestUpdateIsRaceFree(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// A run that fails on the caller's input, such as a query outside its scope, is audited
+// as invalid, not as an error of the system.
+func TestInvokeRunRejectingInputIsInvalid(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskRead, runErr: fmt.Errorf("query: %w", core.InvalidInput("query selects outside the call's scope"))}
+	aud := &recordingAuditor{}
+	e := newEngine(t, ft, allowAll, aud)
+	if _, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs)); err == nil {
+		t.Fatal("no error")
+	}
+	if got := aud.last().Outcome.Status; got != audit.StatusInvalid {
+		t.Fatalf("status = %s, want invalid", got)
+	}
+}

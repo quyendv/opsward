@@ -2,6 +2,7 @@
 package core
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
@@ -64,6 +65,22 @@ type Principal struct {
 	// Empty in local mode, and then absent from the JSON, so older records hash the same.
 	Credential string `json:"credential,omitempty"`
 }
+
+// ErrInvalidInput matches errors caused by what the caller asked for, found while a call
+// runs: a query outside its scope, a syntax error in a query. They are audited as
+// invalid rather than as failures of the system.
+var ErrInvalidInput = errors.New("invalid input")
+
+type invalidInputError struct{ err error }
+
+func (e *invalidInputError) Error() string   { return e.err.Error() }
+func (e *invalidInputError) Unwrap() []error { return []error{e.err, ErrInvalidInput} }
+
+// InvalidInput returns an error with msg that matches ErrInvalidInput.
+func InvalidInput(msg string) error { return &invalidInputError{errors.New(msg)} }
+
+// AsInvalidInput marks err as caused by the caller's input.
+func AsInvalidInput(err error) error { return &invalidInputError{err} }
 
 // NormalizeSubject lowercases a subject that is an email address, so that policy and
 // group membership do not depend on the case an issuer or an operator wrote it in.

@@ -155,3 +155,11 @@ func TestValueLeavesOrdinaryLineArraysAlone(t *testing.T) {
 		}
 	}
 }
+
+// Terminal colour codes carry nothing for an agent and cost tokens.
+func TestStringDropsTerminalEscapes(t *testing.T) {
+	in := "\x1b[38;5;6mmongodb \x1b[38;5;5m11:45:17.04 \x1b[0m\x1b[38;5;2mINFO \x1b[0m ==> \x1b[1mWelcome\x1b[0m"
+	if got := String(in); got != "mongodb 11:45:17.04 INFO  ==> Welcome" {
+		t.Fatalf("String = %q", got)
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/quyendv/opsward/internal/core"
+
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
 )
@@ -184,5 +186,18 @@ func TestLogQLCommentsCannotHideASelector(t *testing.T) {
 	// A brace inside a comment is harmless and accepted.
 	if _, err := LogQL("{app=\"x\"} # a comment with { braces }\n|= \"y\"", scope); err != nil {
 		t.Fatalf("brace in a comment: %v", err)
+	}
+}
+
+func TestOutOfScopeIsInvalidInput(t *testing.T) {
+	_, err := PromQL(`up{namespace="other"}`, Scope{NamespaceLabel: "namespace", Namespace: "shop"})
+	if !errors.Is(err, core.ErrInvalidInput) {
+		t.Fatalf("err = %v, want it to be invalid input", err)
+	}
+	if _, err := LogQL(`rate({a="b"}[5m])`, Scope{NamespaceLabel: "namespace", Namespace: "shop"}); !errors.Is(err, core.ErrInvalidInput) {
+		t.Fatalf("metric LogQL: %v", err)
+	}
+	if _, err := PromQL(`up{`, Scope{NamespaceLabel: "namespace", Namespace: "shop"}); !errors.Is(err, core.ErrInvalidInput) {
+		t.Fatalf("syntax error: %v", err)
 	}
 }
