@@ -19,6 +19,7 @@ type changeRoutes struct {
 	forges []tool.ForgeRoute
 	apps   func(ctx context.Context, namespace, name string) (*source.Application, error)
 	appNS  string
+	appNSs []string
 	labels bool
 	cur    atomic.Pointer[tool.Changes]
 }
@@ -41,7 +42,7 @@ func openChanges(cfg *config.Config, k8s *kubernetes.Source) (*changeRoutes, err
 	}
 	if d := cfg.Providers.Delivery; d != nil {
 		cluster, profile := d.Cluster, d.Profile
-		c.appNS, c.labels = d.Namespace, d.LabelTracking
+		c.appNS, c.appNSs, c.labels = d.Namespace, d.ApplicationNamespaces, d.LabelTracking
 		// The reader is looked up per call, so a reloaded profile is used once it changes.
 		c.apps = func(ctx context.Context, namespace, name string) (*source.Application, error) {
 			read, err := k8s.Applications(cluster, profile)
@@ -62,7 +63,7 @@ func (c *changeRoutes) update(cfg *config.Config) {
 		Strategies: map[string]string{}, Forges: c.forges,
 		Resolve: source.Options{
 			AnnotationKeys: cfg.SourceResolution.Annotations, Applications: c.apps, ApplicationNamespace: c.appNS,
-			LabelTracking: c.labels,
+			LabelTracking: c.labels, ApplicationNamespaces: c.appNSs,
 		},
 	}
 	for _, e := range cfg.Environments {

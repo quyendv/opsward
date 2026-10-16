@@ -48,6 +48,7 @@ providers:
     cluster: cluster-a        # where the Application objects live
     namespace: argocd         # default
     labelTracking: false      # default: the tracking-id annotation
+    applicationNamespaces: [] # other namespaces Applications may live in
   forges:
     - name: github
       type: github            # github, gitea (also Forgejo) or gitlab

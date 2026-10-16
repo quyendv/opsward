@@ -187,6 +187,7 @@ rules:
   - horizontalpodautoscalers
   verbs:
   - list
+# opsward:ops-b is bound cluster-wide by the namespace patterns of environment production (*).
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -233,6 +234,7 @@ rules:
   - replicasets
   verbs:
   - list
+# opsward:reader is bound cluster-wide by the namespace patterns of environment production (*).
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -19,6 +19,9 @@ type Delivery struct {
 	Cluster   string `yaml:"cluster"`
 	Namespace string `yaml:"namespace"` // default argocd
 	Profile   string `yaml:"profile"`   // default reader
+	// ApplicationNamespaces are other namespaces Applications may live in (Argo CD's
+	// applications in any namespace); the delivery profile needs get there too.
+	ApplicationNamespaces []string `yaml:"applicationNamespaces"`
 	// LabelTracking: Argo CD tracks resources by the app.kubernetes.io/instance label
 	// rather than its tracking-id annotation.
 	LabelTracking bool `yaml:"labelTracking"`
@@ -71,6 +74,11 @@ func (c *Config) validateChange(envs map[string]bool, fail func(string, ...any))
 	if d := c.Providers.Delivery; d != nil {
 		if d.Type != "argocd" {
 			fail("providers.delivery.type: %q is not available; use argocd", d.Type)
+		}
+		for _, ns := range d.ApplicationNamespaces {
+			if !dnsLabel.MatchString(ns) || ns == d.Namespace {
+				fail("providers.delivery.applicationNamespaces: %q is not a namespace besides %s", ns, d.Namespace)
+			}
 		}
 		if cl, ok := c.Providers.Kubernetes.Clusters[d.Cluster]; !ok {
 			fail("providers.delivery: unknown cluster %q", d.Cluster)

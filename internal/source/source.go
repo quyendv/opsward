@@ -135,6 +135,9 @@ type Options struct {
 	// Applications reads an Argo CD Application; nil when there is no Argo CD.
 	Applications         func(ctx context.Context, namespace, name string) (*Application, error)
 	ApplicationNamespace string
+	// ApplicationNamespaces are the other namespaces Applications may be read from,
+	// named <namespace>_<name>; any other is refused.
+	ApplicationNamespaces []string
 	// LabelTracking: Argo CD tracks resources by the app.kubernetes.io/instance label,
 	// which is read only then: charts set it too.
 	LabelTracking bool
@@ -146,6 +149,10 @@ func Resolve(ctx context.Context, w Workload, opt Options) (*Source, error) {
 		ns, name, byAnnotation, err := application(w, opt.ApplicationNamespace, opt.LabelTracking)
 		if err != nil {
 			return nil, err
+		}
+		if name != "" && ns != opt.ApplicationNamespace && !slices.Contains(opt.ApplicationNamespaces, ns) {
+			return nil, fmt.Errorf("%w: Argo CD Application %s/%s is in a namespace providers.delivery.applicationNamespaces does not list",
+				ErrUnresolved, ns, name)
 		}
 		if name != "" {
 			app, err := opt.Applications(ctx, ns, name)

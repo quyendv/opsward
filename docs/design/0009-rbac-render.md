@@ -26,18 +26,22 @@ against a fake cluster and may only make requests its rules allow.
 
 ## Which profile needs what
 
-For each binding that allows or approves (deny bindings grant nothing), every tool in its
+For each binding that allows or approves, every tool in its
 role runs through the binding's profile, or through `reader` for read tools and `operator`
 for the others, in each environment the binding's scope selects. A tool whose calls may
 run at a lower risk declares it (`engine.Tool.Risks`: `propose_change` is a read under
 `suggest`), the engine lowers a call only to a declared risk, and each declared risk is
-counted here. Besides that:
+counted here. A deny binding that covers every caller in a whole environment (no
+subjects, condition or narrower scope) takes its tools out there; other denials leave
+calls they do not cover allowed, so they change nothing. Besides that:
 
-- the `reader` profile reads every targeted workload before authorization, to match
-  labels, so it gets `workloads.get` wherever a workload tool is reachable;
+- the `reader` profile reads every targeted workload before authorization when a binding
+  looks at labels (apps or a labels condition), so it then gets `workloads.get` wherever
+  a workload tool is reachable;
 - the delivery profile (0008) gets `delivery.applications.get` in the Argo CD namespace
-  of the delivery cluster. Applications in other namespaces (`<namespace>_<name>`
-  tracking ids) need the same permission there, which is not rendered.
+  of the delivery cluster, and in each namespace `applicationNamespaces` lists. Those
+  are the only other namespaces an Application is read from (`<namespace>_<name>`
+  tracking ids), as with Argo CD's own setting for applications in any namespace.
 
 `list_workloads` without a namespace lists an environment's literal namespaces one by one,
 and only lists the cluster's namespaces to match patterns; it declares
@@ -52,9 +56,9 @@ merge them into one object.
 
 | Object | Holds | Bound |
 |---|---|---|
-| ClusterRole `opsward:<profile>` | namespaced rules | by a RoleBinding in each namespace when every environment it serves on the cluster lists literal namespaces; otherwise by a ClusterRoleBinding |
+| ClusterRole `opsward:<profile>` | namespaced rules | by a RoleBinding in each namespace when every environment it serves on the cluster lists literal namespaces; otherwise by a ClusterRoleBinding, with a comment naming the environments that widen it |
 | ClusterRole `opsward:<profile>:cluster` | cluster-scoped rules (`namespaces.list`) | ClusterRoleBinding |
-| Role `opsward:<profile>:delivery` | `delivery.applications.get` | RoleBinding in the Argo CD namespace |
+| Role `opsward:<profile>:delivery` | `delivery.applications.get` | RoleBinding in the Argo CD namespace and each `applicationNamespaces` entry |
 
 The subject is the ServiceAccount `opsward-<profile>` in the namespace given by
 `--service-account-namespace` (default `opsward`), or what `--subject

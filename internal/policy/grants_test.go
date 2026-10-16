@@ -2,6 +2,7 @@ package policy
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/quyendv/opsward/internal/core"
@@ -65,5 +66,47 @@ func TestGrantsCountLowerRisks(t *testing.T) {
 	}
 	if got := p.Grants(cat); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Grants = %v\nwant %v", got, want)
+	}
+}
+
+// A binding without a profile runs a call at each risk the tool can have through that
+// risk's default profile; every one must exist.
+func TestCompileChecksTheDefaultProfileOfLowerRisks(t *testing.T) {
+	cat := Catalog{
+		Tools:        map[string]ToolInfo{"propose_change": {Risk: core.RiskWrite, Risks: []core.Risk{core.RiskRead}}},
+		Environments: map[string][]string{"staging": {"operator"}},
+	}
+	_, _, err := Compile(Config{
+		Roles:    map[string]Role{"proposer": {Tools: []string{"propose_change"}}},
+		Bindings: []Binding{{Name: "propose", Role: "proposer"}},
+	}, cat, nil)
+	if err == nil || !strings.Contains(err.Error(), `needs profile "reader"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A denial that applies to every caller, everywhere in an environment, takes its tools
+// out of what is granted there; a narrower one does not, since it leaves calls it does
+// not cover allowed.
+func TestGrantsSubtractWholeDenials(t *testing.T) {
+	p := mustCompile(t, Config{
+		Roles: map[string]Role{
+			"viewer":    {Risk: []core.Risk{core.RiskRead}},
+			"restarter": {Tools: []string{"restart_workload"}},
+		},
+		Bindings: []Binding{
+			{Name: "view", Role: "viewer"},
+			{Name: "restart", Role: "restarter"},
+			{Name: "no-restart-in-production", Role: "restarter", Effect: core.EffectDeny, Scope: ScopeSelector{Environments: []string{"production"}}},
+			{Name: "no-view-in-kube-system", Role: "viewer", Effect: core.EffectDeny, Scope: ScopeSelector{Namespaces: []string{"kube-system"}}},
+			{Name: "no-view-for-bob", Role: "viewer", Effect: core.EffectDeny, Subjects: Subjects{Users: []string{"bob"}}},
+		},
+	})
+	got := p.Grants(testCatalog)
+	if _, ok := got["production"]["operator"]; ok {
+		t.Errorf("production still grants operator: %v", got["production"])
+	}
+	if !reflect.DeepEqual(got["staging"]["operator"], []string{"restart_workload"}) || !reflect.DeepEqual(got["production"]["reader"], []string{"get_workload_status"}) {
+		t.Errorf("Grants = %v", got)
 	}
 }

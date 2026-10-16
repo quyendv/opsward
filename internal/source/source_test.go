@@ -51,7 +51,7 @@ func TestArgoCDMultiSourceValuesRef(t *testing.T) {
 		"team-a/api": `{"spec":{"sources":[
 			{"repoURL":"https://charts.example.com","chart":"generic-app","targetRevision":"1.12.0","helm":{"valueFiles":["$values/workloads/api/values.yaml"]}},
 			{"repoURL":"git@github.com:example-org/gitops.git","targetRevision":"HEAD","ref":"values"}],"destination":{"namespace":"shop"}}}`,
-	}), LabelTracking: true})
+	}), LabelTracking: true, ApplicationNamespaces: []string{"team-a"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,5 +233,22 @@ func TestInstanceLabelNeedsLabelTracking(t *testing.T) {
 	})
 	if err != nil || got.Resolver != "static" || called {
 		t.Fatalf("got %+v, %v, application read %v", got, err, called)
+	}
+}
+
+// Applications outside the default namespace (<namespace>_<name>) are read only from the
+// namespaces the configuration lists, as Argo CD's own setting does.
+func TestApplicationNamespacesAreListed(t *testing.T) {
+	w := api
+	w.Annotations = map[string]string{"argocd.argoproj.io/tracking-id": "team-a_api:apps/Deployment:shop/api"}
+	read := apps(map[string]string{
+		"team-a/api": `{"spec":{"source":{"repoURL":"https://github.com/example-org/gitops.git","path":"apps/api"},"destination":{"namespace":"shop"}}}`,
+	})
+	if _, err := Resolve(context.Background(), w, Options{ApplicationNamespace: "argocd", Applications: read}); !errors.Is(err, ErrUnresolved) || !strings.Contains(err.Error(), "team-a") {
+		t.Fatalf("an unlisted namespace: err = %v", err)
+	}
+	got, err := Resolve(context.Background(), w, Options{ApplicationNamespace: "argocd", ApplicationNamespaces: []string{"team-a"}, Applications: read})
+	if err != nil || got.Application != "team-a/api" {
+		t.Fatalf("a listed namespace: %+v, %v", got, err)
 	}
 }
