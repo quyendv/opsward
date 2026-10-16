@@ -387,8 +387,9 @@ in force. See [0002](0002-identity-policy-storage.md#loading-the-file).
 |---|---|
 | v0.1 | local identity, MCP stdio, read tools for Workloads, Metrics, Logs; `suggest`; knowledge packs; roles and bindings with CEL from the file; SQLite store; audit to store and stream |
 | v0.2 | OIDC, API tokens, internal groups, remote MCP over HTTP, multiple principals, Postgres |
-| v0.3 | `pull-request` and `direct` strategies, narrow write verbs, approvals, snapshots, web console (audit, approvals, policy), `opsward rbac render` |
-| v0.4 | Delivery provider depth, alert webhook, optional agent mode |
+| v0.3 | discovery tools authorized per item, metrics summaries, cluster-wide queries, per-cluster backends ([0006](0006-discovery-and-summaries.md)) |
+| v0.4 | `pull-request` and `direct` strategies, narrow write verbs, approvals, snapshots, web console (audit, approvals, policy), `opsward rbac render` |
+| v0.5 | Delivery provider depth, alert webhook, optional agent mode |
 | later | impersonation and token passthrough credential sources |
 
 ## Alternatives considered
