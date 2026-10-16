@@ -588,3 +588,17 @@ func TestPodNamePattern(t *testing.T) {
 		}
 	}
 }
+
+// Logs of the instance before a restart say so: they can be days old.
+func TestWorkloadLogsMarkPreviousInstance(t *testing.T) {
+	c := fake.NewClientset(deployment(), twoContainerPod("api-a"))
+	ref := capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"}
+	got, err := NewWorkloads(c).WorkloadLogs(context.Background(), ref, capability.LogOptions{Container: "app", Previous: true, TailLines: 10, MaxPods: 1})
+	if err != nil || len(got.Logs) != 1 || !got.Logs[0].Previous {
+		t.Fatalf("logs = %+v, %v", got, err)
+	}
+	cur, _ := NewWorkloads(c).WorkloadLogs(context.Background(), ref, capability.LogOptions{Container: "app", TailLines: 10, MaxPods: 1})
+	if cur.Logs[0].Previous {
+		t.Fatal("current logs marked previous")
+	}
+}

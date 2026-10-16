@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/quyendv/opsward/internal/capability"
 )
@@ -114,5 +115,37 @@ func TestDiagnoseBoundsMetricsAndKeepsEveryLogError(t *testing.T) {
 	}
 	if d.Unavailable["logs.api-bad"] == "" || d.Unavailable["logs.api-bad2"] == "" {
 		t.Fatalf("log errors per pod: %v", d.Unavailable)
+	}
+}
+
+// A pod that restarted long ago and is healthy now is not failing: its old crash logs
+// would read as current.
+func TestDiagnoseSkipsOldRestarts(t *testing.T) {
+	old := &capability.Workload{Kind: "Deployment", Name: "api", Pods: []capability.Pod{{
+		Name: "api-a", Phase: "Running", Ready: true, Restarts: 5,
+		LastTerminated: &capability.Termination{Container: "app", Reason: "Error", ExitCode: 100, FinishedAt: time.Now().Add(-35 * 24 * time.Hour)},
+	}}}
+	ws := &fakeSource{workload: old, logs: &capability.WorkloadLogs{}}
+	tl, _ := DiagnoseWorkload(ws, nil)
+	if _, _, err := runTool(t, tl, diagnoseArgs); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range ws.calls {
+		if c == "logs" {
+			t.Fatal("read logs of a crash 35 days ago on a healthy pod")
+		}
+	}
+
+	recent := &capability.Workload{Kind: "Deployment", Name: "api", Pods: []capability.Pod{{
+		Name: "api-a", Phase: "Running", Ready: true, Restarts: 1,
+		LastTerminated: &capability.Termination{Container: "app", Reason: "OOMKilled", ExitCode: 137, FinishedAt: time.Now().Add(-10 * time.Minute)},
+	}}}
+	ws = &fakeSource{workload: recent, logs: &capability.WorkloadLogs{}}
+	tl, _ = DiagnoseWorkload(ws, nil)
+	if _, _, err := runTool(t, tl, diagnoseArgs); err != nil {
+		t.Fatal(err)
+	}
+	if o := ws.logOptions; o.Pod != "api-a" || !o.Previous {
+		t.Fatalf("a crash 10 minutes ago: log options %+v", o)
 	}
 }

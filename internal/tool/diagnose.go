@@ -17,6 +17,9 @@ const (
 	diagnoseTail     = 50
 	diagnoseLogBytes = 64 << 10
 	diagnoseLogTotal = 256 << 10
+	// diagnoseRecent is how long ago a container may have crashed for a pod that is
+	// healthy now to count as failing: older crash logs would read as current.
+	diagnoseRecent = time.Hour
 	// diagnoseMetricsBudget bounds the whole metrics part, whatever each request's timeout.
 	diagnoseMetricsBudget = 20 * time.Second
 )
@@ -40,7 +43,7 @@ func DiagnoseWorkload(ws capability.WorkloadSource, ms capability.MetricsSource)
 	return engine.Tool{
 		Name: "diagnose_workload",
 		Description: "First look at an unhealthy workload in one call: status, recent events, the last lines of the " +
-			"failing containers (the crashed instance when a container restarted) and, when metrics are available, " +
+			"failing containers (the crashed instance, marked previous, when a container restarted within the hour) and, when metrics are available, " +
 			"CPU and memory over the last hour. Parts that cannot be read are listed under unavailable.",
 		Risk:        core.RiskRead,
 		InputSchema: in.schema,
@@ -57,6 +60,16 @@ func DiagnoseWorkload(ws capability.WorkloadSource, ms capability.MetricsSource)
 	}, nil
 }
 
+// isFailing reports whether a pod is failing now or had a container crash recently. A
+// termination without a time counts as recent.
+func isFailing(p capability.Pod, now time.Time) bool {
+	if !p.Ready || p.Waiting != "" {
+		return true
+	}
+	t := p.LastTerminated
+	return t != nil && (t.FinishedAt.IsZero() || now.Sub(t.FinishedAt) < diagnoseRecent)
+}
+
 func diagnose(ctx context.Context, w capability.Workloads, ms capability.MetricsSource, env string, ref capability.WorkloadRef) (*Diagnosis, error) {
 	status, err := w.GetWorkload(ctx, ref)
 	if err != nil {
@@ -70,7 +83,7 @@ func diagnose(ctx context.Context, w capability.Workloads, ms capability.Metrics
 
 	failing := 0
 	for _, p := range status.Pods {
-		if p.Ready && p.Waiting == "" && p.Restarts == 0 {
+		if !isFailing(p, time.Now()) {
 			continue
 		}
 		if failing++; failing > diagnosePods {
