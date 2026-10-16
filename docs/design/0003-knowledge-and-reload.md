@@ -108,7 +108,8 @@ default, at most 200; the namespace's events are listed in pages.
 | `previous` | false: the running container; true: the one before the last restart | |
 
 Pods are read in name order, at most 10, and the response says how many were left out. Each
-container's output is capped at 256 KiB. A container that cannot be read, such as a `previous`
+container's output is capped at 16 KiB and a call's at 32 KiB, the newest lines kept, so that
+a result fits what an agent reads at once ([0006](0006-discovery-and-summaries.md)). A container that cannot be read, such as a `previous`
 request for a container that never restarted, gets an error entry; the other containers are
 still returned.
 

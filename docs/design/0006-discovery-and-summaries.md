@@ -60,10 +60,13 @@ A series is returned with `min`, `max`, `avg`, `last` and `samples` (the number 
 it had). Points are returned only when the call asks for them with `points: true`, and
 then as before, at most 60 per series. `diagnose_workload` returns summaries only.
 
-Log results are bounded the same way: a line longer than 2,000 characters is cut, with the
-number of characters left out, and a result past 48 KiB leaves out lines oldest first and
-counts them in `linesOmitted`. Structured logs run to kilobytes per line, and a result an
-agent cannot read whole is a result it cannot use.
+Log results are bounded the same way. A line longer than 2,000 characters is cut, with the
+number of characters left out. A `query_logs` result past 32 KiB, counted as JSON-encoded
+since that is what the agent receives, leaves out lines oldest first and counts them in
+`linesOmitted`; container logs are capped at 16 KiB per container and 32 KiB per call.
+Clients cap a tool result at some 25,000 tokens, structured logs run to kilobytes per line,
+and escaped JSON is dense in tokens: a result an agent cannot read whole is one it cannot
+use.
 
 ## Cluster-wide queries
 

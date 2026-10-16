@@ -19,8 +19,9 @@ All notable changes to this project are documented here. The format follows
 
 - Metrics results are summaries by default: each series has `min`, `max`, `avg`, `last`
   and `samples`; points are returned with `points: true`.
-- Log lines longer than 2,000 characters are cut, and `query_logs` results past 48 KiB
-  leave out the oldest lines, counted in `linesOmitted`.
+- Log lines longer than 2,000 characters are cut; `query_logs` results past 32 KiB
+  (JSON-encoded) leave out the oldest lines, counted in `linesOmitted`; container logs are
+  capped at 16 KiB per container and 32 KiB per call (were 256 KiB and 1 MiB).
 
 ## [0.2.0] - 2026-10-16
 

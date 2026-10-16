@@ -269,9 +269,8 @@ func TestQueryLogsBoundsLineLengthAndResultSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := out.(*capability.LogsResult)
-	b, _ := json.Marshal(r)
-	if len(b) > maxLogResultBytes+4096 {
-		t.Fatalf("result is %d bytes", len(b))
+	if b, _ := json.Marshal(r); len(b) > maxLogResultBytes+4096 {
+		t.Fatalf("result is %d bytes encoded", len(b))
 	}
 	got := r.Streams[0].Lines
 	last := got[len(got)-1]
@@ -280,5 +279,23 @@ func TestQueryLogsBoundsLineLengthAndResultSize(t *testing.T) {
 	}
 	if r.LinesOmitted == 0 || strings.HasPrefix(got[0], "line-000") {
 		t.Fatalf("omitted %d; first kept line %.20s: the oldest should go first", r.LinesOmitted, got[0])
+	}
+}
+
+// The budget is what the agent receives: JSON-encoded, where every quote of a structured
+// log line doubles.
+func TestQueryLogsBudgetCountsEncodedSize(t *testing.T) {
+	var lines []string
+	for i := range 400 {
+		lines = append(lines, fmt.Sprintf(`{"i":%d,"level":"ERROR","msg":"%s"}`, i, strings.Repeat(`\"q\" `, 60)))
+	}
+	l := &fakeLogs{result: &capability.LogsResult{Streams: []capability.LogStream{{Labels: map[string]string{"pod": "a"}, Lines: lines}}}}
+	tl, _ := QueryLogs(l)
+	_, out, err := runTool(t, tl, `{"environment":"production","namespace":"shop","query":"{a=\"b\"}","limit":1000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(out); len(b) > maxLogResultBytes+4096 {
+		t.Fatalf("encoded result is %d bytes", len(b))
 	}
 }

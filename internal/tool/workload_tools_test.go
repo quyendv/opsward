@@ -119,7 +119,7 @@ func TestWorkloadLogsTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := src.logOptions; got != (capability.LogOptions{TailLines: 100, MaxPods: 10, MaxBytes: 256 << 10, TotalBytes: 1 << 20}) {
+	if got := src.logOptions; got != (capability.LogOptions{TailLines: 100, MaxPods: 10, MaxBytes: 16 << 10, TotalBytes: 32 << 10}) {
 		t.Fatalf("defaults = %+v", got)
 	}
 	if b, _ := json.Marshal(out); !strings.Contains(string(b), "boom") {

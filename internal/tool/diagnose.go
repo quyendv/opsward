@@ -15,8 +15,8 @@ const (
 	diagnoseEvents   = 20
 	diagnosePods     = 3
 	diagnoseTail     = 50
-	diagnoseLogBytes = 64 << 10
-	diagnoseLogTotal = 256 << 10
+	diagnoseLogBytes = 8 << 10
+	diagnoseLogTotal = 24 << 10
 	// diagnoseRecent is how long ago a container may have crashed for a pod that is
 	// healthy now to count as failing: older crash logs would read as current.
 	diagnoseRecent = time.Hour

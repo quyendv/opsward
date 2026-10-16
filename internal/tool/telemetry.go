@@ -26,9 +26,11 @@ const (
 	defaultLogLines   = 100
 	maxLogLines       = 1000
 	// maxLogLineChars cuts single lines, such as structured JSON, that would crowd out
-	// the rest; maxLogResultBytes bounds a log result to what an agent can read at once.
+	// the rest; maxLogResultBytes bounds a log result, as JSON-encoded, to what an agent
+	// can read at once: clients cap a tool result at some 25,000 tokens, and escaped JSON
+	// is dense in tokens.
 	maxLogLineChars   = 2000
-	maxLogResultBytes = 48 << 10
+	maxLogResultBytes = 32 << 10
 )
 
 // cutLine shortens a line beyond maxLogLineChars, on a character boundary, and says by
@@ -42,6 +44,15 @@ func cutLine(s string) string {
 		end--
 	}
 	return fmt.Sprintf("%s … [%d more characters]", s[:end], len(s)-end)
+}
+
+// encodedLen is the length of s as a JSON string, the form the agent receives.
+func encodedLen(s string) int {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return len(s)
+	}
+	return len(b)
 }
 
 // cutContainerLines cuts long lines of container logs, which are already bounded per
@@ -66,11 +77,12 @@ func boundLogs(r *capability.LogsResult) {
 		keep := len(lines)
 		for j := len(lines) - 1; j >= 0; j-- {
 			lines[j] = cutLine(lines[j])
-			if budget < len(lines[j]) {
+			cost := encodedLen(lines[j])
+			if budget < cost {
 				keep = len(lines) - 1 - j
 				break
 			}
-			budget -= len(lines[j])
+			budget -= cost
 		}
 		r.LinesOmitted += len(lines) - keep
 		r.Streams[i].Lines = lines[len(lines)-keep:]
