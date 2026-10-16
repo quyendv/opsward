@@ -22,6 +22,9 @@ providers:
           # workloads, pods and events, list on namespaces, get on pods/log; no
           # secrets, pods/exec or pods/portforward.
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
+        # A cluster can have its own backends, used instead of the shared ones below:
+        # metrics: { type: prometheus, url: https://prometheus.cluster-a.example.com }
+        # logs: { type: loki, url: https://loki.cluster-a.example.com }
 
   # Optional query backends; their tools appear only when configured. Changing these
   # sections needs a restart.

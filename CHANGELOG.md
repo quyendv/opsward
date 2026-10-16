@@ -12,6 +12,9 @@ All notable changes to this project are documented here. The format follows
   shows only what the caller may work on. The reader profile needs `list` on namespaces.
   `list_workloads` without a namespace spans the environment, and `unhealthy` keeps only
   workloads with fewer ready replicas than desired.
+- Metrics and logs backends per cluster (`providers.kubernetes.clusters.<name>.metrics`
+  and `.logs`), used instead of the shared `providers.metrics` and `providers.logs`; a
+  cluster label is needed only where one backend serves several clusters.
 - `query_metrics` and `query_logs` without a namespace query the whole cluster, where the
   environment spans every namespace and a binding not restricted to namespaces allows it.
 
