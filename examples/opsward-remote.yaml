@@ -84,9 +84,17 @@ approvals:
 # policy must allow; see the alerts-investigate binding.
 alerts:
   principal: alertmanager
+  # agent: true                  # also analyze with agent mode; needs the agent section
   environmentLabel: cluster      # matched against environments' clusterLabelValue
   notify:
     - { type: slack, webhookURL: { file: /etc/opsward/slack-webhook-url } }
+
+# Agent mode (docs/design/0013): a model looks further with the read tools. Sends redacted
+# operational data to the provider.
+# agent:
+#   provider: anthropic
+#   model: claude-sonnet-5-5
+#   apiKey: { file: /etc/opsward/anthropic-key }
 
 policy:
   roles:

@@ -17,6 +17,8 @@ type Alerts struct {
 	WorkloadLabels   []AlertWorkloadLabel `yaml:"workloadLabels"` // default deployment, statefulset, daemonset
 	Dedupe           *Duration            `yaml:"dedupe"`         // default 30m
 	Notify           []AlertNotify        `yaml:"notify"`
+	// Agent analyzes investigated alerts with agent mode (docs/design/0013).
+	Agent bool `yaml:"agent"`
 }
 
 // AlertWorkloadLabel names the alert label carrying a workload of Kind.

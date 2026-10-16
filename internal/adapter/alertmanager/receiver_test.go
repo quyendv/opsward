@@ -312,3 +312,29 @@ func TestReceiverAuditsRefusals(t *testing.T) {
 		t.Fatalf("refusals = %+v", got)
 	}
 }
+
+// With an analyzer, a diagnosed alert also carries its analysis.
+func TestReceiverAddsTheAnalysis(t *testing.T) {
+	notes := make(chanNotifier, 4)
+	var analyzed []string
+	r := New(Options{
+		Invoker: &fakeEngine{}, Notifiers: []notify.Notifier{notes}, Principal: "alertmanager", Workers: 1,
+		Mapping: func() (Mapping, []Environment) { return rules, envs },
+		Analyze: func(_ context.Context, p core.Principal, n notify.Notification) (string, string) {
+			analyzed = append(analyzed, p.Subject+" "+n.Workload.Name)
+			return "The api crashes on a bad password.", ""
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Run(ctx)
+	post(t, r, "alertmanager", webhook)
+	got := map[string]notify.Notification{}
+	for range 2 {
+		n := receive(t, notes)
+		got[n.Alert.Fingerprint] = n
+	}
+	if got["f1"].Analysis != "The api crashes on a bad password." || got["f2"].Analysis != "" || len(analyzed) != 1 || analyzed[0] != "alertmanager api" {
+		t.Fatalf("notifications %+v, analyzed %v", got, analyzed)
+	}
+}

@@ -46,6 +46,9 @@ type Options struct {
 	Timeout time.Duration
 	Now     func() time.Time
 	Logger  *slog.Logger
+	// Analyze, if set, analyzes a diagnosed alert further (agent mode,
+	// docs/design/0013), returning the analysis or why there is none.
+	Analyze func(ctx context.Context, p core.Principal, n notify.Notification) (analysis, note string)
 	// Refused, if set, records a delivery refused for its principal: a denial, which is
 	// audited like every other.
 	Refused func(ctx context.Context, p core.Principal, reason string)
@@ -259,6 +262,9 @@ func (r *Receiver) investigate(parent context.Context, j job) {
 			r.forget(a.key())
 		} else {
 			n.Diagnosis = res.Data
+			if r.opt.Analyze != nil {
+				n.Analysis, n.AnalysisNote = r.opt.Analyze(parent, j.p, n)
+			}
 		}
 	}
 	nctx, ncancel := context.WithTimeout(context.WithoutCancel(parent), notifyTimeout)

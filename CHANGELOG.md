@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Agent mode for alerts (`agent`, `alerts.agent: true`; off by default): after the
+  diagnosis, a model reads the alert and the diagnosis, calls Opsward's read tools through
+  the engine as the alerts principal (adapter `agent`, under policy and audit; tools that
+  can write are never offered), and its short analysis goes out with the notification.
+  Bounded by `maxSteps`, `timeout` and `maxPerHour`; results reach the model redacted and
+  cut to 16 KiB. The provider is Anthropic's Messages API, spoken over HTTP; turning it on
+  sends redacted operational data to it.
+
 ## [0.6.0] - 2026-10-16
 
 Running for a team: a Helm chart for the cluster Opsward serves, and alerts that arrive

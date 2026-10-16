@@ -141,3 +141,99 @@ alerts:
 		t.Fatalf("warned although a binding allows it: %v", warnings)
 	}
 }
+
+// fakeAnthropic answers the Messages API: first a tool call, then an answer.
+func fakeAnthropic(t *testing.T) (*httptest.Server, *[]map[string]any) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		seen = append(seen, req)
+		n := len(seen)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if n == 1 {
+			_, _ = w.Write([]byte(`{"content":[{"type":"tool_use","id":"t1","name":"get_workload_status","input":{"environment":"staging","namespace":"shop","kind":"Deployment","name":"api"}}],"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"No pods are running: the Deployment has no replicas ready."}],"stop_reason":"end_turn","usage":{"input_tokens":20,"output_tokens":9}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &seen
+}
+
+func TestAlertIsAnalyzedByTheAgent(t *testing.T) {
+	model, seen := fakeAnthropic(t)
+	got := make(chan notify.Notification, 4)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var n notify.Notification
+		_ = json.NewDecoder(r.Body).Decode(&n)
+		got <- n
+	}))
+	defer hook.Close()
+	dir := t.TempDir()
+	key := filepath.Join(dir, "key")
+	if err := os.WriteFile(key, []byte("k3y\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doc := strings.Replace(remoteDoc, "%DB%", filepath.Join(dir, "o.db"), 1) + `
+policy:
+  roles: { investigate: { tools: [diagnose_workload, get_workload_status] } }
+  bindings: [{ name: alerts, subjects: { users: [alertmanager] }, role: investigate }]
+agent:
+  provider: anthropic
+  model: claude-sonnet-5-5
+  url: ` + model.URL + `
+  apiKey: { file: ` + key + ` }
+alerts:
+  principal: alertmanager
+  agent: true
+  notify: [{ type: webhook, url: ` + hook.URL + ` }]
+`
+	path := filepath.Join(dir, "opsward.yaml")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := fake.NewClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop"},
+		Spec:       appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}},
+	})
+	stream := &lockedBuilder{}
+	a, err := Open(context.Background(), cfg, Options{
+		Stderr: stream, ConfigPath: path,
+		ClientFactory: func(kubernetes.Profile) (k8s.Interface, error) { return cluster, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Alerts.Run(ctx)
+	body := `{"version":"4","alerts":[{"status":"firing","fingerprint":"f1","labels":{"alertname":"KubeDeploymentReplicasMismatch","namespace":"shop","deployment":"api"}}]}`
+	a.Alerts.Handle(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/alerts/alertmanager", strings.NewReader(body)), core.Principal{Subject: "alertmanager"})
+	select {
+	case n := <-got:
+		if n.Analysis != "No pods are running: the Deployment has no replicas ready." {
+			t.Fatalf("notification = %+v", n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no notification")
+	}
+	// The model was told the alert and the diagnosis; only read tools were offered, and
+	// its call went through the engine as the alerts principal, adapter agent.
+	first, _ := json.Marshal((*seen)[0])
+	if !strings.Contains(string(first), "KubeDeploymentReplicasMismatch") || strings.Contains(string(first), `"name":"restart_workload"`) {
+		t.Fatalf("first request: %s", first)
+	}
+	if out := stream.String(); !strings.Contains(out, `"adapter":"agent"`) || !strings.Contains(out, `"tool":"get_workload_status"`) {
+		t.Fatalf("audit stream:\n%s", out)
+	}
+}

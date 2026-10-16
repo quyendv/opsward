@@ -30,7 +30,7 @@ func alertEnvs(cfg *config.Config) []alertmanager.Environment {
 }
 
 // openAlerts builds the alert receiver (docs/design/0012), or nil without alerts.
-func openAlerts(cfg *config.Config, inv alertmanager.Invoker, aud engine.Auditor, envs *alertEnvironments, log *slog.Logger) (*alertmanager.Receiver, error) {
+func openAlerts(cfg *config.Config, e *engine.Engine, aud engine.Auditor, envs *alertEnvironments, log *slog.Logger) (*alertmanager.Receiver, error) {
 	a := cfg.Alerts
 	if a == nil {
 		return nil, nil
@@ -57,7 +57,7 @@ func openAlerts(cfg *config.Config, inv alertmanager.Invoker, aud engine.Auditor
 		}
 	}
 	return alertmanager.New(alertmanager.Options{
-		Invoker: inv, Notifiers: notifiers, Principal: a.Principal, Dedupe: a.Dedupe.Std(), Logger: log,
+		Invoker: e, Notifiers: notifiers, Analyze: openAnalyzer(cfg, e, e.Tools(), log), Principal: a.Principal, Dedupe: a.Dedupe.Std(), Logger: log,
 		Refused: func(ctx context.Context, p core.Principal, reason string) {
 			rec := audit.Record{
 				Phase: audit.PhaseOutcome, Principal: p,
