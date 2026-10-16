@@ -122,7 +122,7 @@ others, a credential needs `bind` or `escalate` (or the permissions it grants), 
 whoever holds it grant itself anything. Opsward would become the most privileged identity in
 every cluster it reaches, contrary to invariant 8.
 
-Instead, `opsward rbac render` (v0.3) prints the ServiceAccounts, Roles and bindings that the
+Instead, `opsward rbac render` (v0.4) prints the ServiceAccounts, Roles and bindings that the
 configured profiles need, for the operator to apply the way they apply everything else.
 
 ## Policy
@@ -274,7 +274,7 @@ Policy, roles and internal groups come from one or both sources:
 | Source | Edited through | Version |
 |---|---|---|
 | `file` | the configuration file | v0.1 |
-| `database` | the API and web console | v0.3 |
+| `database` | the API and web console | v0.4 |
 
 Every object records its source. Objects from the file are read-only through the API and the
 console, the same model as provisioning in Grafana. A team that wants every permission change
@@ -329,7 +329,7 @@ What the store holds, by version:
 |---|---|
 | audit records | v0.1 |
 | API tokens (hashes), internal groups | v0.2 (file-defined groups are loaded, not stored) |
-| approvals, change snapshots, database-sourced policy | v0.3 |
+| approvals, change snapshots, database-sourced policy | v0.4 |
 
 Credentials are never stored; configuration references them by file or environment variable.
 

@@ -6,21 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-16
+
+What an agent needs to find its way: discovery tools that show each caller only what it may
+work on, results sized for an agent to read, and queries across a cluster where policy
+allows them.
+
 ### Added
 
 - `list_environments`, `list_namespaces` and `list_workloads`, authorized per item: each
   shows only what the caller may work on. A listing runs once per profile the caller's
-  bindings use, and keeps an item only when allowed through the profile it was read with;
-  the audit records how many items were read and kept.
-  The reader needs `list` on namespaces, and on Deployments, StatefulSets and DaemonSets
-  cluster-wide for environments that span every namespace.
-  `list_workloads` without a namespace spans the environment, and `unhealthy` keeps only
-  workloads with fewer ready replicas than desired.
+  bindings use and keeps an item only when allowed through the profile it was read with;
+  the audit records how many items were read and kept. `list_workloads` without a
+  namespace spans the environment, and `unhealthy` keeps only workloads with fewer ready
+  replicas than desired. The reader needs `list` on namespaces, and on Deployments,
+  StatefulSets and DaemonSets cluster-wide for environments that span every namespace.
 - Metrics and logs backends per cluster (`providers.kubernetes.clusters.<name>.metrics`
   and `.logs`), used instead of the shared `providers.metrics` and `providers.logs`; a
   cluster label is needed only where one backend serves several clusters.
 - `query_metrics` and `query_logs` without a namespace query the whole cluster, where the
-  environment spans every namespace and a binding not restricted to namespaces allows it.
+  environment spans every namespace and an allow covering every namespace applies; any
+  deny or approval in the environment, whatever it is scoped to, still applies.
 
 ### Changed
 
@@ -87,6 +93,7 @@ First release: a single-user, read-only gateway over MCP stdio.
   and cluster before they are sent.
 - `diagnose_workload`: status, events, failing containers' logs and resource use in one call.
 
-[Unreleased]: https://github.com/quyendv/opsward/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/quyendv/opsward/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/quyendv/opsward/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/quyendv/opsward/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/quyendv/opsward/releases/tag/v0.1.0
