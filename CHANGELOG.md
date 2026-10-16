@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-16
+
+A gateway a team can share: MCP over HTTP with API tokens or OIDC, internal groups, and a
+PostgreSQL store for more than one replica.
+
 ### Added
 
 - Remote mode (`identity.mode: remote`): MCP over Streamable HTTP at `/mcp`, stateless, with
@@ -13,12 +18,15 @@ All notable changes to this project are documented here. The format follows
 - API tokens: `opsward token create|list|revoke`; only a hash of each secret is stored, every
   token expires, and creating or revoking one is audited.
 - OIDC access tokens (`identity.oidc`): JWTs from any compliant issuer, bound to the MCP
-  resource URL as audience, with claim groups optionally prefixed; RFC 9728 protected
-  resource metadata so that MCP clients discover the issuer.
+  resource URL as audience, only access-token types accepted, claim groups prefixed
+  `oidc:` by default; RFC 9728 protected resource metadata so that MCP clients discover the
+  issuer.
 - Internal groups (`identity.groups`), applied on reload.
 - PostgreSQL store (`storage.type: postgres`, DSN by file or environment variable) for more
   than one replica: migrations under an advisory lock, one audit chain shared by replicas.
 - Audit records name the credential behind a call (`principal.credential`).
+- Subjects that are email addresses are compared without case in policy and groups.
+- `opw_` API tokens are redacted from tool output and caught by the secret scanner.
 
 ### Fixed
 
@@ -55,5 +63,6 @@ First release: a single-user, read-only gateway over MCP stdio.
   and cluster before they are sent.
 - `diagnose_workload`: status, events, failing containers' logs and resource use in one call.
 
-[Unreleased]: https://github.com/quyendv/opsward/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/quyendv/opsward/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/quyendv/opsward/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/quyendv/opsward/releases/tag/v0.1.0
