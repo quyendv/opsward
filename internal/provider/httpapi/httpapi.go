@@ -30,6 +30,8 @@ type Options struct {
 	BasicUsername     string
 	BasicPasswordFile string
 	CAFile            string
+	// Headers are sent with every request.
+	Headers map[string]string
 }
 
 // Client sends GET requests to one backend.
@@ -88,6 +90,9 @@ func (c *Client) Post(ctx context.Context, path string, form url.Values) ([]byte
 }
 
 func (c *Client) do(req *http.Request, path string) ([]byte, error) {
+	for k, v := range c.opt.Headers {
+		req.Header.Set(k, v)
+	}
 	if c.opt.Tenant != "" {
 		req.Header.Set("X-Scope-OrgID", c.opt.Tenant)
 	}

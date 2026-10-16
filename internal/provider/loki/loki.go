@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -37,6 +38,14 @@ var _ capability.LogsSource = (*Source)(nil)
 
 // NewSource builds the source; clusters maps each environment to its cluster label value.
 func NewSource(opt Options, clusters map[string]string) (*Source, error) {
+	// Loki 3 then returns per-line structured metadata (trace IDs, pod UIDs, file paths)
+	// beside each line instead of in the stream's labels, where each distinct value would
+	// make a stream of its own. Older versions ignore the header.
+	opt.HTTP.Headers = maps.Clone(opt.HTTP.Headers)
+	if opt.HTTP.Headers == nil {
+		opt.HTTP.Headers = map[string]string{}
+	}
+	opt.HTTP.Headers["X-Loki-Response-Encoding-Flags"] = "categorize-labels"
 	c, err := httpapi.New(opt.HTTP)
 	if err != nil {
 		return nil, fmt.Errorf("logs: %w", err)
@@ -105,7 +114,9 @@ func decode(body []byte) ([]capability.LogStream, error) {
 			ResultType string `json:"resultType"`
 			Result     []struct {
 				Stream map[string]string `json:"stream"`
-				Values [][2]string       `json:"values"` // [unix nanoseconds, line], newest first
+				// [unix nanoseconds, line, metadata], newest first; the metadata element
+				// is present with categorized labels and is not used.
+				Values [][]json.RawMessage `json:"values"`
 			} `json:"result"`
 		} `json:"data"`
 	}
@@ -126,12 +137,16 @@ func decode(body []byte) ([]capability.LogStream, error) {
 	for _, s := range r.Data.Result {
 		st := stream{LogStream: capability.LogStream{Labels: s.Stream, Lines: make([]string, 0, len(s.Values))}}
 		for _, v := range slices.Backward(s.Values) {
-			ns, err := strconv.ParseInt(v[0], 10, 64)
+			var ts, line string
+			if len(v) < 2 || json.Unmarshal(v[0], &ts) != nil || json.Unmarshal(v[1], &line) != nil {
+				continue
+			}
+			ns, err := strconv.ParseInt(ts, 10, 64)
 			if err != nil {
 				continue
 			}
 			st.newest = max(st.newest, ns)
-			st.Lines = append(st.Lines, time.Unix(0, ns).UTC().Format(time.RFC3339Nano)+" "+v[1])
+			st.Lines = append(st.Lines, time.Unix(0, ns).UTC().Format(time.RFC3339Nano)+" "+line)
 		}
 		streams = append(streams, st)
 	}
