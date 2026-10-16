@@ -7,5 +7,5 @@ secretName: opsward-postgres
 mountPath: /etc/opsward/secrets/cluster-b
 name: opsward-operator
 name: opsward:reader
-emptyDir: {}
+scheme: HTTPS
 ! kind: PersistentVolumeClaim

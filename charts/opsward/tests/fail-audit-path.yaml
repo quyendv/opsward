@@ -1,0 +1,4 @@
+# expect: config.audit.stream.path: "/var/log/opsward/audit.jsonl" is not under /var/lib/opsward
+config:
+  identity: { mode: remote }
+  audit: { stream: { type: file, path: /var/log/opsward/audit.jsonl } }

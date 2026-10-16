@@ -60,8 +60,8 @@ helm install opsward oci://ghcr.io/quyendv/charts/opsward -n opsward --create-na
 ```
 
 `values.yaml` holds the configuration under `config` and names the profiles to create in
-that cluster under `localProfiles`; `opsward rbac render --service-account-namespace opsward`
-prints the RBAC they need.
+that cluster under `localProfiles`; `opsward rbac render --cluster <it>
+--service-account-namespace opsward` prints the RBAC they need.
 
 Tools: `list_environments`, `list_namespaces`, `list_workloads` (each showing only what the
 caller may work on), `get_workload_status`, `list_workload_events`, `list_workload_logs`,

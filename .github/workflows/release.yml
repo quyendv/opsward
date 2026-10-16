@@ -74,6 +74,8 @@ jobs:
           push-to-registry: true
 
   chart:
+    # The chart names the image of the same version: publish it only once that exists.
+    needs: [image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -90,6 +92,6 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           helm package charts/opsward --version "$version" --app-version "$version" -d "$RUNNER_TEMP"
           helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GITHUB_TOKEN"
-          helm push "$RUNNER_TEMP/opsward-$version.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+          helm push "$RUNNER_TEMP/opsward-$version.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

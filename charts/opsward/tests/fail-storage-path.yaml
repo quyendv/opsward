@@ -1,0 +1,4 @@
+# expect: config.storage.path: "/data/opsward.db" is not under /var/lib/opsward
+config:
+  identity: { mode: remote }
+  storage: { path: /data/opsward.db }

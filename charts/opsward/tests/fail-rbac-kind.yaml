@@ -1,0 +1,9 @@
+# expect: rbac.rendered: Pod is not an RBAC object
+config:
+  identity: { mode: remote }
+localProfiles: [reader]
+rbac:
+  rendered: |
+    apiVersion: v1
+    kind: Pod
+    metadata: { name: x }

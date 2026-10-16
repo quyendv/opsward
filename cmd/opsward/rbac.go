@@ -21,6 +21,8 @@ flags:
                                    opsward-<profile> (default opsward)
   --subject PROFILE=KIND:NAME      bind PROFILE to a User, Group or ServiceAccount
                                    (NAME is NAMESPACE/NAME for a ServiceAccount); repeatable
+  --cluster NAME                   only the RBAC of this cluster, as the Helm chart running
+                                   in it installs (rbac.rendered)
 `
 
 func rbac(args []string, stdout io.Writer) error {
@@ -31,6 +33,7 @@ func rbac(args []string, stdout io.Writer) error {
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "")
 	saNamespace := fs.String("service-account-namespace", "opsward", "")
+	cluster := fs.String("cluster", "", "")
 	var subjects stringList
 	fs.Var(&subjects, "subject", "")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -39,7 +42,7 @@ func rbac(args []string, stdout io.Writer) error {
 	if *path == "" {
 		return usageError(rbacUsage)
 	}
-	opt := app.RBACOptions{ServiceAccountNamespace: *saNamespace, Subjects: map[string]rbacv1.Subject{}}
+	opt := app.RBACOptions{ServiceAccountNamespace: *saNamespace, Cluster: *cluster, Subjects: map[string]rbacv1.Subject{}}
 	for _, s := range subjects {
 		profile, subject, err := app.ParseRBACSubject(s)
 		if err != nil {

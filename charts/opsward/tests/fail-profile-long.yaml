@@ -1,0 +1,4 @@
+# expect: localProfiles: "a-profile-name-that-is-far-too-long-for-a-volume-name-x" is longer than 52 characters
+config:
+  identity: { mode: remote }
+localProfiles: [a-profile-name-that-is-far-too-long-for-a-volume-name-x]

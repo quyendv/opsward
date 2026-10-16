@@ -10,12 +10,16 @@ tokenFile: /etc/opsward/tokens/reader/token
 server: https://kubernetes.default.svc
 mountPath: /etc/opsward/kubeconfig/reader
 # The pod's own identity carries no token.
-automountServiceAccountToken: false
+automountServiceAccountToken: false # the pod's own identity carries no token
 # Hardening.
 runAsNonRoot: true
 readOnlyRootFilesystem: true
 - ALL
 type: RuntimeDefault
+# SQLite and Go write temporary files.
+mountPath: /tmp
+# A change to a section that needs a restart rolls the pod.
+checksum/restart:
 # SQLite on a volume, one replica, replaced rather than rolled.
 kind: PersistentVolumeClaim
 mountPath: /var/lib/opsward

@@ -1,0 +1,4 @@
+# expect: the chart serves port 8080
+config:
+  identity: { mode: remote }
+  server: { http: { address: "0.0.0.0:9090" } }
