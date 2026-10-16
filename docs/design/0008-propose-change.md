@@ -22,9 +22,12 @@ Opsward.
 
 Resolvers are tried in order; the first answer wins (0001):
 
-1. **Argo CD.** The workload's `argocd.argoproj.io/tracking-id` annotation (or, with label
-   tracking, its `app.kubernetes.io/instance` label) names an Application, read from the
-   cluster and namespace where Argo CD keeps them. Each of the Application's sources gives
+1. **Argo CD.** The workload's `argocd.argoproj.io/tracking-id` annotation (or, with
+   `labelTracking`, its `app.kubernetes.io/instance` label) names an Application, read from
+   the cluster and namespace where Argo CD keeps them. As Argo CD itself requires, the
+   tracking id must name the workload (`<app>:apps/<kind>:<namespace>/<name>`) and the
+   Application must deploy to the workload's namespace; otherwise the workload does not
+   resolve, so it cannot borrow another Application's source. Each of the Application's sources gives
    a repository, a revision and a path; a Helm source adds its value files, a source that
    is only a `ref` provides the repository other sources' `$ref/…` value files point into.
 2. **An annotation** on the workload, `opsward/source: <repository>//<path>[@<revision>]`,
@@ -32,7 +35,9 @@ Resolvers are tried in order; the first answer wins (0001):
 3. **A static map** in the configuration, by environment, namespace and workload.
 
 A source is a list of locations: a repository, a revision, and a path that is a file or a
-directory. Reading the Application needs `get` on `applications.argoproj.io` in that
+directory (`.` is the whole repository). Paths are cleaned and must stay inside the
+repository; revisions must be valid refs. Every revision is resolved once to a commit,
+which is what files are read, listed and proposed from. Reading the Application needs `get` on `applications.argoproj.io` in that
 namespace for the delivery profile of that cluster (`reader` unless `profile` names
 another). A workload is read with the call's own profile, like every other tool.
 
@@ -41,7 +46,8 @@ providers:
   delivery:
     type: argocd
     cluster: cluster-a        # where the Application objects live
-    namespace: argocd       # default
+    namespace: argocd         # default
+    labelTracking: false      # default: the tracking-id annotation
   forges:
     - name: github
       type: github            # github, gitea (also Forgejo) or gitlab
@@ -62,7 +68,9 @@ sourceResolution:
 ```
 
 A repository is reached only if a forge lists it: an Application pointing elsewhere
-resolves, but cannot be read or written.
+resolves, but cannot be read or written. Within listed repositories, whoever can annotate
+a workload chooses its source: an operator who does not trust workload annotations
+leaves `sourceResolution.annotations` empty and relies on Argo CD and the static map.
 
 ## Proposing
 
@@ -80,7 +88,8 @@ resolves, but cannot be read or written.
   revision, which keeps an edit precise and makes a stale one fail rather than apply
   elsewhere. At most 10 files and 1 MiB per file.
 - The diff is computed by Opsward, unified, and passes through redaction before it is
-  returned.
+  returned. In files and diffs shown to the caller, the values under `data` and
+  `stringData` of `kind: Secret` manifests are blanked; the proposal itself keeps them.
 
 | Strategy | Result | Risk |
 |---|---|---|

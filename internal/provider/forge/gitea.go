@@ -37,12 +37,14 @@ func (g *gitea) ReadFile(ctx context.Context, repo, ref, path string) ([]byte, b
 func (g *gitea) Propose(ctx context.Context, repo string, p capability.Proposal) (string, error) {
 	files := make([]map[string]string, 0, len(p.Files))
 	for path, content := range p.Files {
-		_, sha, found, err := g.file(ctx, repo, p.Base, path)
+		// The blob as it was read: Gitea refuses the change if the file has changed on
+		// the branch since.
+		_, sha, found, err := g.file(ctx, repo, p.BaseCommit, path)
 		if err != nil {
 			return "", err
 		}
 		if !found {
-			return "", errors.New(path + " does not exist on " + p.Base)
+			return "", errors.New(path + " does not exist at " + p.BaseCommit)
 		}
 		files = append(files, map[string]string{
 			"operation": "update", "path": path, "sha": sha, "content": base64.StdEncoding.EncodeToString(content),
@@ -95,4 +97,25 @@ func (g *gitea) ListFiles(ctx context.Context, repo, ref, dir string) ([]string,
 			return files, true, nil
 		}
 	}
+}
+
+func (g *gitea) ResolveRef(ctx context.Context, repo, ref string) (string, bool, error) {
+	r := "/api/v1/repos/" + repo
+	var b struct{ Commit struct{ ID string } }
+	err := g.do(ctx, http.MethodGet, r+"/branches/"+pathEscape(ref), nil, &b)
+	if err == nil {
+		return b.Commit.ID, true, nil
+	}
+	if !errors.Is(err, errNotFound) {
+		return "", false, err
+	}
+	var cs []struct{ SHA string }
+	q := "?sha=" + url.QueryEscape(ref) + "&limit=1&stat=false&verification=false&files=false"
+	if err := g.do(ctx, http.MethodGet, r+"/commits"+q, nil, &cs); err != nil {
+		return "", false, fmt.Errorf("revision %s: %w", ref, err)
+	}
+	if len(cs) == 0 {
+		return "", false, fmt.Errorf("revision %s: %w", ref, errNotFound)
+	}
+	return cs[0].SHA, false, nil
 }

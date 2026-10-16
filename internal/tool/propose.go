@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -87,13 +86,17 @@ func (c *Changes) resolve(ctx context.Context, w capability.Workloads, v workloa
 	}, c.Resolve)
 }
 
-// revision turns a location's revision into a ref the forge reads: HEAD and "" are
-// the default branch.
-func revision(ctx context.Context, f capability.Forge, repo, rev string) (string, error) {
-	if rev != "" && rev != "HEAD" {
-		return rev, nil
+// revision resolves a location's revision, where HEAD and "" are the default branch,
+// to its name and the commit it points to. Everything is read at that commit.
+func revision(ctx context.Context, f capability.Forge, repo, rev string) (name, commit string, branch bool, err error) {
+	name = rev
+	if rev == "" || rev == "HEAD" {
+		if name, err = f.DefaultBranch(ctx, repo); err != nil {
+			return "", "", false, err
+		}
 	}
-	return f.DefaultBranch(ctx, repo)
+	commit, branch, err = f.ResolveRef(ctx, repo, name)
+	return name, commit, branch, err
 }
 
 type resolveInput struct {
@@ -114,6 +117,7 @@ type SourceView struct {
 type LocationView struct {
 	Repo           string   `json:"repo"`
 	Revision       string   `json:"revision"`
+	Commit         string   `json:"commit,omitempty"`
 	Path           string   `json:"path,omitempty"`
 	Files          []string `json:"files,omitempty"`
 	FilesTruncated bool     `json:"filesTruncated,omitempty"`
@@ -170,10 +174,10 @@ func resolveSource(ctx context.Context, c *Changes, w capability.Workloads, v re
 		lv := LocationView{Repo: l.Repo, Revision: l.Revision, Path: l.Path}
 		f, repo, err := c.repository(l.Repo)
 		if err == nil {
-			lv.Revision, err = revision(ctx, f, repo, l.Revision)
+			lv.Revision, lv.Commit, _, err = revision(ctx, f, repo, l.Revision)
 		}
 		if err == nil && l.Path != "" {
-			lv.Files, lv.FilesTruncated, err = f.ListFiles(ctx, repo, lv.Revision, l.Path)
+			lv.Files, lv.FilesTruncated, err = f.ListFiles(ctx, repo, lv.Commit, l.Path)
 		}
 		if err != nil {
 			lv.Error = err.Error()
@@ -189,7 +193,7 @@ func resolveSource(ctx context.Context, c *Changes, w capability.Workloads, v re
 			lv.Files, lv.FilesTruncated = lv.Files[:maxListedShown], true
 		}
 		out.Locations = append(out.Locations, lv)
-		reachable = append(reachable, readable{loc: l, forge: f, repo: repo, ref: lv.Revision})
+		reachable = append(reachable, readable{loc: l, forge: f, repo: repo, ref: lv.Commit})
 	}
 	for _, p := range v.Files {
 		i := slices.IndexFunc(reachable, func(r readable) bool { return r.loc.Contains(p) })
@@ -208,6 +212,7 @@ func resolveSource(ctx context.Context, c *Changes, w capability.Workloads, v re
 		if len(b) > maxShownBytes {
 			fc.Content, fc.Truncated = strings.ToValidUTF8(string(b[:maxShownBytes]), ""), true
 		}
+		fc.Content = redact.Manifests(fc.Content)
 		out.Contents = append(out.Contents, fc)
 	}
 	return out, nil
@@ -273,9 +278,6 @@ func ProposeChange(src capability.WorkloadSource, cfg ChangeConfig) (engine.Tool
 	}, nil
 }
 
-// commitSHA is a full commit id: a pull request needs a branch to target.
-var commitSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
-
 // propose computes the change and, under pull-request with apply set, opens it.
 func propose(ctx context.Context, c *Changes, w capability.Workloads, v proposeInput, strategy string, apply bool) (*core.Change, error) {
 	s, err := c.resolve(ctx, w, v.workloadInput)
@@ -312,17 +314,17 @@ func propose(ctx context.Context, c *Changes, w capability.Workloads, v proposeI
 	if err != nil {
 		return nil, err
 	}
-	base, err := revision(ctx, f, repo, loc.Revision)
+	base, commit, branch, err := revision(ctx, f, repo, loc.Revision)
 	if err != nil {
 		return nil, err
 	}
-	if strategy == strategyPullRequest && commitSHA.MatchString(base) {
-		return nil, fmt.Errorf("%w: the source is pinned to commit %s; a pull request needs a branch", core.ErrInvalidInput, base)
+	if strategy == strategyPullRequest && !branch {
+		return nil, fmt.Errorf("%w: the source's revision %s is not a branch; a pull request needs one", core.ErrInvalidInput, base)
 	}
 	files := map[string][]byte{}
 	var diff strings.Builder
 	for _, p := range paths {
-		before, found, err := f.ReadFile(ctx, repo, base, p)
+		before, found, err := f.ReadFile(ctx, repo, commit, p)
 		if err != nil {
 			return nil, err
 		}
@@ -351,7 +353,7 @@ func propose(ctx context.Context, c *Changes, w capability.Workloads, v proposeI
 		}
 		files[p] = []byte(after)
 		d, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
-			A: difflib.SplitLines(string(before)), B: difflib.SplitLines(after),
+			A: lines(redact.Manifests(string(before))), B: lines(redact.Manifests(after)),
 			FromFile: "a/" + p, ToFile: "b/" + p, Context: 3,
 		})
 		if err != nil {
@@ -378,11 +380,23 @@ func propose(ctx context.Context, c *Changes, w capability.Workloads, v proposeI
 		body = v.Description + "\n\n---\n" + trailer
 	}
 	ch.URL, err = f.Propose(ctx, repo, capability.Proposal{
-		Base: base, Branch: "opsward/" + id, Title: v.Title, Body: body,
+		Base: base, BaseCommit: commit, Branch: "opsward/" + id, Title: v.Title, Body: body,
 		Message: v.Title + "\n\n" + body, Files: files,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return ch, nil
+}
+
+// lines splits s into lines that each end with a newline, which the unified format
+// needs. difflib.SplitLines adds a final empty line instead, which would show in every
+// diff that reaches the end of a file.
+func lines(s string) []string {
+	out := strings.SplitAfter(s, "\n")
+	if out[len(out)-1] == "" {
+		return out[:len(out)-1]
+	}
+	out[len(out)-1] += "\n"
+	return out
 }

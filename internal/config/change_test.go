@@ -22,14 +22,14 @@ func withChange(providers, rest string) string {
 }
 
 func TestChangeSectionParses(t *testing.T) {
-	doc := withChange(forges+"  delivery: { type: argocd, cluster: cluster-a }\n",
+	doc := withChange(forges+"  delivery: { type: argocd, cluster: cluster-a, labelTracking: true }\n",
 		"    change: { strategy: pull-request }\nsourceResolution:\n  static:\n    - { environment: staging, namespace: shop, name: api, source: \"github:example-org/gitops//apps/api@main\" }\n")
 	c, err := Parse([]byte(doc))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	d := c.Providers.Delivery
-	if d.Namespace != "argocd" || d.Profile != "reader" {
+	if d.Namespace != "argocd" || d.Profile != "reader" || !d.LabelTracking {
 		t.Errorf("delivery defaults not applied: %+v", d)
 	}
 	if got := c.SourceResolution.Annotations; len(got) != 1 || got[0] != "opsward/source" {
@@ -50,6 +50,7 @@ func TestChangeSectionRejects(t *testing.T) {
 		{"inline token", withChange(strings.Replace(forges, "{ file: /etc/opsward/github-token }", "ghp_x", 1), ""), "an inline value is not accepted"},
 		{"no repositories", withChange(strings.Replace(forges, "      repositories: [example-org/gitops]\n", "", 1), ""), "repositories is required"},
 		{"bad repository", withChange(strings.Replace(forges, "[example-org/gitops]", "[/gitops]", 1), ""), `repository "/gitops"`},
+		{"host served twice", withChange(forges+strings.Replace(strings.TrimPrefix(forges, "\n  forges:\n"), "name: github", "name: github-b", 1), ""), `host "github.com" is served by forges github and github-b`},
 		{"duplicate forge", withChange(forges+strings.TrimPrefix(forges, "\n  forges:\n"), ""), `forge "github": duplicate name`},
 		{"credentials in url", withChange(strings.Replace(forges, "https://api.github.com", "https://u:p@api.github.com", 1), ""), "must not contain credentials"},
 		{"delivery unknown cluster", withChange(forges+"  delivery: { type: argocd, cluster: cluster-z }\n", ""), `delivery: unknown cluster "cluster-z"`},
@@ -96,5 +97,13 @@ func TestForgeWarnings(t *testing.T) {
 	}
 	if strings.Contains(w, "/nonexistent/token") {
 		t.Errorf("warnings name a credential path:\n%s", w)
+	}
+}
+
+// An empty list turns annotations off: an operator may not trust workload annotations.
+func TestEmptyAnnotationsStayEmpty(t *testing.T) {
+	c, err := Parse([]byte(withChange(forges, "sourceResolution:\n  annotations: []\n")))
+	if err != nil || len(c.SourceResolution.Annotations) != 0 {
+		t.Fatalf("annotations = %v, %v", c.SourceResolution.Annotations, err)
 	}
 }

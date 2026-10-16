@@ -29,7 +29,7 @@ func TestArgoCDSingleSource(t *testing.T) {
 	w := api
 	w.Annotations = map[string]string{"argocd.argoproj.io/tracking-id": "api:apps/Deployment:shop/api"}
 	got, err := Resolve(context.Background(), w, Options{ApplicationNamespace: "argocd", Applications: apps(map[string]string{
-		"argocd/api": `{"spec":{"source":{"repoURL":"https://github.com/example-org/gitops.git","path":"apps/api","targetRevision":"main","helm":{"valueFiles":["values.yaml","values-staging.yaml"]}}}}`,
+		"argocd/api": `{"spec":{"source":{"repoURL":"https://github.com/example-org/gitops.git","path":"apps/api","targetRevision":"main","helm":{"valueFiles":["values.yaml","values-staging.yaml"]}},"destination":{"namespace":"shop"}}}`,
 	})})
 	if err != nil {
 		t.Fatal(err)
@@ -50,8 +50,8 @@ func TestArgoCDMultiSourceValuesRef(t *testing.T) {
 	got, err := Resolve(context.Background(), w, Options{ApplicationNamespace: "argocd", Applications: apps(map[string]string{
 		"team-a/api": `{"spec":{"sources":[
 			{"repoURL":"https://charts.example.com","chart":"generic-app","targetRevision":"1.12.0","helm":{"valueFiles":["$values/workloads/api/values.yaml"]}},
-			{"repoURL":"git@github.com:example-org/gitops.git","targetRevision":"HEAD","ref":"values"}]}}`,
-	})})
+			{"repoURL":"git@github.com:example-org/gitops.git","targetRevision":"HEAD","ref":"values"}],"destination":{"namespace":"shop"}}}`,
+	}), LabelTracking: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +106,11 @@ func TestLocationContains(t *testing.T) {
 		{dir, "apps/api-other/values.yaml", false},
 		{dir, "apps/api/../web/values.yaml", false},
 		{dir, "/apps/api/values.yaml", false},
+		{dir, "../apps/api/values.yaml", false},
+		{dir, "apps/api/./values.yaml", false},
+		{Location{Repo: "r", Path: "../.."}, "../../other/x", false},
+		{Location{Repo: "r", Path: "."}, "values.yaml", true},
+		{Location{Repo: "r", Path: "."}, "../values.yaml", false},
 		{files, "workloads/api/values.yaml", true},
 		{files, "workloads/api/other.yaml", false},
 	} {
@@ -136,10 +141,97 @@ func TestInstanceLabelWithoutApplicationFallsThrough(t *testing.T) {
 	w := api
 	w.Labels = map[string]string{"app.kubernetes.io/instance": "api"}
 	got, err := Resolve(context.Background(), w, Options{
-		ApplicationNamespace: "argocd", Applications: apps(nil),
+		ApplicationNamespace: "argocd", Applications: apps(nil), LabelTracking: true,
 		Static: []Static{{Environment: "staging", Namespace: "shop", Name: "api", Source: "github:x/y//api"}},
 	})
 	if err != nil || got.Resolver != "static" {
 		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestParseLocationRefusesTraversal(t *testing.T) {
+	for _, bad := range []string{
+		"github:example-org/gitops//../../other-org/private",
+		"github:example-org/gitops//apps/../../x",
+		"github:example-org/gitops//apps@../../../../other-org/x/git/trees/main",
+		"github:example-org/gitops//apps@-x",
+		"github:example-org/gitops//apps@a..b",
+		"github:example-org/gitops//apps@main?x=1",
+	} {
+		if l, err := ParseLocation(bad); err == nil {
+			t.Errorf("ParseLocation(%q) = %+v, want an error", bad, l)
+		}
+	}
+	for in, want := range map[string]Location{
+		"github:o/r//./apps/api/@release/1.0": {Repo: "github:o/r", Path: "apps/api", Revision: "release/1.0"},
+		"github:o/r//.":                       {Repo: "github:o/r", Path: "."},
+	} {
+		if got, err := ParseLocation(in); err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("ParseLocation(%q) = %+v, %v", in, got, err)
+		}
+	}
+}
+
+// Argo CD Applications often use "." or "./dir" as a path.
+func TestArgoCDPathsAreCleaned(t *testing.T) {
+	w := api
+	w.Annotations = map[string]string{"argocd.argoproj.io/tracking-id": "api:apps/Deployment:shop/api"}
+	got, err := Resolve(context.Background(), w, Options{ApplicationNamespace: "argocd", Applications: apps(map[string]string{
+		"argocd/api": `{"spec":{"source":{"repoURL":"https://github.com/example-org/api.git","path":".","helm":{"valueFiles":["./values.yaml"]}},"destination":{"namespace":"shop"}}}`,
+	})})
+	if err != nil || got.Locations[0].Path != "." || !got.Locations[0].Contains("values.yaml") || got.Locations[0].Files[0] != "values.yaml" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	_, err = Resolve(context.Background(), w, Options{ApplicationNamespace: "argocd", Applications: apps(map[string]string{
+		"argocd/api": `{"spec":{"source":{"repoURL":"https://github.com/example-org/api.git","path":"../other","targetRevision":"main"},"destination":{"namespace":"shop"}}}`,
+	})})
+	if err == nil {
+		t.Fatal("an Application path outside the repository was accepted")
+	}
+}
+
+// Whoever can annotate a workload must not be able to borrow another Application's
+// source: the tracking id must name the workload, and the Application must deploy to its
+// namespace, as Argo CD itself requires.
+func TestTrackingIDMustNameTheWorkload(t *testing.T) {
+	other := apps(map[string]string{
+		"argocd/payments": `{"spec":{"source":{"repoURL":"https://github.com/example-org/gitops.git","path":"apps/payments"},"destination":{"namespace":"payments"}}}`,
+	})
+	for _, id := range []string{
+		"payments:apps/Deployment:shop/other",
+		"payments:apps/StatefulSet:shop/api",
+		"payments:apps/Deployment:payments/api",
+		"payments",
+	} {
+		w := api
+		w.Annotations = map[string]string{"argocd.argoproj.io/tracking-id": id}
+		if got, err := Resolve(context.Background(), w, Options{ApplicationNamespace: "argocd", Applications: other}); err == nil {
+			t.Errorf("tracking id %q resolved to %+v", id, got)
+		}
+	}
+	w := api
+	w.Annotations = map[string]string{"argocd.argoproj.io/tracking-id": "payments:apps/Deployment:shop/api"}
+	_, err := Resolve(context.Background(), w, Options{ApplicationNamespace: "argocd", Applications: other})
+	if err == nil || !strings.Contains(err.Error(), "deploys to namespace payments") {
+		t.Fatalf("an Application deploying elsewhere: err = %v", err)
+	}
+}
+
+// The instance label is a chart convention as much as Argo CD's: it is read only when
+// the configuration says Argo CD tracks by label.
+func TestInstanceLabelNeedsLabelTracking(t *testing.T) {
+	called := false
+	w := api
+	w.Labels = map[string]string{"app.kubernetes.io/instance": "api"}
+	got, err := Resolve(context.Background(), w, Options{
+		ApplicationNamespace: "argocd",
+		Applications: func(context.Context, string, string) (*Application, error) {
+			called = true
+			return nil, ErrNoApplication
+		},
+		Static: []Static{{Environment: "staging", Namespace: "shop", Name: "api", Source: "github:x/y//api"}},
+	})
+	if err != nil || got.Resolver != "static" || called {
+		t.Fatalf("got %+v, %v, application read %v", got, err, called)
 	}
 }

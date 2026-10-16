@@ -19,6 +19,9 @@ type Delivery struct {
 	Cluster   string `yaml:"cluster"`
 	Namespace string `yaml:"namespace"` // default argocd
 	Profile   string `yaml:"profile"`   // default reader
+	// LabelTracking: Argo CD tracks resources by the app.kubernetes.io/instance label
+	// rather than its tracking-id annotation.
+	LabelTracking bool `yaml:"labelTracking"`
 }
 
 // Forge is a Git hosting service Opsward reads from and proposes changes to;
@@ -76,6 +79,7 @@ func (c *Config) validateChange(envs map[string]bool, fail func(string, ...any))
 		}
 	}
 	names := map[string]bool{}
+	hosts := map[string]string{}
 	for i, f := range c.Providers.Forges {
 		if f.Name == "" {
 			fail("providers.forges[%d]: name is required", i)
@@ -97,6 +101,12 @@ func (c *Config) validateChange(envs map[string]bool, fail func(string, ...any))
 		}
 		if f.Token.File == "" && f.Token.Env == "" {
 			fail("forge %q: token { file } or { env } is required", f.Name)
+		}
+		for _, h := range f.Hosts {
+			if other, ok := hosts[h]; ok && other != f.Name {
+				fail("host %q is served by forges %s and %s; a repository URL must lead to one", h, other, f.Name)
+			}
+			hosts[h] = f.Name
 		}
 		if len(f.Repositories) == 0 {
 			fail("forge %q: repositories is required: Opsward reaches only the repositories a forge lists", f.Name)

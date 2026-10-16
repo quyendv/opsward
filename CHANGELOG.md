@@ -26,6 +26,9 @@ All notable changes to this project are documented here. The format follows
   `propose_change` applies exact text replacements to those files and returns the diff
   (`change.strategy: suggest`, risk read) or opens a pull request naming the caller and
   the audit record (`pull-request`, risk write); nothing is applied to the cluster.
+  Values of `kind: Secret` manifests are blanked in what is shown. An Argo CD tracking id
+  must name the workload and its Application deploy to the workload's namespace; the
+  `app.kubernetes.io/instance` label is used with `providers.delivery.labelTracking`.
 - The audit `change` records the URL of a proposed change.
 
 ## [0.3.0] - 2026-10-16

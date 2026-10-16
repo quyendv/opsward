@@ -33,15 +33,86 @@ type Location struct {
 	Files    []string `json:"files,omitempty"`
 }
 
-// Contains reports whether p, a path in the location's repository, is part of it.
+// Contains reports whether p, a path in the location's repository, is part of it. A
+// location whose path is "." is the whole repository.
 func (l Location) Contains(p string) bool {
-	if p == "" || strings.HasPrefix(p, "/") || path.Clean(p) != p {
+	if p == "." || !inRepo(p) {
 		return false
 	}
 	if slices.Contains(l.Files, p) {
 		return true
 	}
-	return l.Path != "" && strings.HasPrefix(p, strings.TrimSuffix(l.Path, "/")+"/")
+	switch {
+	case l.Path == ".":
+		return true
+	case l.Path != "" && inRepo(l.Path):
+		return strings.HasPrefix(p, l.Path+"/")
+	}
+	return false
+}
+
+// inRepo reports whether p is a clean path inside a repository: relative, without "."
+// or ".." segments or empty ones. Paths reach forge API URLs, where a ".." segment could
+// leave the repository.
+func inRepo(p string) bool {
+	if p == "." {
+		return true
+	}
+	if p == "" || strings.HasPrefix(p, "/") || path.Clean(p) != p || strings.ContainsAny(p, "\\\x00") {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." || seg == "." {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidRevision reports whether rev can name a branch, tag or commit, following the rules
+// of git check-ref-format; it rules out what could change a forge API URL.
+func ValidRevision(rev string) bool {
+	if rev == "" {
+		return true
+	}
+	if strings.HasPrefix(rev, "/") || strings.HasPrefix(rev, "-") || strings.HasSuffix(rev, "/") ||
+		strings.HasSuffix(rev, ".") || strings.HasSuffix(rev, ".lock") ||
+		strings.Contains(rev, "..") || strings.Contains(rev, "//") || strings.Contains(rev, "@{") ||
+		strings.ContainsAny(rev, " ~^:?*[\\%#") {
+		return false
+	}
+	for _, r := range rev {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	for _, seg := range strings.Split(rev, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return false
+		}
+	}
+	return true
+}
+
+// check normalizes the location's path ("./apps/" is "apps") and refuses paths that
+// leave the repository and revisions that are not refs.
+func (l *Location) check() error {
+	if l.Path != "" {
+		l.Path = path.Clean(l.Path)
+		if !inRepo(l.Path) {
+			return fmt.Errorf("path %q is not inside the repository", l.Path)
+		}
+	}
+	for i, f := range l.Files {
+		l.Files[i] = path.Clean(f)
+		if l.Files[i] == "." || !inRepo(l.Files[i]) {
+			return fmt.Errorf("file %q is not inside the repository", f)
+		}
+	}
+	if !ValidRevision(l.Revision) {
+		return fmt.Errorf("revision %q is not a valid ref", l.Revision)
+	}
+	return nil
 }
 
 // Source is where a workload is declared.
@@ -64,12 +135,19 @@ type Options struct {
 	// Applications reads an Argo CD Application; nil when there is no Argo CD.
 	Applications         func(ctx context.Context, namespace, name string) (*Application, error)
 	ApplicationNamespace string
+	// LabelTracking: Argo CD tracks resources by the app.kubernetes.io/instance label,
+	// which is read only then: charts set it too.
+	LabelTracking bool
 }
 
 // Resolve tries Argo CD, then the annotations, then the static map.
 func Resolve(ctx context.Context, w Workload, opt Options) (*Source, error) {
 	if opt.Applications != nil {
-		if ns, name, byAnnotation, ok := application(w, opt.ApplicationNamespace); ok {
+		ns, name, byAnnotation, err := application(w, opt.ApplicationNamespace, opt.LabelTracking)
+		if err != nil {
+			return nil, err
+		}
+		if name != "" {
 			app, err := opt.Applications(ctx, ns, name)
 			switch {
 			case errors.Is(err, ErrNoApplication) && !byAnnotation:
@@ -78,8 +156,18 @@ func Resolve(ctx context.Context, w Workload, opt Options) (*Source, error) {
 				return nil, fmt.Errorf("%w: the workload names Argo CD Application %s/%s, which does not exist", ErrUnresolved, ns, name)
 			case err != nil:
 				return nil, fmt.Errorf("reading Argo CD Application %s/%s: %w", ns, name, err)
+			case app.Spec.Destination.Namespace != w.Namespace:
+				// Argo CD would not let this Application manage the workload either.
+				return nil, fmt.Errorf("%w: Argo CD Application %s/%s deploys to namespace %s, not %s",
+					ErrUnresolved, ns, name, app.Spec.Destination.Namespace, w.Namespace)
 			default:
-				return &Source{Resolver: "argocd", Application: ns + "/" + name, Locations: app.locations()}, nil
+				locs := app.locations()
+				for i := range locs {
+					if err := locs[i].check(); err != nil {
+						return nil, fmt.Errorf("argo CD Application %s/%s: %w", ns, name, err)
+					}
+				}
+				return &Source{Resolver: "argocd", Application: ns + "/" + name, Locations: locs}, nil
 			}
 		}
 	}
@@ -105,25 +193,31 @@ func Resolve(ctx context.Context, w Workload, opt Options) (*Source, error) {
 }
 
 // application names the Argo CD Application that tracks the workload, by annotation or,
-// with label tracking, by label. "<namespace>_<name>" names an Application outside the
-// default namespace.
-func application(w Workload, defaultNS string) (ns, name string, byAnnotation, ok bool) {
+// with label tracking, by label; name is empty when neither does. "<namespace>_<name>"
+// names an Application outside the default namespace. A tracking id must name the
+// workload itself (<app>:<group>/<kind>:<namespace>/<name>), as Argo CD checks, so that
+// it cannot borrow another Application's source.
+func application(w Workload, defaultNS string, labels bool) (ns, name string, byAnnotation bool, err error) {
 	if id := w.Annotations["argocd.argoproj.io/tracking-id"]; id != "" {
-		name, _, _ = strings.Cut(id, ":")
-		byAnnotation = true
-	} else if v := w.Labels["app.kubernetes.io/instance"]; v != "" {
+		parts := strings.SplitN(id, ":", 3)
+		if len(parts) != 3 || parts[1] != "apps/"+w.Kind || parts[2] != w.Namespace+"/"+w.Name {
+			return "", "", false, fmt.Errorf("%w: tracking id %q does not name %s %s/%s", ErrUnresolved, id, w.Kind, w.Namespace, w.Name)
+		}
+		name, byAnnotation = parts[0], true
+	} else if v := w.Labels["app.kubernetes.io/instance"]; v != "" && labels {
 		name = v
 	}
 	if name == "" {
-		return "", "", false, false
+		return "", "", false, nil
 	}
 	if n, rest, found := strings.Cut(name, "_"); found {
-		return n, rest, byAnnotation, true
+		return n, rest, byAnnotation, nil
 	}
-	return defaultNS, name, byAnnotation, true
+	return defaultNS, name, byAnnotation, nil
 }
 
-// ParseLocation reads <repo>//<path>[@<revision>].
+// ParseLocation reads <repo>//<path>[@<revision>]; the path must stay inside the
+// repository and the revision must be a valid ref.
 func ParseLocation(s string) (Location, error) {
 	i := strings.LastIndex(s, "//")
 	if i <= 0 || strings.HasSuffix(s[:i], ":") {
@@ -134,14 +228,21 @@ func ParseLocation(s string) (Location, error) {
 	if p == "" {
 		return Location{}, fmt.Errorf("%q: no path", s)
 	}
-	return Location{Repo: repo, Revision: rev, Path: strings.TrimSuffix(p, "/")}, nil
+	l := Location{Repo: repo, Revision: rev, Path: p}
+	if err := l.check(); err != nil {
+		return Location{}, fmt.Errorf("%q: %w", s, err)
+	}
+	return l, nil
 }
 
 // Application is the part of an Argo CD Application that says where it comes from.
 type Application struct {
 	Spec struct {
-		Source  *ApplicationSource  `json:"source"`
-		Sources []ApplicationSource `json:"sources"`
+		Source      *ApplicationSource  `json:"source"`
+		Sources     []ApplicationSource `json:"sources"`
+		Destination struct {
+			Namespace string `json:"namespace"`
+		} `json:"destination"`
 	} `json:"spec"`
 }
 

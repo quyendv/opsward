@@ -29,6 +29,16 @@ func (f *memForge) DefaultBranch(_ context.Context, repo string) (string, error)
 	return "main", nil
 }
 
+// ResolveRef treats every ref as its own commit id; the refs the repository keeps are
+// its branches.
+func (f *memForge) ResolveRef(_ context.Context, repo, ref string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "ref:"+repo+"@"+ref)
+	_, branch := f.repos[repo][ref]
+	return ref, branch, nil
+}
+
 func (f *memForge) ReadFile(_ context.Context, repo, ref, p string) ([]byte, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -73,6 +83,7 @@ func changeFixture(strategy string) (*fakeSource, *memForge, ChangeConfig) {
 		"team-a/gitops": {"main": {
 			"apps/api/values.yaml":           values,
 			"apps/api/templates/deploy.yaml": "kind: Deployment\n",
+			"apps/api/templates/secret.yaml": secretManifest,
 			"apps/web/values.yaml":           "replicaCount: 1\n",
 		}},
 	}}
@@ -83,6 +94,8 @@ func changeFixture(strategy string) (*fakeSource, *memForge, ChangeConfig) {
 	}}
 	return src, fg, cfg
 }
+
+const secretManifest = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: api\n  labels: { tier: backend }\ndata:\n  key: QUFBQUFBQUE=\n" //nolint:gosec // G101: a fixture whose value must not reach the caller
 
 const target = `"environment":"staging","namespace":"shop","kind":"Deployment","name":"api"`
 
@@ -108,7 +121,7 @@ func TestResolveSourceListsAndReads(t *testing.T) {
 		t.Fatalf("view = %+v", v)
 	}
 	l := v.Locations[0]
-	if l.Revision != "main" || !slices.Equal(l.Files, []string{"apps/api/templates/deploy.yaml", "apps/api/values.yaml"}) {
+	if l.Revision != "main" || !slices.Equal(l.Files, []string{"apps/api/templates/deploy.yaml", "apps/api/templates/secret.yaml", "apps/api/values.yaml"}) {
 		t.Fatalf("location = %+v", l)
 	}
 	if len(v.Contents) != 1 || v.Contents[0].Content != values {
@@ -185,7 +198,7 @@ func TestProposeChangeOpensAPullRequest(t *testing.T) {
 		t.Fatalf("proposals = %d", len(fg.proposals))
 	}
 	pr := fg.proposals[0]
-	if pr.Base != "main" || pr.Branch != "opsward/0192-intent" || pr.Title != "Scale api to 4" {
+	if pr.Base != "main" || pr.BaseCommit != "main" || pr.Branch != "opsward/0192-intent" || pr.Title != "Scale api to 4" {
 		t.Fatalf("proposal = %+v", pr)
 	}
 	for _, want := range []string{"Load doubled.", "alice", "0192-intent", "staging", "shop"} {
@@ -242,7 +255,7 @@ func TestProposeChangeRefusesACommitForAPullRequest(t *testing.T) {
 	src.annotations["opsward/source"] = "https://git.example.com/team-a/gitops.git//apps/api@0123456789abcdef0123456789abcdef01234567"
 	tl, _ := ProposeChange(src, cfg)
 	p, _ := tl.Prepare(json.RawMessage(`{` + target + `,"title":"t","edits":[{"path":"apps/api/values.yaml","old":"replicaCount: 2","new":"replicaCount: 4"}]}`))
-	if _, err := p.Preview(context.Background(), "operator"); !errors.Is(err, core.ErrInvalidInput) || !strings.Contains(err.Error(), "commit") {
+	if _, err := p.Preview(context.Background(), "operator"); !errors.Is(err, core.ErrInvalidInput) || !strings.Contains(err.Error(), "not a branch") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -261,5 +274,58 @@ func TestProposeChangeFallsBackToSuggest(t *testing.T) {
 	ch := out.(*core.Change)
 	if ch.Strategy != "suggest" || !strings.Contains(ch.Note, "source not resolved") || len(fg.proposals) != 0 {
 		t.Fatalf("change = %+v, proposals %d", ch, len(fg.proposals))
+	}
+}
+
+// Secret manifests in the source keep their keys and lose their values, in contents and
+// in diffs.
+func TestSecretManifestValuesStayOut(t *testing.T) {
+	src, fg, cfg := changeFixture("pull-request")
+	rs, _ := ResolveSource(src, cfg)
+	p, _ := rs.Prepare(json.RawMessage(`{` + target + `,"files":["apps/api/templates/secret.yaml"]}`))
+	out, err := p.Run(context.Background(), "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := out.(*SourceView).Contents[0].Content; strings.Contains(c, "QUFBQUFBQUE") || !strings.Contains(c, "key: [REDACTED]") {
+		t.Fatalf("content = %q", c)
+	}
+	pc, _ := ProposeChange(src, cfg)
+	p, _ = pc.Prepare(json.RawMessage(`{` + target + `,"title":"t","edits":[{"path":"apps/api/templates/secret.yaml","old":"tier: backend","new":"tier: api"}]}`))
+	ch, err := p.Preview(context.Background(), "operator")
+	if err != nil || strings.Contains(ch.Diff, "QUFBQUFBQUE") || !strings.Contains(ch.Diff, "+  labels: { tier: api }") {
+		t.Fatalf("diff = %q, %v", ch.Diff, err)
+	}
+	if _, err := p.Run(core.WithAuditID(context.Background(), "x"), "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(fg.proposals[0].Files["apps/api/templates/secret.yaml"]); !strings.Contains(got, "key: QUFBQUFBQUE=") {
+		t.Fatalf("the proposal lost the secret's value: %q", got)
+	}
+}
+
+func TestDiffHasNoLineTheFileLacks(t *testing.T) {
+	src, _, cfg := changeFixture("suggest")
+	tl, _ := ProposeChange(src, cfg)
+	p, _ := tl.Prepare(json.RawMessage(`{` + target + `,"title":"t","edits":[{"path":"apps/api/templates/deploy.yaml","old":"Deployment","new":"StatefulSet"}]}`))
+	out, err := p.Run(context.Background(), "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "--- a/apps/api/templates/deploy.yaml\n+++ b/apps/api/templates/deploy.yaml\n@@ -1 +1 @@\n-kind: Deployment\n+kind: StatefulSet\n"
+	if d := out.(*core.Change).Diff; d != want {
+		t.Fatalf("diff = %q, want %q", d, want)
+	}
+}
+
+func TestLinesEndEveryLine(t *testing.T) {
+	for in, want := range map[string][]string{
+		"a\nb\n": {"a\n", "b\n"},
+		"a\nb":   {"a\n", "b\n"}, // no final newline: the diff still has one line per line
+		"":       {},
+	} {
+		if got := lines(in); !slices.Equal(got, want) {
+			t.Errorf("lines(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

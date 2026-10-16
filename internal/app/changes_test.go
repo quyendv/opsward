@@ -20,7 +20,9 @@ func giteaRepo(t *testing.T) *httptest.Server {
 		switch p {
 		case "":
 			_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "main"})
-		case "/git/trees/main":
+		case "/branches/main":
+			_ = json.NewEncoder(w).Encode(map[string]any{"commit": map[string]any{"id": "c0ffee"}})
+		case "/git/trees/c0ffee":
 			_ = json.NewEncoder(w).Encode(map[string]any{"tree": []map[string]any{{"path": "apps/api/values.yaml", "type": "blob"}}})
 		case "/contents/apps/api/values.yaml":
 			_ = json.NewEncoder(w).Encode(map[string]any{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte("replicaCount: 2\n"))})

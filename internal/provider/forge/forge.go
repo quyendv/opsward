@@ -71,6 +71,9 @@ func (c *client) do(ctx context.Context, method, path string, in, out any) error
 		}
 		body = bytes.NewReader(b)
 	}
+	if err := noDotSegments(path); err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
 		return err
@@ -144,3 +147,21 @@ func under(entries []treeEntry, dir string, truncated bool) ([]string, bool) {
 }
 
 type treeEntry struct{ Path, Type string }
+
+// noDotSegments refuses a request path, escaped or not, with a "." or ".." segment:
+// clients and servers may resolve those, and leave the repository the path names.
+func noDotSegments(p string) error {
+	p, _, _ = strings.Cut(p, "?")
+	decoded, err := url.PathUnescape(p)
+	if err != nil {
+		return fmt.Errorf("request path: %w", err)
+	}
+	for _, s := range []string{p, decoded} {
+		for _, seg := range strings.Split(s, "/") {
+			if seg == "." || seg == ".." {
+				return fmt.Errorf("request path %q has a dot segment", p)
+			}
+		}
+	}
+	return nil
+}

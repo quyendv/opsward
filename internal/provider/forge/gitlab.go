@@ -37,7 +37,7 @@ func (g *gitlab) Propose(ctx context.Context, repo string, p capability.Proposal
 		})
 	}
 	if err := g.do(ctx, http.MethodPost, project(repo)+"/repository/commits", map[string]any{
-		"branch": p.Branch, "start_branch": p.Base, "commit_message": p.Message, "actions": actions,
+		"branch": p.Branch, "start_sha": p.BaseCommit, "commit_message": p.Message, "actions": actions,
 	}, nil); err != nil {
 		return "", err
 	}
@@ -82,4 +82,20 @@ func (g *gitlab) ListFiles(ctx context.Context, repo, ref, dir string) ([]string
 			return files, true, nil
 		}
 	}
+}
+
+func (g *gitlab) ResolveRef(ctx context.Context, repo, ref string) (string, bool, error) {
+	var b struct{ Commit struct{ ID string } }
+	err := g.do(ctx, http.MethodGet, project(repo)+"/repository/branches/"+url.PathEscape(ref), nil, &b)
+	if err == nil {
+		return b.Commit.ID, true, nil
+	}
+	if !errors.Is(err, errNotFound) {
+		return "", false, err
+	}
+	var c struct{ ID string }
+	if err := g.do(ctx, http.MethodGet, project(repo)+"/repository/commits/"+url.PathEscape(ref), nil, &c); err != nil {
+		return "", false, fmt.Errorf("revision %s: %w", ref, err)
+	}
+	return c.ID, false, nil
 }

@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 
@@ -28,12 +29,8 @@ func (g *github) ReadFile(ctx context.Context, repo, ref, path string) ([]byte, 
 // commit on the base, and a branch at the commit.
 func (g *github) Propose(ctx context.Context, repo string, p capability.Proposal) (string, error) {
 	r := "/repos/" + repo
-	var ref struct{ Object struct{ SHA string } }
-	if err := g.do(ctx, http.MethodGet, r+"/git/ref/heads/"+pathEscape(p.Base), nil, &ref); err != nil {
-		return "", err
-	}
 	var base struct{ Tree struct{ SHA string } }
-	if err := g.do(ctx, http.MethodGet, r+"/git/commits/"+ref.Object.SHA, nil, &base); err != nil {
+	if err := g.do(ctx, http.MethodGet, r+"/git/commits/"+p.BaseCommit, nil, &base); err != nil {
 		return "", err
 	}
 	entries := make([]map[string]string, 0, len(p.Files))
@@ -44,7 +41,7 @@ func (g *github) Propose(ctx context.Context, repo string, p capability.Proposal
 	if err := g.do(ctx, http.MethodPost, r+"/git/trees", map[string]any{"base_tree": base.Tree.SHA, "tree": entries}, &tree); err != nil {
 		return "", err
 	}
-	if err := g.do(ctx, http.MethodPost, r+"/git/commits", map[string]any{"message": p.Message, "tree": tree.SHA, "parents": []string{ref.Object.SHA}}, &commit); err != nil {
+	if err := g.do(ctx, http.MethodPost, r+"/git/commits", map[string]any{"message": p.Message, "tree": tree.SHA, "parents": []string{p.BaseCommit}}, &commit); err != nil {
 		return "", err
 	}
 	if err := g.do(ctx, http.MethodPost, r+"/git/refs", map[string]any{"ref": "refs/heads/" + p.Branch, "sha": commit.SHA}, nil); err != nil {
@@ -80,4 +77,20 @@ func (g *github) ListFiles(ctx context.Context, repo, ref, dir string) ([]string
 	}
 	files, truncated := under(out.Tree, dir, out.Truncated)
 	return files, truncated, nil
+}
+
+func (g *github) ResolveRef(ctx context.Context, repo, ref string) (string, bool, error) {
+	var b struct{ Commit struct{ SHA string } }
+	err := g.do(ctx, http.MethodGet, "/repos/"+repo+"/branches/"+pathEscape(ref), nil, &b)
+	if err == nil {
+		return b.Commit.SHA, true, nil
+	}
+	if !errors.Is(err, errNotFound) {
+		return "", false, err
+	}
+	var c struct{ SHA string }
+	if err := g.do(ctx, http.MethodGet, "/repos/"+repo+"/commits/"+pathEscape(ref), nil, &c); err != nil {
+		return "", false, fmt.Errorf("revision %s: %w", ref, err)
+	}
+	return c.SHA, false, nil
 }
