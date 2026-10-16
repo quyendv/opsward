@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
 
 	"github.com/quyendv/opsward/internal/audit"
@@ -62,6 +63,45 @@ func approvalErr(format string, a ...any) error {
 	return &ApprovalError{msg: fmt.Sprintf(format, a...)}
 }
 
+// splitApproval takes the approval argument out of a call's arguments: it belongs to the
+// engine, so every tool can be retried with one, and it is not part of what the tool,
+// policy or the argument hash see.
+func splitApproval(raw json.RawMessage) (json.RawMessage, string, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return raw, "", nil // not an object: the tool's own validation reports it
+	}
+	v, ok := obj[ApprovalArg]
+	if !ok {
+		return raw, "", nil
+	}
+	var id string
+	if err := json.Unmarshal(v, &id); err != nil {
+		return nil, "", fmt.Errorf("%s must be a string", ApprovalArg)
+	}
+	delete(obj, ApprovalArg)
+	rest, err := json.Marshal(obj)
+	if err != nil {
+		return nil, "", err
+	}
+	return rest, id, nil
+}
+
+// withApprovalArg returns a copy of schema that offers the approval argument, so that a
+// client validating arguments lets a retry through.
+func withApprovalArg(schema *jsonschema.Schema) *jsonschema.Schema {
+	s := *schema
+	s.Properties = maps.Clone(schema.Properties)
+	if s.Properties == nil {
+		s.Properties = map[string]*jsonschema.Schema{}
+	}
+	s.Properties[ApprovalArg] = &jsonschema.Schema{
+		Type:        "string",
+		Description: "only when calling again after a call needed approval: the id of the approved request",
+	}
+	return &s
+}
+
 // argsHash identifies a call's arguments, without the approval that may accompany a retry.
 func argsHash(args map[string]any) string {
 	m := maps.Clone(args)
@@ -105,7 +145,7 @@ func (e *Engine) requestApproval(ctx context.Context, p core.Principal, tool str
 	a := store.Approval{
 		ID: id.String(), Requester: core.NormalizeSubject(p.Subject), Tool: tool,
 		Environment: prep.Scope.Environment, Namespace: prep.Scope.Namespace, Kind: prep.Scope.Kind, Name: prep.Scope.Name,
-		ArgsHash: argsHash(prep.Args), Diff: change.Diff, Status: store.ApprovalPending,
+		ArgsHash: argsHash(prep.Args), Diff: change.Diff, Rule: dec.Rule, Profile: profile, Status: store.ApprovalPending,
 		CreatedAt: now.UTC(), ExpiresAt: now.Add(ttl).UTC(),
 	}
 	if dec.Approvers != nil {
@@ -118,44 +158,68 @@ func (e *Engine) requestApproval(ctx context.Context, p core.Principal, tool str
 	return nil, finish(audit.StatusPending, &ApprovalRequiredError{ID: a.ID, Diff: a.Diff, Approvers: dec.Approvers, ExpiresAt: a.ExpiresAt})
 }
 
-// useApproval checks that a retried call carries an approval that holds for it, and
-// uses it: a request runs at most once. It returns the call's preview.
-func (e *Engine) useApproval(ctx context.Context, p core.Principal, tool string, prep *Prepared, id, profile string) (*core.Change, error) {
+// useApproval checks that a retried call carries an approval that holds for it under the
+// policy in force now, and uses it: a request runs at most once. It returns the call's
+// preview, and the audit status of a refusal.
+func (e *Engine) useApproval(ctx context.Context, p core.Principal, tool string, prep *Prepared, id, profile string, dec core.Decision) (*core.Change, string, error) {
 	a, ok, err := e.approvals.Approval(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, audit.StatusError, err
 	}
-	switch {
-	case !ok:
-		return nil, approvalErr("unknown approval request %q", id)
-	case a.Requester != core.NormalizeSubject(p.Subject):
-		return nil, approvalErr("approval request %s was made by someone else", id)
-	case a.Tool != tool || a.ArgsHash != argsHash(prep.Args):
-		return nil, approvalErr("approval request %s was for other arguments; request approval again", id)
-	case a.Status == store.ApprovalPending:
-		return nil, approvalErr("approval request %s has not been decided yet", id)
-	case a.Status == store.ApprovalDenied:
-		return nil, approvalErr("approval request %s was denied by %s: %s", id, a.DecidedBy, a.Reason)
-	case a.Status == store.ApprovalUsed:
-		return nil, approvalErr("approval request %s has already been used", id)
-	case !e.now().Before(a.ExpiresAt):
-		return nil, approvalErr("approval request %s expired at %s; request approval again", id, a.ExpiresAt.Format(time.RFC3339))
+	decider := core.Principal{Subject: a.DecidedBy, Groups: a.DecidedGroups}
+	if refusal := checkApproval(a, ok, p, tool, prep, id, profile, dec, decider, e.now()); refusal != nil {
+		return nil, audit.StatusDenied, refusal
 	}
 	change, err := e.preview(ctx, prep, profile)
 	if err != nil {
-		return nil, err
+		if isInvalid(err) {
+			return nil, audit.StatusInvalid, err
+		}
+		return nil, audit.StatusError, err
 	}
 	if change.Diff != a.Diff {
-		return nil, approvalErr("the target changed since approval request %s: approved %q, now %q; request approval again", id, a.Diff, change.Diff)
+		return nil, audit.StatusDenied, approvalErr("the target changed since approval request %s: approved %q, now %q; request approval again", id, a.Diff, change.Diff)
 	}
-	used, err := e.approvals.UseApproval(ctx, id, e.now())
+	// Not cancellable: once consumed the call runs, and a client gone at this moment must
+	// not leave it half done.
+	used, err := e.approvals.UseApproval(context.WithoutCancel(ctx), id, e.now())
 	if err != nil {
-		return nil, err
+		return nil, audit.StatusError, err
 	}
 	if !used {
-		return nil, approvalErr("approval request %s has already been used", id)
+		return nil, audit.StatusDenied, approvalErr("approval request %s has already been used or has expired", id)
 	}
-	return change, nil
+	return change, "", nil
+}
+
+// checkApproval is everything about a stored approval that must hold before its call
+// may run.
+func checkApproval(a store.Approval, found bool, p core.Principal, tool string, prep *Prepared, id, profile string, dec core.Decision, decider core.Principal, now time.Time) error {
+	switch {
+	case !found:
+		return approvalErr("unknown approval request %q", id)
+	case a.Requester != core.NormalizeSubject(p.Subject):
+		return approvalErr("approval request %s was made by someone else", id)
+	case a.Tool != tool || a.ArgsHash != argsHash(prep.Args):
+		return approvalErr("approval request %s was for other arguments; request approval again", id)
+	case a.Status == store.ApprovalPending:
+		return approvalErr("approval request %s has not been decided yet", id)
+	case a.Status == store.ApprovalDenied:
+		return approvalErr("approval request %s was denied by %s: %s", id, a.DecidedBy, a.Reason)
+	case a.Status == store.ApprovalUsed:
+		return approvalErr("approval request %s has already been used", id)
+	case !now.Before(a.ExpiresAt):
+		return approvalErr("approval request %s expired at %s; request approval again", id, a.ExpiresAt.Format(time.RFC3339))
+	case a.Rule != dec.Rule:
+		return approvalErr("the policy that required approval request %s changed (rule %s, now %s); request approval again", id, a.Rule, dec.Rule)
+	case a.Profile != profile:
+		return approvalErr("approval request %s was for profile %s, the call now runs with %s; request approval again", id, a.Profile, profile)
+	case core.NormalizeSubject(a.DecidedBy) == a.Requester:
+		return approvalErr("approval request %s was decided by its requester: an approver cannot approve their own request", id)
+	case !dec.Approvers.Includes(decider):
+		return approvalErr("%s, who approved request %s, is no longer an approver; request approval again", a.DecidedBy, id)
+	}
+	return nil
 }
 
 func isInvalid(err error) bool { return errors.Is(err, core.ErrInvalidInput) }

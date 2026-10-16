@@ -124,3 +124,28 @@ func TestRestartPreviewIsStable(t *testing.T) {
 		t.Fatalf("previews differ: %q vs %q", a.Diff, b.Diff)
 	}
 }
+
+// Scaling is refused whenever something may revert it: when unsure, refuse.
+func TestScaleRefusesEveryKnownReconciler(t *testing.T) {
+	isController := true
+	for name, tt := range map[string]struct {
+		mutate func(*appsv1.Deployment)
+		want   string
+	}{
+		"argo label tracking": {func(d *appsv1.Deployment) { d.Labels = map[string]string{"app.kubernetes.io/instance": "api"} }, "app.kubernetes.io/instance"},
+		"helm annotations":    {func(d *appsv1.Deployment) { d.Annotations = map[string]string{"meta.helm.sh/release-name": "api"} }, "Helm"},
+		"controller owner": {func(d *appsv1.Deployment) {
+			d.OwnerReferences = []metav1.OwnerReference{{APIVersion: "example.com/v1", Kind: "App", Name: "api", Controller: &isController}}
+		}, "App api"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := deployment()
+			tt.mutate(d)
+			c := fake.NewClientset(d)
+			_, err := NewWorkloads(c).ScaleWorkload(context.Background(), apiRef, 3, true)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}

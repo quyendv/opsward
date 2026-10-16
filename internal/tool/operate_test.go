@@ -19,7 +19,7 @@ func TestScaleWorkloadPreviewsThenApplies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tl.Risk != core.RiskWrite || !slices.Contains(tl.Args, "approval") {
+	if tl.Risk != core.RiskWrite {
 		t.Fatalf("tool = %+v", tl)
 	}
 	p, err := tl.Prepare(json.RawMessage(`{"environment":"staging","namespace":"shop","kind":"Deployment","name":"api","replicas":5}`))
@@ -77,7 +77,7 @@ func (s *memApprovalStore) ListApprovals(context.Context, time.Time) ([]store.Ap
 	return out, nil
 }
 
-func (s *memApprovalStore) DecideApproval(_ context.Context, id, status, by, reason string, at time.Time) (bool, error) {
+func (s *memApprovalStore) DecideApproval(_ context.Context, id, status, by string, _ []string, reason string, at time.Time) (bool, error) {
 	a := s.m[id]
 	if a.Status != store.ApprovalPending {
 		return false, nil

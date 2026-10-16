@@ -11,7 +11,7 @@ import (
 	"github.com/quyendv/opsward/internal/store"
 )
 
-const approvalColumns = `id, requester, tool, environment, namespace, kind, name, args_hash, diff, approver_users, approver_groups, status, created_ns, expires_ns, decided_by, decided_ns, reason, used_ns`
+const approvalColumns = `id, requester, tool, environment, namespace, kind, name, args_hash, diff, approver_users, approver_groups, status, created_ns, expires_ns, decided_by, decided_ns, reason, used_ns, rule, profile, decided_groups`
 
 func nonNil(s []string) []string {
 	if s == nil {
@@ -22,9 +22,10 @@ func nonNil(s []string) []string {
 
 // CreateApproval implements store.Store.
 func (s *Store) CreateApproval(ctx context.Context, a store.Approval) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO approvals (`+approvalColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+	_, err := s.pool.Exec(ctx, `INSERT INTO approvals (`+approvalColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
 		a.ID, a.Requester, a.Tool, a.Environment, a.Namespace, a.Kind, a.Name, a.ArgsHash, a.Diff, nonNil(a.ApproverUsers), nonNil(a.ApproverGroups),
-		a.Status, a.CreatedAt.UnixNano(), a.ExpiresAt.UnixNano(), a.DecidedBy, nanos(a.DecidedAt), a.Reason, nanos(a.UsedAt))
+		a.Status, a.CreatedAt.UnixNano(), a.ExpiresAt.UnixNano(), a.DecidedBy, nanos(a.DecidedAt), a.Reason, nanos(a.UsedAt),
+		a.Rule, a.Profile, nonNil(a.DecidedGroups))
 	if err != nil {
 		return fmt.Errorf("postgres: create approval: %w", err)
 	}
@@ -57,9 +58,10 @@ func (s *Store) ListApprovals(ctx context.Context, since time.Time) ([]store.App
 }
 
 // DecideApproval implements store.Store.
-func (s *Store) DecideApproval(ctx context.Context, id, status, by, reason string, at time.Time) (bool, error) {
-	tag, err := s.pool.Exec(ctx, `UPDATE approvals SET status = $1, decided_by = $2, reason = $3, decided_ns = $4 WHERE id = $5 AND status = $6`,
-		status, by, reason, at.UnixNano(), id, store.ApprovalPending)
+func (s *Store) DecideApproval(ctx context.Context, id, status, by string, byGroups []string, reason string, at time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE approvals SET status = $1, decided_by = $2, decided_groups = $3, reason = $4, decided_ns = $5
+		WHERE id = $6 AND status = $7 AND expires_ns > $5`,
+		status, by, nonNil(byGroups), reason, at.UnixNano(), id, store.ApprovalPending)
 	if err != nil {
 		return false, fmt.Errorf("postgres: decide approval: %w", err)
 	}
@@ -68,7 +70,7 @@ func (s *Store) DecideApproval(ctx context.Context, id, status, by, reason strin
 
 // UseApproval implements store.Store.
 func (s *Store) UseApproval(ctx context.Context, id string, at time.Time) (bool, error) {
-	tag, err := s.pool.Exec(ctx, `UPDATE approvals SET status = $1, used_ns = $2 WHERE id = $3 AND status = $4`,
+	tag, err := s.pool.Exec(ctx, `UPDATE approvals SET status = $1, used_ns = $2 WHERE id = $3 AND status = $4 AND expires_ns > $2`,
 		store.ApprovalUsed, at.UnixNano(), id, store.ApprovalApproved)
 	if err != nil {
 		return false, fmt.Errorf("postgres: use approval: %w", err)
@@ -80,7 +82,8 @@ func scanApproval(row pgx.Row) (store.Approval, error) {
 	var a store.Approval
 	var created, expires, decided, used int64
 	if err := row.Scan(&a.ID, &a.Requester, &a.Tool, &a.Environment, &a.Namespace, &a.Kind, &a.Name, &a.ArgsHash, &a.Diff,
-		&a.ApproverUsers, &a.ApproverGroups, &a.Status, &created, &expires, &a.DecidedBy, &decided, &a.Reason, &used); err != nil {
+		&a.ApproverUsers, &a.ApproverGroups, &a.Status, &created, &expires, &a.DecidedBy, &decided, &a.Reason, &used,
+		&a.Rule, &a.Profile, &a.DecidedGroups); err != nil {
 		return store.Approval{}, err
 	}
 	a.CreatedAt, a.ExpiresAt = time.Unix(0, created).UTC(), time.Unix(0, expires).UTC()

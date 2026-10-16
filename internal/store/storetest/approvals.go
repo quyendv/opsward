@@ -14,7 +14,7 @@ func approval(id string, created time.Time) store.Approval {
 	return store.Approval{
 		ID: id, Requester: "alice@example.com", Tool: "scale_workload",
 		Environment: "staging", Namespace: "shop", Kind: "Deployment", Name: "api",
-		ArgsHash: "sha256:abc", Diff: "spec.replicas: 3 -> 5",
+		ArgsHash: "sha256:abc", Diff: "spec.replicas: 3 -> 5", Rule: "team-a-scale", Profile: "operator",
 		ApproverUsers: []string{"lead@example.com"}, ApproverGroups: []string{"platform"},
 		Status: store.ApprovalPending, CreatedAt: created, ExpiresAt: created.Add(time.Hour),
 	}
@@ -35,7 +35,7 @@ func Approvals(t *testing.T, open func(t *testing.T) store.Store) {
 			t.Fatalf("Approval = %v, %v", ok, err)
 		}
 		if got.Requester != want.Requester || got.Tool != want.Tool || got.Name != "api" || got.ArgsHash != want.ArgsHash ||
-			got.Diff != want.Diff || !slices.Equal(got.ApproverGroups, want.ApproverGroups) || !slices.Equal(got.ApproverUsers, want.ApproverUsers) ||
+			got.Diff != want.Diff || got.Rule != want.Rule || got.Profile != want.Profile || !slices.Equal(got.ApproverGroups, want.ApproverGroups) || !slices.Equal(got.ApproverUsers, want.ApproverUsers) ||
 			got.Status != store.ApprovalPending || !got.CreatedAt.Equal(t0) || !got.ExpiresAt.Equal(t0.Add(time.Hour)) || !got.DecidedAt.IsZero() {
 			t.Fatalf("Approval = %+v", got)
 		}
@@ -47,15 +47,16 @@ func Approvals(t *testing.T, open func(t *testing.T) store.Store) {
 	t.Run("decide only a pending request", func(t *testing.T) {
 		s := open(t)
 		_ = s.CreateApproval(ctx, approval("r1", t0))
-		ok, err := s.DecideApproval(ctx, "r1", store.ApprovalApproved, "lead@example.com", "fine", t0.Add(time.Minute))
+		ok, err := s.DecideApproval(ctx, "r1", store.ApprovalApproved, "lead@example.com", []string{"platform"}, "fine", t0.Add(time.Minute))
 		if err != nil || !ok {
 			t.Fatalf("DecideApproval = %v, %v", ok, err)
 		}
-		if ok, _ := s.DecideApproval(ctx, "r1", store.ApprovalDenied, "other@example.com", "", t0.Add(2*time.Minute)); ok {
+		if ok, _ := s.DecideApproval(ctx, "r1", store.ApprovalDenied, "other@example.com", nil, "", t0.Add(2*time.Minute)); ok {
 			t.Fatal("a decided request was decided again")
 		}
 		got, _, _ := s.Approval(ctx, "r1")
-		if got.Status != store.ApprovalApproved || got.DecidedBy != "lead@example.com" || got.Reason != "fine" || !got.DecidedAt.Equal(t0.Add(time.Minute)) {
+		if got.Status != store.ApprovalApproved || got.DecidedBy != "lead@example.com" || !slices.Equal(got.DecidedGroups, []string{"platform"}) ||
+			got.Reason != "fine" || !got.DecidedAt.Equal(t0.Add(time.Minute)) {
 			t.Fatalf("decided = %+v", got)
 		}
 	})
@@ -66,7 +67,7 @@ func Approvals(t *testing.T, open func(t *testing.T) store.Store) {
 		if ok, _ := s.UseApproval(ctx, "r1", t0); ok {
 			t.Fatal("a pending request was used")
 		}
-		_, _ = s.DecideApproval(ctx, "r1", store.ApprovalApproved, "lead@example.com", "", t0)
+		_, _ = s.DecideApproval(ctx, "r1", store.ApprovalApproved, "lead@example.com", nil, "", t0)
 		var wg sync.WaitGroup
 		used := make(chan bool, 8)
 		for range 8 {
@@ -94,6 +95,20 @@ func Approvals(t *testing.T, open func(t *testing.T) store.Store) {
 		got, _, _ := s.Approval(ctx, "r1")
 		if got.Status != store.ApprovalUsed || !got.UsedAt.Equal(t0.Add(time.Minute)) {
 			t.Fatalf("used = %+v", got)
+		}
+	})
+
+	// Expiry holds at the moment of the write, not only when a caller checked it.
+	t.Run("expired requests cannot be decided or used", func(t *testing.T) {
+		s := open(t)
+		_ = s.CreateApproval(ctx, approval("r1", t0))
+		late := t0.Add(2 * time.Hour)
+		if ok, _ := s.DecideApproval(ctx, "r1", store.ApprovalApproved, "lead@example.com", nil, "", late); ok {
+			t.Fatal("decided after expiry")
+		}
+		_, _ = s.DecideApproval(ctx, "r1", store.ApprovalApproved, "lead@example.com", nil, "", t0)
+		if ok, _ := s.UseApproval(ctx, "r1", late); ok {
+			t.Fatal("used after expiry")
 		}
 	})
 

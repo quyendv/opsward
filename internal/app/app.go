@@ -531,6 +531,6 @@ func (noApprovals) ListApprovals(context.Context, time.Time) ([]store.Approval, 
 	return nil, errors.New("not available while checking")
 }
 
-func (noApprovals) DecideApproval(context.Context, string, string, string, string, time.Time) (bool, error) {
+func (noApprovals) DecideApproval(context.Context, string, string, string, []string, string, time.Time) (bool, error) {
 	return false, errors.New("not available while checking")
 }

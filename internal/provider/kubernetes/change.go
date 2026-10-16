@@ -20,16 +20,26 @@ const (
 	restartAnnotation = "kubectl.kubernetes.io/restartedAt"
 )
 
-// reconciler names what manages an object, from the markers in docs/design/0007.
+// reconciler names what manages an object, from the markers in docs/design/0007. When a
+// marker is ambiguous it is still reported: refusing a change that would not have been
+// reverted costs less than accepting one that will be.
 func reconciler(m metav1.Object) string {
 	a, l := m.GetAnnotations(), m.GetLabels()
+	for _, o := range m.GetOwnerReferences() {
+		if o.Controller != nil && *o.Controller {
+			return fmt.Sprintf("its controller %s %s", o.Kind, o.Name)
+		}
+	}
 	switch {
 	case a["argocd.argoproj.io/tracking-id"] != "" || l["argocd.argoproj.io/instance"] != "":
 		return "Argo CD"
 	case l["kustomize.toolkit.fluxcd.io/name"] != "" || l["helm.toolkit.fluxcd.io/name"] != "":
 		return "Flux"
-	case l["app.kubernetes.io/managed-by"] == "Helm":
+	case l["app.kubernetes.io/managed-by"] == "Helm" || a["meta.helm.sh/release-name"] != "":
 		return "Helm"
+	case l["app.kubernetes.io/instance"] != "":
+		// Argo CD's label tracking, or a chart's convention: either may revert it.
+		return "the tool that set app.kubernetes.io/instance (Argo CD label tracking, Helm)"
 	}
 	return ""
 }

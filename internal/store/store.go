@@ -58,9 +58,11 @@ type Store interface {
 	ListApprovals(ctx context.Context, since time.Time) ([]Approval, error)
 	// DecideApproval sets a pending request's status to approved or denied. It reports
 	// whether it did: a request that is not pending is left as it is.
-	DecideApproval(ctx context.Context, id, status, by, reason string, at time.Time) (bool, error)
+	// The decider's groups are kept, so that the approval can be checked against policy
+	// when it is used. A request past its expiry at is not decided.
+	DecideApproval(ctx context.Context, id, status, by string, byGroups []string, reason string, at time.Time) (bool, error)
 	// UseApproval marks an approved request used, in one atomic step, and reports whether
-	// it did: a request runs at most once.
+	// it did: a request runs at most once, and not after its expiry.
 	UseApproval(ctx context.Context, id string, at time.Time) (bool, error)
 
 	// Ping reports whether the store answers queries.
@@ -101,6 +103,10 @@ type Approval struct {
 	Name        string
 	ArgsHash    string // the call's arguments, without the approval id
 	Diff        string
+	// Rule and Profile are those of the decision that required approval; a retry under
+	// another rule or profile does not use it.
+	Rule    string
+	Profile string
 	// ApproverUsers and ApproverGroups are named by the binding that required approval.
 	ApproverUsers  []string
 	ApproverGroups []string
@@ -108,6 +114,7 @@ type Approval struct {
 	CreatedAt      time.Time
 	ExpiresAt      time.Time
 	DecidedBy      string
+	DecidedGroups  []string
 	DecidedAt      time.Time // zero: not decided
 	Reason         string
 	UsedAt         time.Time // zero: not used

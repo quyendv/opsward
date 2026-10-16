@@ -43,7 +43,7 @@ func (s *memApprovals) UseApproval(_ context.Context, id string, at time.Time) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a, ok := s.m[id]
-	if !ok || a.Status != store.ApprovalApproved {
+	if !ok || a.Status != store.ApprovalApproved || !at.Before(a.ExpiresAt) {
 		return false, nil
 	}
 	a.Status, a.UsedAt = store.ApprovalUsed, at
@@ -150,7 +150,9 @@ func TestApprovalTicketAndRetry(t *testing.T) {
 	if _, err := e.Invoke(ctx, alice, "scale", retry); err == nil || st.ran != 0 {
 		t.Fatalf("ran before approval: %v", err)
 	}
-	ap.set(req.ID, func(a *store.Approval) { a.Status = store.ApprovalApproved; a.DecidedBy = "lead@example.com" })
+	ap.set(req.ID, func(a *store.Approval) {
+		a.Status, a.DecidedBy, a.DecidedGroups = store.ApprovalApproved, "lead@example.com", []string{"platform"}
+	})
 
 	bob := core.Principal{Subject: "bob@example.com", Adapter: "test"}
 	for name, tt := range map[string]struct {
@@ -203,5 +205,131 @@ func TestApprovalWithoutStoreIsDenied(t *testing.T) {
 	var denied *DeniedError
 	if !errors.As(err, &denied) || st.ran != 0 {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// The approval argument belongs to the engine: a tool whose schema does not know it, such
+// as a read under an approve binding, can still be retried with it, and it is not part
+// of the arguments the tool, policy and the hash see.
+func TestApprovalArgumentIsTheEngines(t *testing.T) {
+	var seen []map[string]any
+	strict := Tool{
+		Name: "strict", Risk: core.RiskRead, InputSchema: &jsonschema.Schema{Type: "object"},
+		Prepare: func(raw json.RawMessage) (*Prepared, error) {
+			var args map[string]any
+			_ = json.Unmarshal(raw, &args)
+			if _, ok := args["approval"]; ok {
+				return nil, errors.New(`unexpected additional properties ["approval"]`)
+			}
+			seen = append(seen, args)
+			return &Prepared{
+				Scope: core.Scope{Environment: "staging", Namespace: "team-a-api", Kind: "Deployment", Name: "api"}, Args: args,
+				Run: func(context.Context, string) (any, error) { return "ok", nil },
+			}, nil
+		},
+	}
+	ap := &memApprovals{}
+	e, err := New(Options{
+		Tools: []Tool{strict}, Environments: []Environment{{Name: "staging", Namespaces: []string{"team-a-*"}}},
+		Authorizer: authorizerFunc(func(core.Request) core.Decision {
+			return core.Decision{Effect: core.EffectApprove, Rule: "b", Approvers: &core.Approvers{Users: []string{"lead@example.com"}}}
+		}),
+		Auditor: &recordingAuditor{}, Approvals: ap,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Invoke(context.Background(), alice, "strict", json.RawMessage(`{"x":1}`))
+	var req *ApprovalRequiredError
+	if !errors.As(err, &req) {
+		t.Fatal(err)
+	}
+	ap.set(req.ID, func(a *store.Approval) { a.Status = store.ApprovalApproved; a.DecidedBy = "lead@example.com" })
+	if _, err := e.Invoke(context.Background(), alice, "strict", json.RawMessage(`{"x":1,"approval":"`+req.ID+`"}`)); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+}
+
+// A tool that grants approvals cannot itself wait for one: that would never end.
+func TestNeverApprovedToolIsDeniedUnderApprove(t *testing.T) {
+	decide := Tool{
+		Name: "decide", Risk: core.RiskWrite, Global: true, NeverApproved: true, InputSchema: &jsonschema.Schema{Type: "object"},
+		Prepare: func(json.RawMessage) (*Prepared, error) {
+			return &Prepared{Args: map[string]any{}, Run: func(context.Context, string) (any, error) { return "ok", nil }}, nil
+		},
+	}
+	e, err := New(Options{
+		Tools:      []Tool{decide},
+		Authorizer: authorizerFunc(func(core.Request) core.Decision { return core.Decision{Effect: core.EffectApprove, Rule: "all-writes"} }),
+		Auditor:    &recordingAuditor{}, Approvals: &memApprovals{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Invoke(context.Background(), alice, "decide", json.RawMessage(`{}`))
+	var denied *DeniedError
+	if !errors.As(err, &denied) || !strings.Contains(err.Error(), "cannot require approval") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Clients see the approval argument on every tool that can wait for one, and only when
+// approvals exist.
+func TestToolSchemasOfferTheApprovalArgument(t *testing.T) {
+	st := &scaleTool{}
+	schema := func(e *Engine) *jsonschema.Schema { return e.Tools()[0].InputSchema }
+	if s := schema(approvalEngine(t, st, core.EffectAllow, &recordingAuditor{}, &memApprovals{})); s.Properties[ApprovalArg] == nil {
+		t.Fatalf("properties = %v", s.Properties)
+	}
+	if s := schema(approvalEngine(t, st, core.EffectAllow, &recordingAuditor{}, nil)); s.Properties[ApprovalArg] != nil {
+		t.Fatal("offered without approvals")
+	}
+	if st.tool().InputSchema.Properties != nil {
+		t.Fatal("the tool's own schema was modified")
+	}
+}
+
+// An approval holds only under the policy that required it: same rule and profile, a
+// decider who is still an approver, and never the requester.
+func TestApprovalIsCheckedAgainstPolicyWhenUsed(t *testing.T) {
+	for name, tt := range map[string]struct {
+		change func(d *core.Decision, a *store.Approval)
+		want   string
+	}{
+		"rule changed":    {func(d *core.Decision, _ *store.Approval) { d.Rule = "new-strict" }, "policy"},
+		"profile changed": {func(d *core.Decision, _ *store.Approval) { d.Profile = "team-a" }, "profile"},
+		"approver removed": {func(d *core.Decision, _ *store.Approval) {
+			d.Approvers = &core.Approvers{Users: []string{"cto@example.com"}}
+		}, "no longer an approver"},
+		"decided by requester": {func(_ *core.Decision, a *store.Approval) {
+			a.DecidedBy, a.DecidedGroups = alice.Subject, []string{"platform"}
+		}, "own request"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := &scaleTool{diff: "d"}
+			ap := &memApprovals{}
+			dec := core.Decision{Effect: core.EffectApprove, Rule: "b", Approvers: &core.Approvers{Groups: []string{"platform"}}}
+			e, err := New(Options{
+				Tools: []Tool{st.tool()}, Environments: []Environment{{Name: "staging", Namespaces: []string{"team-a-*"}}},
+				Authorizer: authorizerFunc(func(core.Request) core.Decision { return dec }),
+				Auditor:    &recordingAuditor{}, Approvals: ap,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = e.Invoke(context.Background(), alice, "scale", json.RawMessage(`{}`))
+			var req *ApprovalRequiredError
+			if !errors.As(err, &req) {
+				t.Fatal(err)
+			}
+			ap.set(req.ID, func(a *store.Approval) {
+				a.Status, a.DecidedBy, a.DecidedGroups = store.ApprovalApproved, "lead@example.com", []string{"platform"}
+				tt.change(&dec, a)
+			})
+			_, err = e.Invoke(context.Background(), alice, "scale", json.RawMessage(`{"approval":"`+req.ID+`"}`))
+			if err == nil || !strings.Contains(err.Error(), tt.want) || st.ran != 0 {
+				t.Fatalf("err = %v, ran %d", err, st.ran)
+			}
+		})
 	}
 }

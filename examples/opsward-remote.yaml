@@ -43,8 +43,8 @@ providers:
       cluster-a:
         profiles:
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
-          # patch on deployments and statefulsets (restart, scale), list on
-          # horizontalpodautoscalers; nothing else.
+          # get and patch on deployments, statefulsets and daemonsets (restart, scale),
+          # list on horizontalpodautoscalers; nothing else.
           operator: { kubeconfig: /etc/opsward/cluster-a-operator.kubeconfig }
 
 environments:
@@ -59,6 +59,7 @@ policy:
     viewer: { risk: [read] }
     operator: { tools: [restart_workload, scale_workload] }
     approver: { tools: [list_approvals, decide_approval] }
+    requester: { tools: [list_approvals] } # to follow one's own requests
   bindings:
     - name: platform-view-everything
       subjects: { groups: [platform] }
@@ -79,3 +80,6 @@ policy:
     - name: platform-approves
       subjects: { groups: [platform] }
       role: approver
+    - name: team-a-follows-requests
+      subjects: { groups: [team-a] }
+      role: requester

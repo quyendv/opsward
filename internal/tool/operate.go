@@ -16,15 +16,10 @@ import (
 
 const maxReplicas = 1000
 
-type restartInput struct {
-	workloadInput
-	Approval string `json:"approval,omitempty" jsonschema:"id of an approved request, when calling again after a call needed approval"`
-}
-
+// The approval argument of a retried call is the engine's (engine.ApprovalArg).
 type scaleInput struct {
 	workloadInput
-	Replicas int    `json:"replicas" jsonschema:"desired number of replicas"`
-	Approval string `json:"approval,omitempty" jsonschema:"id of an approved request, when calling again after a call needed approval"`
+	Replicas int `json:"replicas" jsonschema:"desired number of replicas"`
 }
 
 // change turns a provider's change into the one engine and audit record.
@@ -65,7 +60,7 @@ func writePrepared(src capability.WorkloadSource, v workloadInput, obj map[strin
 
 // RestartWorkload is restart_workload.
 func RestartWorkload(src capability.WorkloadSource) (engine.Tool, error) {
-	in, err := newInput[restartInput](refineWorkloadInput)
+	in, err := newInput[workloadInput](refineWorkloadInput)
 	if err != nil {
 		return engine.Tool{}, err
 	}
@@ -79,7 +74,7 @@ func RestartWorkload(src capability.WorkloadSource) (engine.Tool, error) {
 			if err != nil {
 				return nil, err
 			}
-			return writePrepared(src, v.workloadInput, obj, func(ctx context.Context, w capability.Workloads, ref capability.WorkloadRef, dry bool) (*capability.WorkloadChange, error) {
+			return writePrepared(src, v, obj, func(ctx context.Context, w capability.Workloads, ref capability.WorkloadRef, dry bool) (*capability.WorkloadChange, error) {
 				return w.RestartWorkload(ctx, ref, dry)
 			}), nil
 		},
@@ -119,7 +114,7 @@ func ScaleWorkload(src capability.WorkloadSource) (engine.Tool, error) {
 type ApprovalStore interface {
 	Approval(ctx context.Context, id string) (store.Approval, bool, error)
 	ListApprovals(ctx context.Context, since time.Time) ([]store.Approval, error)
-	DecideApproval(ctx context.Context, id, status, by, reason string, at time.Time) (bool, error)
+	DecideApproval(ctx context.Context, id, status, by string, byGroups []string, reason string, at time.Time) (bool, error)
 }
 
 // approvalListWindow is how far back list_approvals looks.
@@ -162,7 +157,7 @@ func ListApprovals(st ApprovalStore) (engine.Tool, error) {
 	return engine.Tool{
 		Name:        "list_approvals",
 		Description: "List approval requests from the last day that you made or may decide, with the change each one makes.",
-		Risk:        core.RiskRead, InputSchema: in.schema, Args: in.names, Global: true,
+		Risk:        core.RiskRead, InputSchema: in.schema, Args: in.names, Global: true, NeverApproved: true,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			_, obj, err := in.decode(raw)
 			if err != nil {
@@ -208,7 +203,7 @@ func DecideApproval(st ApprovalStore) (engine.Tool, error) {
 		Name: "decide_approval",
 		Description: "Approve or deny an approval request that you may decide (see list_approvals). You cannot decide " +
 			"your own request. The requester then calls again with the approval id.",
-		Risk: core.RiskWrite, InputSchema: in.schema, Args: in.names, Global: true,
+		Risk: core.RiskWrite, InputSchema: in.schema, Args: in.names, Global: true, NeverApproved: true,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
 			if err != nil {
@@ -236,12 +231,12 @@ func DecideApproval(st ApprovalStore) (engine.Tool, error) {
 				if v.Decision == "deny" {
 					status = store.ApprovalDenied
 				}
-				done, err := st.DecideApproval(ctx, v.ID, status, core.NormalizeSubject(p.Subject), v.Reason, now.UTC())
+				done, err := st.DecideApproval(ctx, v.ID, status, core.NormalizeSubject(p.Subject), p.Groups, v.Reason, now.UTC())
 				if err != nil {
 					return nil, err
 				}
 				if !done {
-					return nil, core.InvalidInput(fmt.Sprintf("approval request %s has already been decided", v.ID))
+					return nil, core.InvalidInput(fmt.Sprintf("approval request %s has already been decided, or has expired", v.ID))
 				}
 				a.Status, a.DecidedBy, a.Reason = status, core.NormalizeSubject(p.Subject), v.Reason
 				return view(a, p, now), nil

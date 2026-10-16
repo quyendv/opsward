@@ -40,9 +40,14 @@ snapshot is only as safe as the store that holds it.
 
 | Reconciler | Recognized by |
 |---|---|
+| A controller | an owner reference with `controller: true` (an operator's custom resource) |
 | Argo CD | annotation `argocd.argoproj.io/tracking-id`, label `argocd.argoproj.io/instance` |
 | Flux | labels `kustomize.toolkit.fluxcd.io/name`, `helm.toolkit.fluxcd.io/name` |
-| Helm | label `app.kubernetes.io/managed-by: Helm` |
+| Helm | label `app.kubernetes.io/managed-by: Helm`, annotation `meta.helm.sh/release-name` |
+| Argo CD or Helm | label `app.kubernetes.io/instance`, which Argo CD's label tracking and many charts set |
+
+A marker that is ambiguous still counts: refusing a change that would not have been
+reverted costs less than accepting one that will be.
 
 `scale_workload` is refused on a reconciled workload: its replicas are declared in the
 source, and the change belongs there. `restart_workload` is accepted, because a restart is
@@ -68,11 +73,28 @@ A call whose decision is `approve` is not run. It becomes an **approval request*
    that required approval, and must not be the requester. Deciding is itself a call:
    policy must allow the tool, and it is audited.
 3. The requester calls the same tool again with the same arguments and `approval: <id>`.
-   The engine runs it only if the request was approved, is the caller's own, has the same
-   tool and argument hash, has not expired, and has not been used; using it is a single
-   atomic step, so a request runs at most once. Policy is decided again: a deny that applies
-   now still wins, and the call must still resolve to `approve` under the binding that the
-   approval was for.
+   The `approval` argument belongs to the engine, which takes it out before the tool sees
+   the arguments, so any tool can be retried and the argument hash is that of the tool's
+   own arguments. The engine runs the call only if the request was approved, is the
+   caller's own, has the same tool and argument hash, has not expired, and has not been
+   used; using it is a single atomic step that also checks the expiry, so a request runs
+   at most once and never late.
+
+   **Policy is decided again**, and the approval must hold under it: a deny that applies
+   now wins; the call must resolve to `approve` under the same binding (rule) and with the
+   same profile as when it was requested; whoever approved must still be one of that
+   binding's approvers, judged by the subject and groups they had when deciding; and they
+   must not be the requester. Removing an approver from policy therefore voids the
+   approvals they gave. A preview that fails is recorded as `invalid` or `error`, not as
+   a denial.
+
+Approvers are compared by subject. One person holding two identities with different
+subjects (an API token for `alice@example.com` and an OIDC identity whose subject claim
+is an opaque ID) could approve their own request; issue tokens with the same subject the
+issuer uses.
+
+The tools that list and decide approvals cannot themselves require approval: a binding
+that would require it denies them, with the reason.
 
 Requests expire after an hour unless `approvals.ttl` says otherwise; expiry counts from the
 request, so a slow approval leaves less time to run. An approval is bound to the exact
