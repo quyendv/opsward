@@ -58,6 +58,13 @@ func (m Mapping) Map(labels map[string]string, envs []Environment) (Target, erro
 		}
 		return Target{}, fmt.Errorf("%w: no workload label (%s)", ErrUnmapped, strings.Join(names, ", "))
 	}
+	// Names reach the engine's arguments and the audit record; Kubernetes names are at
+	// most 253 bytes.
+	for _, v := range []string{t.Namespace, t.Name} {
+		if len(v) > 253 {
+			return Target{}, fmt.Errorf("%w: a label value is longer than 253 bytes", ErrUnmapped)
+		}
+	}
 	var matched []string
 	for _, e := range envs {
 		if m.EnvironmentLabel != "" && labels[m.EnvironmentLabel] != e.ClusterLabelValue {

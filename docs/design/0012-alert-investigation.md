@@ -25,8 +25,14 @@ principal, as narrow as the operator wants. Investigations are audited like any 
 the adapter `alertmanager`.
 
 The request is answered at once (202) with how many alerts were queued; investigations run
-in the background, a few at a time, from a bounded queue. A full queue drops the alert and
-logs it rather than holding Alertmanager's request. Resolved alerts are not investigated.
+in the background, a few at a time, from a bounded queue. A full queue drops the alert
+rather than holding Alertmanager's request, and answers 503 so that Alertmanager delivers
+again; the alerts queued meanwhile are then duplicates. Resolved alerts are not
+investigated. On shutdown, investigations under way finish before the store closes.
+
+An alert (its fingerprint, or its labels without one) is investigated once per `dedupe`
+window; `dedupe: 0` turns that off. Resolving it clears the window, and so does an
+investigation that fails, so that the next delivery tries again.
 
 ## From an alert to a workload
 
@@ -54,13 +60,17 @@ a team learns which alert rules lack the labels.
 ## Notifying
 
 Each investigated alert produces one notification: the alert's name, severity, summary and
-labels, the workload, and the diagnosis, redacted like every result.
+labels, the workload, and the diagnosis. All of it is redacted like every result: alert
+labels and annotations carry what their rules put there, such as a probed URL. The
+notifications of an alert have their own time limit, so an investigation that ran out of
+time is still reported.
 
 - `webhook` posts JSON (`{alert, workload, diagnosis, error}`), with a bearer token from a
   file if given.
 - `slack` posts a short message to an incoming webhook URL, kept in a file because the URL
   is the credential: readiness, the waiting reasons, the last termination, warning events
-  and the last log lines of a crashed container.
+  and the last log lines of a crashed container. Values are escaped as Slack requires, so
+  that a log line or an event cannot mention a channel or insert a link.
 
 Notification failures are logged and do not retry; the audit has the investigation.
 

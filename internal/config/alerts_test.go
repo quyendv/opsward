@@ -35,6 +35,7 @@ func TestAlertsReject(t *testing.T) {
 		{"webhook without url", remote + strings.Replace(alertsSection, " url: https://hooks.example.com/opsward,", "", 1), "alerts.notify[0]: url must be an http or https URL"},
 		{"slack inline url", remote + strings.Replace(alertsSection, "{ file: /etc/opsward/slack-url }", "https://hooks.slack.example.com/x", 1), "an inline value is not accepted"},
 		{"slack without url", remote + strings.Replace(alertsSection, ", webhookURL: { file: /etc/opsward/slack-url }", "", 1), "alerts.notify[1]: webhookURL { file } or { env } is required"},
+		{"no workload labels", remote + alertsSection + "  workloadLabels: []\n", "alerts.workloadLabels: empty"},
 		{"unknown kind", remote + alertsSection + "  workloadLabels: [{ label: job, kind: Job }]\n", `alerts.workloadLabels[0]: kind "Job"`},
 	}
 	for _, tt := range tests {

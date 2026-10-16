@@ -67,6 +67,9 @@ func (c *Config) validateAlerts(fail func(string, ...any)) {
 	if a.Principal == "" {
 		fail("alerts.principal is required: the subject of the token Alertmanager sends")
 	}
+	if a.WorkloadLabels != nil && len(a.WorkloadLabels) == 0 {
+		fail("alerts.workloadLabels: empty, so no alert would map to a workload; leave it out for the defaults")
+	}
 	if *a.Dedupe < 0 {
 		fail("alerts.dedupe must not be negative")
 	}

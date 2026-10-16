@@ -165,13 +165,20 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		opt.Resource = &mcpadapter.Resource{URL: cfg.ResourceURL(), AuthorizationServers: []string{o.Issuer}, Scopes: o.Scopes}
 		go a.Identity.Discover(ctx)
 	}
+	alertsDone := make(chan struct{})
 	if a.Alerts != nil {
-		go a.Alerts.Run(ctx)
+		go func() { a.Alerts.Run(ctx); close(alertsDone) }()
 		opt.Routes = map[string]mcpadapter.PrincipalHandler{"/alerts/alertmanager": a.Alerts.Handle}
 		log.Info("receiving alerts", "path", "/alerts/alertmanager", "principal", cfg.Alerts.Principal)
+	} else {
+		close(alertsDone)
 	}
 	log.Info("serving MCP over HTTP", "version", version.Version, "tools", len(a.Engine.Tools()), "address", ln.Addr().String(), "tls", h.TLS != nil)
-	return mcpadapter.ServeHTTP(ctx, ln, a.Engine, opt)
+	err = mcpadapter.ServeHTTP(ctx, ln, a.Engine, opt)
+	// Investigations under way finish, and write their audit records, before the store
+	// closes.
+	<-alertsDone
+	return err
 }
 
 func verify(ctx context.Context, args []string, stdout io.Writer) error {

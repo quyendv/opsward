@@ -29,6 +29,7 @@ func TestMapAlertToWorkload(t *testing.T) {
 		{map[string]string{"cluster": "cluster-z", "namespace": "team-a-api", "deployment": "api"}, Target{}, "no environment"},
 		{map[string]string{"cluster": "cluster-a", "namespace": "team-a-api", "pod": "api-1"}, Target{}, "no workload label"},
 		{map[string]string{"cluster": "cluster-a", "deployment": "api"}, Target{}, "no namespace label"},
+		{map[string]string{"cluster": "cluster-a", "namespace": "team-a-api", "deployment": strings.Repeat("a", 254)}, Target{}, "longer than 253"},
 	}
 	for _, tt := range tests {
 		got, err := rules.Map(tt.labels, envs)

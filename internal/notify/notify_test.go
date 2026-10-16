@@ -93,3 +93,31 @@ func TestNotifyErrorsCarryNoCredential(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// Whoever writes logs, events or alert annotations must not reach a channel with mentions,
+// links or broken formatting: values are escaped as Slack requires.
+func TestTextEscapesForSlack(t *testing.T) {
+	n := note()
+	n.Alert.Summary = "<https://evil.example.com|runbook> & more"
+	d := n.Diagnosis.(map[string]any)
+	logs := d["logs"].([]any)
+	logs[0].(map[string]any)["lines"] = []any{"<!channel> wake up", "```", "after"}
+	got := Text(n)
+	for _, bad := range []string{"<!channel>", "<https://evil", "\n```\n```"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("text carries %q:\n%s", bad, got)
+		}
+	}
+	if !strings.Contains(got, "&lt;!channel&gt; wake up") || !strings.Contains(got, "&amp; more") {
+		t.Errorf("text is not escaped:\n%s", got)
+	}
+}
+
+func TestTextListsUnavailablePartsInOrder(t *testing.T) {
+	n := note()
+	n.Diagnosis.(map[string]any)["unavailable"] = map[string]any{"metrics": "m", "events": "e", "logs": "l"}
+	got := Text(n)
+	if i, j, k := strings.Index(got, "events:"), strings.Index(got, "logs:"), strings.Index(got, "metrics:"); i >= j || j >= k {
+		t.Fatalf("order:\n%s", got)
+	}
+}

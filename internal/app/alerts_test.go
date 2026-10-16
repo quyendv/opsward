@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,8 +54,9 @@ alerts:
 		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop"},
 		Spec:       appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}},
 	})
+	stream := &lockedBuilder{}
 	a, err := Open(context.Background(), cfg, Options{
-		Stderr: &strings.Builder{}, ConfigPath: path,
+		Stderr: stream, ConfigPath: path,
 		ClientFactory: func(kubernetes.Profile) (k8s.Interface, error) { return cluster, nil },
 	})
 	if err != nil {
@@ -82,4 +84,27 @@ alerts:
 	case <-time.After(10 * time.Second):
 		t.Fatal("no notification")
 	}
+	// The investigation is audited as the alerts principal, through the alertmanager adapter.
+	if out := stream.String(); !strings.Contains(out, `"subject":"alertmanager"`) || !strings.Contains(out, `"adapter":"alertmanager"`) ||
+		!strings.Contains(out, `"tool":"diagnose_workload"`) {
+		t.Fatalf("audit stream:\n%s", out)
+	}
+}
+
+// lockedBuilder is an audit stream written from the receiver's goroutines.
+type lockedBuilder struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuilder) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuilder) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
