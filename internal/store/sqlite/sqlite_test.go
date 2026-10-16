@@ -125,4 +125,8 @@ func TestConformance(t *testing.T) {
 		s, _ := open(t)
 		return s
 	})
+	storetest.Approvals(t, func(t *testing.T) store.Store {
+		s, _ := open(t)
+		return s
+	})
 }

@@ -15,7 +15,8 @@ Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0001](docs/design/0001-architecture.md) for the architecture,
 [0002](docs/design/0002-identity-policy-storage.md) for identity, policy and storage,
 [0005](docs/design/0005-remote-access.md) for remote access,
-[0006](docs/design/0006-discovery-and-summaries.md) for discovery and per-item authorization.
+[0006](docs/design/0006-discovery-and-summaries.md) for discovery and per-item authorization,
+[0007](docs/design/0007-operate-and-approvals.md) for writes and approvals.
 
 ## Layout
 

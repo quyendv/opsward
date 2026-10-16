@@ -106,7 +106,11 @@ func (p *Policy) Decide(req core.Request) core.Decision {
 	if best == nil {
 		return core.Decision{Effect: core.EffectDeny, Rule: core.DefaultDenyRule}
 	}
-	return core.Decision{Effect: best.Effect, Rule: best.Name, Profile: best.Profile}
+	d := core.Decision{Effect: best.Effect, Rule: best.Name, Profile: best.Profile}
+	if best.Effect == core.EffectApprove {
+		d.Approvers = &core.Approvers{Users: best.Approvers.Users, Groups: best.Approvers.Groups}
+	}
+	return d
 }
 
 // NeedsLabels reports whether any binding looks at target labels, through apps or a

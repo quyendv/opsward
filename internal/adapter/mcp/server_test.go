@@ -160,3 +160,12 @@ func TestCallResultIsCompactJSON(t *testing.T) {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
 }
+
+// Results are read by agents, not browsers: no HTML escaping of <, > and &.
+func TestCallResultIsNotHTMLEscaped(t *testing.T) {
+	cs := connect(t, func(core.Request) core.Decision { return core.Decision{Effect: core.EffectAllow} }, &nopAuditor{}, echoTool())
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"name": "2 -> 3 & <x>"}})
+	if err != nil || text(t, res) != `{"name":"2 -> 3 & <x>"}` {
+		t.Fatalf("result = %q, %v", text(t, res), err)
+	}
+}

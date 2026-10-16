@@ -2,6 +2,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"time"
@@ -132,4 +133,58 @@ type Decision struct {
 	Effect  Effect `json:"effect"`
 	Rule    string `json:"rule"`
 	Profile string `json:"profile,omitempty"`
+	// Approvers may approve the call, for effect approve.
+	Approvers *Approvers `json:"approvers,omitempty"`
+	// Approval is the approval request a call ran under (docs/design/0007).
+	Approval string `json:"approval,omitempty"`
+}
+
+// Approvers are the users and groups that may approve a call.
+type Approvers struct {
+	Users  []string `json:"users,omitempty"`
+	Groups []string `json:"groups,omitempty"`
+}
+
+// Includes reports whether p is one of the approvers.
+func (a *Approvers) Includes(p Principal) bool {
+	if a == nil || p.Subject == "" {
+		return false
+	}
+	subject := NormalizeSubject(p.Subject)
+	for _, u := range a.Users {
+		if NormalizeSubject(u) == subject {
+			return true
+		}
+	}
+	for _, g := range a.Groups {
+		for _, pg := range p.Groups {
+			if g == pg {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Change is what a write changed, or would change: the diff a dry run produced and the
+// previous values of the fields it sets (docs/design/0007).
+type Change struct {
+	Strategy string         `json:"strategy"`
+	Diff     string         `json:"diff"`
+	Previous map[string]any `json:"previous,omitempty"`
+	// Note says something the caller should know, such as a reconciler that may act.
+	Note string `json:"note,omitempty"`
+}
+
+type principalKey struct{}
+
+// WithPrincipal returns ctx carrying the principal of the call it serves.
+func WithPrincipal(ctx context.Context, p Principal) context.Context {
+	return context.WithValue(ctx, principalKey{}, p)
+}
+
+// PrincipalFrom returns the principal a call runs for.
+func PrincipalFrom(ctx context.Context) (Principal, bool) {
+	p, ok := ctx.Value(principalKey{}).(Principal)
+	return p, ok
 }

@@ -133,6 +133,21 @@ type Workloads interface {
 	// ListWorkloads returns a namespace's Deployments, StatefulSets and DaemonSets, or
 	// every namespace's for "", sorted by namespace, kind, then name.
 	ListWorkloads(ctx context.Context, namespace string) ([]WorkloadSummary, error)
+	// RestartWorkload restarts a workload's pods through its rollout, as kubectl rollout
+	// restart does. With dryRun the change is previewed by the API server, not made.
+	RestartWorkload(ctx context.Context, ref WorkloadRef, dryRun bool) (*WorkloadChange, error)
+	// ScaleWorkload sets a Deployment's or StatefulSet's replicas. A workload that a
+	// reconciler manages or an autoscaler targets is refused (docs/design/0007).
+	ScaleWorkload(ctx context.Context, ref WorkloadRef, replicas int32, dryRun bool) (*WorkloadChange, error)
+}
+
+// WorkloadChange is a narrow change to a workload, previewed or made.
+type WorkloadChange struct {
+	Diff string `json:"diff"`
+	// Previous holds the prior values of the fields the change sets, to reverse it.
+	Previous map[string]any `json:"previous"`
+	// Reconciler names what manages the workload (Argo CD, Flux, Helm), if anything.
+	Reconciler string `json:"reconciler,omitempty"`
 }
 
 // WorkloadSummary is one workload in a listing.

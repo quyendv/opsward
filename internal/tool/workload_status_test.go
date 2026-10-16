@@ -27,6 +27,23 @@ type fakeSource struct {
 
 	namespaces []string
 	summaries  []capability.WorkloadSummary
+
+	dryRuns  []bool
+	replicas int32
+	change   *capability.WorkloadChange
+}
+
+func (f *fakeSource) RestartWorkload(_ context.Context, _ capability.WorkloadRef, dryRun bool) (*capability.WorkloadChange, error) {
+	f.calls = append(f.calls, "restart")
+	f.dryRuns = append(f.dryRuns, dryRun)
+	return f.change, f.err
+}
+
+func (f *fakeSource) ScaleWorkload(_ context.Context, _ capability.WorkloadRef, replicas int32, dryRun bool) (*capability.WorkloadChange, error) {
+	f.calls = append(f.calls, "scale")
+	f.dryRuns = append(f.dryRuns, dryRun)
+	f.replicas = replicas
+	return f.change, f.err
 }
 
 func (f *fakeSource) ListNamespaces(context.Context) ([]string, error) {
