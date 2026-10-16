@@ -58,6 +58,8 @@ func TestChangeSectionRejects(t *testing.T) {
 		{"application namespace", withChange(forges+"  delivery: { type: argocd, cluster: cluster-a, applicationNamespaces: [argocd] }\n", ""), `applicationNamespaces: "argocd" is not a namespace besides argocd`},
 		{"destination of an unknown cluster", withChange(forges+"  delivery: { type: argocd, cluster: cluster-a, destinations: { cluster-z: [https://z.example.com] } }\n", ""), `providers.delivery.destinations: unknown cluster "cluster-z"`},
 		{"delivery type", withChange(forges+"  delivery: { type: flux, cluster: cluster-a }\n", ""), `delivery.type: "flux"`},
+		{"annotation paths of an unknown environment", withChange(forges, "sourceResolution:\n  annotationPaths: { prod: [apps] }\n"), `annotationPaths: unknown environment "prod"`},
+		{"annotation path not clean", withChange(forges, "sourceResolution:\n  annotationPaths: { staging: [apps/] }\n"), `"apps/" is not a clean path`},
 		{"static unknown environment", withChange(forges, "sourceResolution:\n  static:\n    - { environment: prod, namespace: shop, name: api, source: \"github:example-org/gitops//apps/api\" }\n"), `unknown environment "prod"`},
 		{"static bad source", withChange(forges, "sourceResolution:\n  static:\n    - { environment: staging, namespace: shop, name: api, source: \"apps/api\" }\n"), "want <repository>//<path>"},
 	}

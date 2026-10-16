@@ -306,3 +306,31 @@ func TestApplicationMustDeployToTheEnvironmentsCluster(t *testing.T) {
 		t.Fatalf("a listed destination: %+v, %v", m, err)
 	}
 }
+
+// An environment can bound where its workloads' annotations may point.
+func TestAnnotationPathsBoundAnnotations(t *testing.T) {
+	w := api
+	opt := Options{AnnotationKeys: []string{"opsward/source"}, AnnotationPaths: map[string][]string{"staging": {"apps/staging", "shared/values"}}}
+	for path, ok := range map[string]bool{
+		"apps/staging/api":    true,
+		"shared/values":       true,
+		"apps/staging-x/api":  false,
+		"apps/production/api": false,
+		".":                   false,
+	} {
+		w.Annotations = map[string]string{"opsward/source": "github:example-org/gitops//" + path}
+		_, err := Resolve(context.Background(), w, opt)
+		if ok && err != nil {
+			t.Errorf("%s: %v", path, err)
+		}
+		if !ok && (!errors.Is(err, ErrUnresolved) || !strings.Contains(err.Error(), "annotationPaths")) {
+			t.Errorf("%s: err = %v, want refused", path, err)
+		}
+	}
+	// Other environments, and the static map, are not bound.
+	w.Environment = "production"
+	w.Annotations = map[string]string{"opsward/source": "github:example-org/gitops//anywhere"}
+	if _, err := Resolve(context.Background(), w, opt); err != nil {
+		t.Fatal(err)
+	}
+}
