@@ -25,6 +25,19 @@ type Block struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	// Raw is the block as the model sent it. An assistant turn goes back exactly so:
+	// thinking blocks carry a signature the API checks, and blocks this package does not
+	// interpret must survive too.
+	Raw json.RawMessage `json:"-"`
+}
+
+// MarshalJSON writes Raw when the block came from the model.
+func (b Block) MarshalJSON() ([]byte, error) {
+	if b.Raw != nil {
+		return b.Raw, nil
+	}
+	type plain Block
+	return json.Marshal(plain(b))
 }
 
 // Message is a turn of the conversation, by user or assistant.

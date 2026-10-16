@@ -12,9 +12,15 @@ All notable changes to this project are documented here. The format follows
   diagnosis, a model reads the alert and the diagnosis, calls Opsward's read tools through
   the engine as the alerts principal (adapter `agent`, under policy and audit; tools that
   can write are never offered), and its short analysis goes out with the notification.
-  Bounded by `maxSteps`, `timeout` and `maxPerHour`; results reach the model redacted and
-  cut to 16 KiB. The provider is Anthropic's Messages API, spoken over HTTP; turning it on
+  Every scoped call is pinned to the alert's environment and namespace. Bounded by
+  `maxSteps`, `timeout`, a results budget and `maxPerHour`; results reach the model
+  redacted. The provider is Anthropic's Messages API, spoken over HTTP; turning it on
   sends redacted operational data to it.
+
+### Changed
+
+- Calls nobody waits on (alert investigations, the agent) are denied where policy says
+  approve, instead of becoming approval requests.
 
 ## [0.6.0] - 2026-10-16
 

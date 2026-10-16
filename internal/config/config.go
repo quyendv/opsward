@@ -426,6 +426,7 @@ func (c *Config) Warnings() []string {
 	}
 	out = append(out, c.remoteWarnings()...)
 	out = append(out, c.alertWarnings()...)
+	out = append(out, c.agentWarnings()...)
 	sort.Strings(out)
 	return out
 }

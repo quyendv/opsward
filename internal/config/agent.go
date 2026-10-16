@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -57,8 +58,8 @@ func (c *Config) validateAgent(fail func(string, ...any)) {
 	if u, err := url.Parse(a.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 		fail("agent.url must be an http or https URL without credentials")
 	}
-	if a.MaxSteps < 1 || a.MaxSteps > 50 {
-		fail("agent.maxSteps must be between 1 and 50")
+	if a.MaxSteps < 1 || a.MaxSteps > 20 {
+		fail("agent.maxSteps must be between 1 and 20")
 	}
 	if d := a.Timeout.Std(); d <= 0 || d > 10*time.Minute {
 		fail("agent.timeout must be positive and at most 10m")
@@ -66,4 +67,23 @@ func (c *Config) validateAgent(fail func(string, ...any)) {
 	if *a.MaxPerHour < 0 {
 		fail("agent.maxPerHour must not be negative")
 	}
+}
+
+// agentWarnings describes agent settings that are valid but probably not what was meant.
+func (c *Config) agentWarnings() []string {
+	a := c.Agent
+	if a == nil {
+		return nil
+	}
+	var out []string
+	if c.Alerts == nil || !c.Alerts.Agent {
+		out = append(out, "agent is configured but alerts.agent is off: no investigation uses it")
+	}
+	if strings.HasPrefix(a.URL, "http://") {
+		out = append(out, "agent.url is plain http: the API key crosses the network in clear")
+	}
+	if a.MaxPerHour != nil && *a.MaxPerHour == 0 {
+		out = append(out, "agent.maxPerHour is 0: no investigation runs the agent")
+	}
+	return out
 }

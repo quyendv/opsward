@@ -346,6 +346,13 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	switch dec.Effect {
 	case core.EffectAllow:
 	case core.EffectApprove:
+		if core.Unattended(ctx) {
+			// Nobody would retry with the approval: a request would only reach approvers.
+			return nil, finish(audit.StatusDenied, &DeniedError{
+				Decision: dec,
+				Reason:   fmt.Sprintf("%s needs approval (rule %s), and this call has no one to wait for it", name, dec.Rule),
+			})
+		}
 		if tool.NeverApproved {
 			return nil, finish(audit.StatusDenied, &DeniedError{
 				Decision: dec,

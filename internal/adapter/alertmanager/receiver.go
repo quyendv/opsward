@@ -42,7 +42,8 @@ type Options struct {
 	Dedupe  time.Duration
 	Workers int
 	Queue   int
-	// Timeout bounds one investigation and its notifications.
+	// Timeout bounds the diagnosis of one alert; notifications and an analysis have
+	// their own limits.
 	Timeout time.Duration
 	Now     func() time.Time
 	Logger  *slog.Logger
@@ -222,7 +223,7 @@ func (r *Receiver) Run(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				case j := <-r.queue:
-					r.investigate(context.WithoutCancel(ctx), j)
+					r.investigate(ctx, j)
 				}
 			}
 		})
@@ -234,7 +235,11 @@ func (r *Receiver) Run(ctx context.Context) {
 // that one that ran out of time is still reported.
 const notifyTimeout = 30 * time.Second
 
-func (r *Receiver) investigate(parent context.Context, j job) {
+// investigate runs one alert. The diagnosis and the notifications outlive a shutdown, so
+// that an accepted alert is reported; an analysis stops with it, so that shutdown does
+// not wait for a model.
+func (r *Receiver) investigate(run context.Context, j job) {
+	parent := core.WithUnattended(context.WithoutCancel(run))
 	ctx, cancel := context.WithTimeout(parent, r.opt.Timeout)
 	defer cancel()
 	a := j.alert
@@ -263,7 +268,7 @@ func (r *Receiver) investigate(parent context.Context, j job) {
 		} else {
 			n.Diagnosis = res.Data
 			if r.opt.Analyze != nil {
-				n.Analysis, n.AnalysisNote = r.opt.Analyze(parent, j.p, n)
+				n.Analysis, n.AnalysisNote = r.opt.Analyze(core.WithUnattended(run), j.p, n)
 			}
 		}
 	}

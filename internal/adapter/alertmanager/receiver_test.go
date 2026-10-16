@@ -338,3 +338,27 @@ func TestReceiverAddsTheAnalysis(t *testing.T) {
 		t.Fatalf("notifications %+v, analyzed %v", got, analyzed)
 	}
 }
+
+// On shutdown an analysis under way stops, and the alert is still notified at once with
+// its diagnosis: Alertmanager was told it was accepted.
+func TestReceiverStopsTheAnalysisOnShutdown(t *testing.T) {
+	notes := make(chanNotifier, 4)
+	started := make(chan struct{})
+	r := New(Options{
+		Invoker: &fakeEngine{}, Notifiers: []notify.Notifier{notes}, Principal: "alertmanager", Workers: 1,
+		Mapping: func() (Mapping, []Environment) { return rules, envs },
+		Analyze: func(ctx context.Context, _ core.Principal, _ notify.Notification) (string, string) {
+			close(started)
+			<-ctx.Done()
+			return "", "stopped: shutting down"
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go r.Run(ctx)
+	post(t, r, "alertmanager", `{"version":"4","alerts":[{"status":"firing","fingerprint":"f1","labels":{"alertname":"A","cluster":"cluster-a","namespace":"team-a-api","deployment":"api"}}]}`)
+	<-started
+	cancel()
+	if n := receive(t, notes); n.Diagnosis == nil || n.AnalysisNote != "stopped: shutting down" {
+		t.Fatalf("notification = %+v", n)
+	}
+}

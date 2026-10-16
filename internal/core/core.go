@@ -204,3 +204,17 @@ func AuditIDFrom(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(auditIDKey{}).(string)
 	return id, ok && id != ""
 }
+
+type unattendedKey struct{}
+
+// WithUnattended marks ctx as a call nobody waits on, such as an alert investigation or
+// an agent's: it cannot become an approval request.
+func WithUnattended(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unattendedKey{}, true)
+}
+
+// Unattended reports whether ctx is a call nobody waits on.
+func Unattended(ctx context.Context) bool {
+	u, _ := ctx.Value(unattendedKey{}).(bool)
+	return u
+}

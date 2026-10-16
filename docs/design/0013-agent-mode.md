@@ -21,21 +21,31 @@ acceptable for their data.
 
 - The model sees the alert, the workload and the diagnosis, and the tools it may call.
 - **It may call only tools whose declared risk is `read`.** A tool that can write, at any
-  strategy, is not offered; agent mode never changes anything. Each call goes through the
-  engine as the alerts principal, with the adapter `agent`, so policy decides it and the
-  audit records it like any other call; a denied call is answered to the model as denied.
-- Results reach the model as the engine returns them: redacted, and cut to 16 KiB per call.
-- The loop stops at the model's answer, or at `maxSteps` tool calls (default 8), or at
-  `timeout` (default 3 minutes); then the model is asked once more to answer with what it
-  has. At most `maxPerHour` investigations (default 20) run an agent; past that, alerts get
-  the diagnosis alone and the notification says why.
-- The answer is the model's text, at most 2,000 characters: what is wrong, the evidence for
-  it, and what a person should do next. It is untrusted text: notifications escape it like
-  every other value, and nothing acts on it.
+  strategy, is not offered, nor are the approval tools; agent mode never changes anything.
+  Each call goes through the engine as the alerts principal, with the adapter `agent`, so
+  policy decides it and the audit records it like any other call; a denied call is answered
+  to the model as denied. A policy can give the agent its own role with a binding to the
+  alerts principal and the condition `principal.adapter == "agent"`.
+- **Every scoped call is pinned to the alert:** its environment, and its namespace for
+  tools that take one, whatever the model asked; a call never carries an approval. Calls
+  nobody waits on cannot become approval requests: where policy says approve, the engine
+  denies them (this holds for alert investigations without the agent too).
+- Results reach the model as the engine returns them: redacted, with knowledge-pack notes,
+  cut to 16 KiB per call and 96 KiB in all.
+- The loop stops at the model's answer; at `maxSteps` tool calls (default 8, at most 20) or
+  the results budget, after which the model is asked once to answer with what it has; at
+  `timeout` (default 3 minutes); or at a turn the model could not finish (`max_tokens`,
+  `refusal`), which is not taken as an answer. At most `maxPerHour` investigations (default
+  20) run an agent; past that, alerts get the diagnosis alone and the notification says why.
+- On shutdown an analysis under way stops; the alert is notified with its diagnosis.
+- The answer is the model's text, at most 2,000 bytes: what is wrong, the evidence for it,
+  and what a person should do next. It is untrusted text: it is redacted, notifications
+  escape it like every other value, and nothing acts on it.
 
 Logs and events can carry text written to steer a model ("ignore your instructions...").
-The model can only read, through policy, so the worst such text can do is mislead the
-analysis; the notification keeps the diagnosis beside it, and the audit has every call.
+The model can only read, pinned to the alert's namespace and through policy, so the worst
+such text can do is mislead the analysis; the notification keeps the diagnosis beside it,
+and the audit has every call.
 
 ## Configuration
 
@@ -53,7 +63,10 @@ alerts:
 ```
 
 `agent` and `alerts.agent` are restart-only. The provider speaks HTTP directly: no SDK, so
-the client's behaviour (timeouts, what it logs) is Opsward's.
+the client's behaviour (timeouts, what it logs) is Opsward's. It sends assistant turns back
+exactly as they came (thinking blocks carry a signature the API checks), caches the system
+prompt, retries once after 429, 529 and 5xx answers as `retry-after` says, and follows no
+redirect, so the key reaches only the configured host.
 
 ## Alternatives considered
 

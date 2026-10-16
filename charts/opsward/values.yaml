@@ -63,6 +63,9 @@ resources:
   requests: { cpu: 50m, memory: 64Mi }
   limits: { memory: 256Mi }
 
+# Long enough for an alert investigation under way to finish (its diagnosis has 2m).
+terminationGracePeriodSeconds: 150
+
 podAnnotations: {}
 podLabels: {}
 nodeSelector: {}

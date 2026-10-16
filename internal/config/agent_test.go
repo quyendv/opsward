@@ -31,7 +31,7 @@ func TestAgentRejects(t *testing.T) {
 		{"no model", remote + strings.Replace(agentSection, "  model: claude-sonnet-5-5\n", "", 1), "agent.model is required"},
 		{"inline key", remote + strings.Replace(agentSection, "{ file: /etc/opsward/anthropic-key }", "sk-x", 1), "an inline value is not accepted"},
 		{"no key", remote + strings.Replace(agentSection, "  apiKey: { file: /etc/opsward/anthropic-key }\n", "", 1), "agent.apiKey { file } or { env } is required"},
-		{"steps", remote + agentSection + "  maxSteps: 100\n", "agent.maxSteps must be between 1 and 50"},
+		{"steps", remote + agentSection + "  maxSteps: 21\n", "agent.maxSteps must be between 1 and 20"},
 		{"url credentials", remote + agentSection + "  url: https://u:p@llm.example.com\n", "agent.url must be an http or https URL without credentials"},
 	}
 	for _, tt := range tests {
@@ -49,5 +49,18 @@ func TestAgentIsRestartOnly(t *testing.T) {
 	b, _ := Parse([]byte(remote + agentSection + "  maxSteps: 4\n"))
 	if got := a.RestartRequired(b); len(got) != 1 || got[0] != "agent" {
 		t.Fatalf("RestartRequired = %v", got)
+	}
+}
+
+func TestAgentWarnings(t *testing.T) {
+	c, err := Parse([]byte(remote + agentSection + "  url: http://llm.example.com\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := strings.Join(c.Warnings(), "\n")
+	for _, want := range []string{"alerts.agent is off", "agent.url is plain http"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("warnings miss %q:\n%s", want, w)
+		}
 	}
 }

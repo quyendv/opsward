@@ -156,7 +156,7 @@ func fakeAnthropic(t *testing.T) (*httptest.Server, *[]map[string]any) {
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		if n == 1 {
-			_, _ = w.Write([]byte(`{"content":[{"type":"tool_use","id":"t1","name":"get_workload_status","input":{"environment":"staging","namespace":"shop","kind":"Deployment","name":"api"}}],"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}`))
+			_, _ = w.Write([]byte(`{"content":[{"type":"thinking","thinking":"","signature":"c2ln"},{"type":"tool_use","id":"t1","name":"get_workload_status","input":{"environment":"staging","namespace":"shop","kind":"Deployment","name":"api"}}],"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"No pods are running: the Deployment has no replicas ready."}],"stop_reason":"end_turn","usage":{"input_tokens":20,"output_tokens":9}}`))
@@ -229,6 +229,11 @@ alerts:
 	}
 	// The model was told the alert and the diagnosis; only read tools were offered, and
 	// its call went through the engine as the alerts principal, adapter agent.
+	// The thinking block went back as it came: the API checks its signature.
+	second, _ := json.Marshal((*seen)[1])
+	if !strings.Contains(string(second), `"signature":"c2ln"`) {
+		t.Fatalf("second request: %s", second)
+	}
 	first, _ := json.Marshal((*seen)[0])
 	if !strings.Contains(string(first), "KubeDeploymentReplicasMismatch") || strings.Contains(string(first), `"name":"restart_workload"`) {
 		t.Fatalf("first request: %s", first)

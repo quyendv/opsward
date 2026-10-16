@@ -44,7 +44,7 @@ func TestAnthropicRoundTrip(t *testing.T) {
 	if headers.Get("x-api-key") != "k3y" || headers.Get("anthropic-version") == "" {
 		t.Errorf("headers = %v", headers)
 	}
-	if req["model"] != "claude-sonnet-5-5" || req["system"] != "You investigate alerts." || req["max_tokens"] != float64(1024) {
+	if req["model"] != "claude-sonnet-5-5" || !strings.Contains(raw, `"system":[{"cache_control":{"type":"ephemeral"},"text":"You investigate alerts.","type":"text"}]`) || req["max_tokens"] != float64(1024) {
 		t.Errorf("request = %v", req)
 	}
 	for _, want := range []string{`"type":"tool_use","id":"tu_0","name":"get_workload_status","input":{"name":"api"}`, `"type":"tool_result","tool_use_id":"tu_0","content":"{\"ready\":0}","is_error":true`} {
@@ -60,6 +60,7 @@ func TestAnthropicRoundTrip(t *testing.T) {
 // Errors carry the status and what the provider said, never the key.
 func TestAnthropicErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("retry-after", "0")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`)
 	}))
@@ -68,5 +69,80 @@ func TestAnthropicErrors(t *testing.T) {
 	_, err := m.Complete(context.Background(), Request{MaxTokens: 10, Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "x"}}}}})
 	if err == nil || !strings.Contains(err.Error(), "429") || !strings.Contains(err.Error(), "slow down") || strings.Contains(err.Error(), "s3cretkey") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Thinking blocks carry a signature the API checks: an assistant turn goes back exactly
+// as it came, including blocks this client does not interpret.
+func TestAssistantTurnsGoBackUnchanged(t *testing.T) {
+	var second string
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		b, _ := io.ReadAll(r.Body)
+		if n == 2 {
+			second = string(b)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"content":[{"type":"thinking","thinking":"","signature":"c2lnbmF0dXJl"},{"type":"redacted_thinking","data":"ZW5jcnlwdGVk"},
+			{"type":"tool_use","id":"tu_1","name":"t","input":{}}],"stop_reason":"tool_use","usage":{}}`)
+	}))
+	defer srv.Close()
+	m := NewAnthropic(AnthropicOptions{URL: srv.URL, Model: "m", APIKey: func() (string, error) { return "k", nil }})
+	first, err := m.Complete(context.Background(), Request{MaxTokens: 10, Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "x"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Content[2].Type != "tool_use" || first.Content[2].ID != "tu_1" {
+		t.Fatalf("content = %+v", first.Content)
+	}
+	_, err = m.Complete(context.Background(), Request{MaxTokens: 10, Messages: []Message{
+		{Role: "user", Content: []Block{{Type: "text", Text: "x"}}},
+		{Role: "assistant", Content: first.Content},
+		{Role: "user", Content: []Block{{Type: "tool_result", ToolUseID: "tu_1", Content: "{}"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`{"type":"thinking","thinking":"","signature":"c2lnbmF0dXJl"}`, `{"type":"redacted_thinking","data":"ZW5jcnlwdGVk"}`} {
+		if !strings.Contains(second, want) {
+			t.Errorf("second request misses %s:\n%s", want, second)
+		}
+	}
+}
+
+// Overloaded and rate-limited answers are routine: one retry, after what retry-after says.
+func TestAnthropicRetriesOnce(t *testing.T) {
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			w.Header().Set("retry-after", "0")
+			w.WriteHeader(529)
+			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{}}`)
+	}))
+	defer srv.Close()
+	m := NewAnthropic(AnthropicOptions{URL: srv.URL, Model: "m", APIKey: func() (string, error) { return "k", nil }})
+	resp, err := m.Complete(context.Background(), Request{MaxTokens: 10, Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "x"}}}}})
+	if err != nil || n != 2 || resp.Content[0].Text != "ok" {
+		t.Fatalf("resp %+v, err %v, requests %d", resp, err, n)
+	}
+}
+
+// The key goes to the API's host only: a redirect elsewhere is not followed.
+func TestAnthropicRefusesRedirects(t *testing.T) {
+	var leaked bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked = r.Header.Get("x-api-key") != "" }))
+	defer other.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/v1/messages", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	m := NewAnthropic(AnthropicOptions{URL: srv.URL, Model: "m", APIKey: func() (string, error) { return "k", nil }})
+	if _, err := m.Complete(context.Background(), Request{MaxTokens: 10, Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "x"}}}}}); err == nil || leaked {
+		t.Fatalf("err %v, leaked %v", err, leaked)
 	}
 }

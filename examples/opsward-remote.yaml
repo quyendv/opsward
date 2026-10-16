@@ -90,7 +90,8 @@ alerts:
     - { type: slack, webhookURL: { file: /etc/opsward/slack-webhook-url } }
 
 # Agent mode (docs/design/0013): a model looks further with the read tools. Sends redacted
-# operational data to the provider.
+# operational data to the provider. Grant the agent its reads with a binding to the alerts
+# principal, e.g. role { risk: [read] } and when: principal.adapter == "agent".
 # agent:
 #   provider: anthropic
 #   model: claude-sonnet-5-5

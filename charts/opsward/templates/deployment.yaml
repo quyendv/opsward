@@ -18,6 +18,8 @@ spec:
         checksum/restart: {{ include "opsward.restartHash" . }}
         {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
     spec:
+      # An alert accepted before a shutdown is diagnosed and notified before the pod goes.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "opsward.fullname" . }}
       automountServiceAccountToken: false # the pod's own identity carries no token
       {{- with .Values.imagePullSecrets }}

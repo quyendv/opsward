@@ -15,12 +15,13 @@ import (
 	"github.com/quyendv/opsward/internal/engine"
 	"github.com/quyendv/opsward/internal/llm"
 	"github.com/quyendv/opsward/internal/notify"
+	"github.com/quyendv/opsward/internal/redact"
 )
 
 // maxPromptDiagnosis bounds the diagnosis given to the model.
 const maxPromptDiagnosis = 24 << 10
 
-// hourly allows at most max events per clock hour window.
+// hourly allows at most max events in an hour, counted from the first of the window.
 type hourly struct {
 	max int
 	now func() time.Time
@@ -47,7 +48,7 @@ func (h *hourly) take() bool {
 // openAnalyzer builds agent mode's analysis of diagnosed alerts (docs/design/0013), or
 // nil when alerts.agent is off.
 func openAnalyzer(cfg *config.Config, inv agent.Invoker, tools []engine.Tool, log *slog.Logger) func(context.Context, core.Principal, notify.Notification) (string, string) {
-	if cfg.Alerts == nil || !cfg.Alerts.Agent || cfg.Agent == nil {
+	if cfg.Alerts == nil || !cfg.Alerts.Agent || cfg.Agent == nil || *cfg.Agent.MaxPerHour == 0 {
 		return nil
 	}
 	c := cfg.Agent
@@ -61,10 +62,14 @@ func openAnalyzer(cfg *config.Config, inv agent.Invoker, tools []engine.Tool, lo
 		if !limit.take() {
 			return "", fmt.Sprintf("the agent's limit of %d investigations an hour is reached", *c.MaxPerHour)
 		}
-		a, err := ag.Investigate(ctx, p, prompt(n))
+		scope := agent.Scope{Environment: n.Workload.Environment, Namespace: n.Workload.Namespace}
+		a, err := ag.Investigate(ctx, p, scope, prompt(n))
 		if err != nil {
 			return "", "the agent failed: " + err.Error()
 		}
+		// The model's text is untrusted; it is redacted like every result before it goes
+		// anywhere, and escaped by notifiers.
+		a.Text = redact.String(a.Text)
 		log.Info("agent analysis", "alert", n.Alert.Name, "steps", a.Steps, "stopped", a.Stopped,
 			"input_tokens", a.Usage.InputTokens, "output_tokens", a.Usage.OutputTokens)
 		if a.Text == "" {
