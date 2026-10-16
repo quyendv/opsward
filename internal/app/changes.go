@@ -71,7 +71,8 @@ func (c *changeRoutes) update(cfg *config.Config) {
 	ch := &tool.Changes{
 		Strategies: map[string]string{}, Forges: c.forges,
 		Resolve: source.Options{
-			AnnotationKeys: cfg.SourceResolution.Annotations, Applications: c.apps, ApplicationNamespace: c.appNS,
+			AnnotationKeys: cfg.SourceResolution.Annotations, AnnotationPaths: cfg.SourceResolution.AnnotationPaths,
+			Applications: c.apps, ApplicationNamespace: c.appNS,
 			LabelTracking: c.labels, ApplicationNamespaces: c.appNSs,
 			Destinations: map[string][]string{},
 		},

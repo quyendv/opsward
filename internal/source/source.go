@@ -132,7 +132,11 @@ type Static struct {
 // Options configures resolution.
 type Options struct {
 	AnnotationKeys []string
-	Static         []Static
+	// AnnotationPaths bounds, per environment, the paths a workload's annotation may
+	// name: whoever can annotate a workload otherwise chooses any path in a listed
+	// repository. An environment without an entry is not bound.
+	AnnotationPaths map[string][]string
+	Static          []Static
 	// Applications reads an Argo CD Application; nil when there is no Argo CD.
 	Applications         func(ctx context.Context, namespace, name string) (*Application, error)
 	ApplicationNamespace string
@@ -210,6 +214,12 @@ func Resolve(ctx context.Context, w Workload, opt Options) (*Source, error) {
 			l, err := ParseLocation(v)
 			if err != nil {
 				return nil, fmt.Errorf("annotation %s: %w", k, err)
+			}
+			if bounds, ok := opt.AnnotationPaths[w.Environment]; ok && !slices.ContainsFunc(bounds, func(b string) bool {
+				return l.Path == b || strings.HasPrefix(l.Path, b+"/")
+			}) {
+				return nil, fmt.Errorf("%w: annotation %s names %s, outside sourceResolution.annotationPaths of environment %s",
+					ErrUnresolved, k, l.Path, w.Environment)
 			}
 			return &Source{Resolver: "annotation", Locations: []Location{l}}, nil
 		}

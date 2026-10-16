@@ -72,8 +72,10 @@ sourceResolution:
 
 A repository is reached only if a forge lists it: an Application pointing elsewhere
 resolves, but cannot be read or written. Within listed repositories, whoever can annotate
-a workload chooses its source: an operator who does not trust workload annotations
-leaves `sourceResolution.annotations` empty and relies on Argo CD and the static map.
+a workload chooses its source. `sourceResolution.annotationPaths` bounds, per environment,
+the paths an annotation may name (`staging: [apps/staging]`); an operator who does not
+trust workload annotations at all leaves `sourceResolution.annotations` empty and relies
+on Argo CD and the static map.
 
 ## Proposing
 

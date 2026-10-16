@@ -70,6 +70,9 @@ environments:
 # Workloads without an Argo CD Application can name their source with the annotation
 # opsward/source: <repository>//<path>[@<revision>], or be listed here.
 sourceResolution:
+  # Where annotations of each environment's workloads may point, within listed repositories.
+  annotationPaths:
+    staging: [apps]
   static:
     - { environment: staging, namespace: team-a-api, name: api, source: "github:example-org/gitops//apps/api" }
 

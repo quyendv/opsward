@@ -46,8 +46,11 @@ type Forge struct {
 type SourceResolution struct {
 	// Annotations are workload annotation keys holding <repository>//<path>[@<revision>];
 	// default [opsward/source].
-	Annotations []string       `yaml:"annotations"`
-	Static      []StaticSource `yaml:"static"`
+	Annotations []string `yaml:"annotations"`
+	// AnnotationPaths bounds, per environment, the repository paths annotations may
+	// name (docs/design/0008).
+	AnnotationPaths map[string][]string `yaml:"annotationPaths"`
+	Static          []StaticSource      `yaml:"static"`
 }
 
 // StaticSource maps one workload to its source; an empty kind matches any kind.
@@ -142,6 +145,16 @@ func (c *Config) validateChange(envs map[string]bool, fail func(string, ...any))
 		}
 		if _, err := source.ParseLocation(s.Source); err != nil {
 			fail("sourceResolution.static[%d]: %v", i, err)
+		}
+	}
+	for env, paths := range c.SourceResolution.AnnotationPaths {
+		if !envs[env] {
+			fail("sourceResolution.annotationPaths: unknown environment %q", env)
+		}
+		for _, p := range paths {
+			if l, err := source.ParseLocation("x//" + p); err != nil || l.Path != p || p == "." {
+				fail("sourceResolution.annotationPaths.%s: %q is not a clean path inside a repository", env, p)
+			}
 		}
 	}
 	for _, k := range c.SourceResolution.Annotations {
