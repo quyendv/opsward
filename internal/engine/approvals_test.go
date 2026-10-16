@@ -386,3 +386,75 @@ func TestPendingApprovalsAreCapped(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A tool whose risk depends on the call (propose_change: read when it only suggests,
+// write when it opens a pull request) is authorized and audited with the call's risk.
+func TestPreparedRiskOverridesTheTools(t *testing.T) {
+	var risks []core.Risk
+	tl := Tool{
+		Name: "propose", Risk: core.RiskWrite, InputSchema: &jsonschema.Schema{Type: "object"},
+		Prepare: func(raw json.RawMessage) (*Prepared, error) {
+			var in struct{ Suggest bool }
+			_ = json.Unmarshal(raw, &in)
+			p := &Prepared{
+				Scope: core.Scope{Environment: "staging", Namespace: "team-a-api", Kind: "Deployment", Name: "api"}, Args: map[string]any{},
+				Run: func(context.Context, string) (any, error) { return "ok", nil },
+			}
+			if in.Suggest {
+				p.Risk = core.RiskRead
+			}
+			return p, nil
+		},
+	}
+	aud := &recordingAuditor{}
+	e, _ := New(Options{
+		Tools: []Tool{tl}, Environments: []Environment{{Name: "staging", Namespaces: []string{"*"}}},
+		Authorizer: authorizerFunc(func(r core.Request) core.Decision {
+			risks = append(risks, r.Risk)
+			return core.Decision{Effect: core.EffectAllow, Rule: "b"}
+		}),
+		Auditor: aud,
+	})
+	if _, err := e.Invoke(context.Background(), alice, "propose", json.RawMessage(`{"Suggest":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if risks[0] != core.RiskRead || len(aud.records) != 1 || aud.records[0].Risk != core.RiskRead {
+		t.Fatalf("suggest: risks %v, records %d", risks, len(aud.records))
+	}
+	if _, err := e.Invoke(context.Background(), alice, "propose", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if risks[1] != core.RiskWrite || len(aud.records) != 3 || aud.records[1].Phase != audit.PhaseIntent {
+		t.Fatalf("write: risks %v, records %+v", risks, aud.records)
+	}
+}
+
+// A write's Run knows the id of its intent record, so what it creates (a pull request)
+// can point back to the audit.
+func TestRunSeesTheIntentRecordID(t *testing.T) {
+	var seen string
+	tl := Tool{
+		Name: "propose", Risk: core.RiskWrite, InputSchema: &jsonschema.Schema{Type: "object"},
+		Prepare: func(json.RawMessage) (*Prepared, error) {
+			return &Prepared{
+				Scope: core.Scope{Environment: "staging", Namespace: "team-a-api", Kind: "Deployment", Name: "api"}, Args: map[string]any{},
+				Run: func(ctx context.Context, _ string) (any, error) {
+					seen, _ = core.AuditIDFrom(ctx)
+					return "ok", nil
+				},
+			}, nil
+		},
+	}
+	aud := &recordingAuditor{}
+	e, _ := New(Options{
+		Tools: []Tool{tl}, Environments: []Environment{{Name: "staging", Namespaces: []string{"*"}}},
+		Authorizer: authorizerFunc(func(core.Request) core.Decision { return core.Decision{Effect: core.EffectAllow, Rule: "b"} }),
+		Auditor:    aud,
+	})
+	if _, err := e.Invoke(context.Background(), alice, "propose", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if seen == "" || aud.records[0].Phase != audit.PhaseIntent || seen != aud.records[0].ID {
+		t.Fatalf("Run saw %q, intent record %+v", seen, aud.records[0])
+	}
+}

@@ -18,6 +18,15 @@ All notable changes to this project are documented here. The format follows
   which runs once, only for the same arguments and an unchanged target, before
   `approvals.ttl` (1h by default). Approvers can withdraw an approval before it is used;
   a requester has at most 20 pending requests. Remote mode only.
+- `resolve_source` and `propose_change`, with forges configured in `providers.forges`
+  (GitHub, Gitea or Forgejo, GitLab; token by reference, explicit repository list).
+  `resolve_source` finds the files that declare a workload, through its Argo CD
+  Application (`providers.delivery`), an `opsward/source` annotation or
+  `sourceResolution.static`, lists them and returns the ones asked for.
+  `propose_change` applies exact text replacements to those files and returns the diff
+  (`change.strategy: suggest`, risk read) or opens a pull request naming the caller and
+  the audit record (`pull-request`, risk write); nothing is applied to the cluster.
+- The audit `change` records the URL of a proposed change.
 
 ## [0.3.0] - 2026-10-16
 

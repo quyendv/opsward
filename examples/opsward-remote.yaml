@@ -46,10 +46,32 @@ providers:
           # get and patch on deployments, statefulsets and daemonsets (restart, scale),
           # list on horizontalpodautoscalers; nothing else.
           operator: { kubeconfig: /etc/opsward/cluster-a-operator.kubeconfig }
+  # Where Argo CD keeps its Applications; the reader profile needs get on
+  # applications.argoproj.io there. Optional: annotations and the static map below also
+  # find a workload's source.
+  delivery: { type: argocd, cluster: cluster-a, namespace: argocd }
+  # Forges Opsward reads from and opens pull requests on, each limited to the
+  # repositories it lists. The token needs read and write on their contents and pull
+  # requests.
+  forges:
+    - name: github
+      type: github            # github, gitea (also Forgejo) or gitlab
+      url: https://api.github.com
+      hosts: [github.com]     # repository URLs on these hosts use this forge
+      token: { file: /etc/opsward/github-token }
+      repositories: [example-org/gitops]
 
 environments:
   - name: staging
     cluster: cluster-a
+    # suggest (default): propose_change returns a diff. pull-request: it opens one.
+    change: { strategy: pull-request }
+
+# Workloads without an Argo CD Application can name their source with the annotation
+# opsward/source: <repository>//<path>[@<revision>], or be listed here.
+sourceResolution:
+  static:
+    - { environment: staging, namespace: team-a-api, name: api, source: "github:example-org/gitops//apps/api" }
 
 approvals:
   ttl: 1h
@@ -58,6 +80,7 @@ policy:
   roles:
     viewer: { risk: [read] }
     operator: { tools: [restart_workload, scale_workload] }
+    proposer: { tools: [propose_change] } # resolve_source is a read
     approver: { tools: [list_approvals, decide_approval] }
     requester: { tools: [list_approvals] } # to follow one's own requests
   bindings:
@@ -77,6 +100,12 @@ policy:
         namespaces: ["team-a-*"]
       effect: approve
       approvers: { groups: [platform] }
+    # A pull request is reviewed where it is opened.
+    - name: team-a-proposes
+      subjects: { groups: [team-a] }
+      role: proposer
+      scope:
+        namespaces: ["team-a-*"]
     - name: platform-approves
       subjects: { groups: [platform] }
       role: approver

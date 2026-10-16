@@ -137,7 +137,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	defer func() { _ = a.Close() }()
 	for _, w := range a.Warnings {
-		log.Warn("policy", "warning", w)
+		log.Warn("configuration", "warning", w)
 	}
 	go a.RunRetention(ctx)
 	hup := make(chan os.Signal, 1)

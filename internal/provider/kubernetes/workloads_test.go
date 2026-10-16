@@ -235,6 +235,20 @@ func TestWorkloadLabelsIsOneGet(t *testing.T) {
 	}
 }
 
+func TestWorkloadMetadataIsOneGet(t *testing.T) {
+	d := deployment()
+	d.Annotations = map[string]string{"opsward/source": "github:example-org/gitops//apps/api"}
+	c := fake.NewClientset(d)
+	c.ClearActions()
+	m, err := NewWorkloads(c).WorkloadMetadata(context.Background(), capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"})
+	if err != nil || m.Labels["app.kubernetes.io/part-of"] != "checkout" || m.Annotations["opsward/source"] == "" {
+		t.Fatalf("WorkloadMetadata = %+v, %v", m, err)
+	}
+	if a := c.Actions(); len(a) != 1 || a[0].GetVerb() != "get" {
+		t.Fatalf("actions = %v, want a single get", a)
+	}
+}
+
 func ev(name string, uid types.UID, kind, objName, reason string, at time.Time) *corev1.Event {
 	return &corev1.Event{
 		ObjectMeta:     metav1.ObjectMeta{Name: name, Namespace: "shop"},

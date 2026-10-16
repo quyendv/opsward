@@ -63,6 +63,10 @@ type Prepared struct {
 	Resolve func(ctx context.Context) (map[string]string, error)
 	// Run performs the call with the named profile.
 	Run func(ctx context.Context, profile string) (any, error)
+	// Risk, if set, replaces the tool's risk for this call: a tool whose risk depends on
+	// its arguments or environment (propose_change, docs/design/0008) declares the
+	// highest it can have and lowers it here.
+	Risk core.Risk
 	// Preview, if set, reports what a write would change, as a dry run with the named
 	// profile: shown to approvers and recorded in the audit (docs/design/0007).
 	Preview func(ctx context.Context, profile string) (*core.Change, error)
@@ -282,6 +286,13 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		return nil, finish(audit.StatusInvalid, fmt.Errorf("%w: %w", ErrInvalidArguments, err))
 	}
 	rec.Scope = prep.Scope
+	risk := tool.Risk
+	// A call may lower its tool's risk, never raise it: policy validation judged the
+	// tool by the risk it declares.
+	if prep.Risk != "" && riskRank(prep.Risk) < riskRank(tool.Risk) {
+		risk = prep.Risk
+		rec.Risk = risk
+	}
 	rec.Args = redactArgs(prep.Args)
 	if !tool.Global {
 		if err := st.validateScope(prep.Scope); err != nil {
@@ -294,7 +305,7 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		}
 	}
 	if tool.List {
-		return e.list(ctx, st, tool, prep, &rec, finish, core.Request{Principal: p, Tool: name, Risk: tool.Risk, Scope: prep.Scope, Args: prep.Args, Now: start})
+		return e.list(ctx, st, tool, prep, &rec, finish, core.Request{Principal: p, Tool: name, Risk: risk, Scope: prep.Scope, Args: prep.Args, Now: start})
 	}
 
 	scope := prep.Scope
@@ -310,9 +321,9 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		scope.Labels, scope.LabelsKnown = labels, err == nil
 	}
 
-	req := core.Request{Principal: p, Tool: name, Risk: tool.Risk, Scope: scope, Args: prep.Args, Now: start}
+	req := core.Request{Principal: p, Tool: name, Risk: risk, Scope: scope, Args: prep.Args, Now: start}
 	dec := st.authz.Decide(req)
-	if dec.Effect == core.EffectAllow && tool.Risk == core.RiskDestructive {
+	if dec.Effect == core.EffectAllow && risk == core.RiskDestructive {
 		// Policy validation already rejects this; the engine refuses it too, so no
 		// Authorizer can let a destructive call through without approval.
 		dec.Effect = core.EffectApprove
@@ -321,7 +332,7 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	profile := dec.Profile
 	if profile == "" {
 		profile = ProfileOperator
-		if tool.Risk == core.RiskRead {
+		if risk == core.RiskRead {
 			profile = ProfileReader
 		}
 	}
@@ -353,7 +364,7 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		return nil, finish(audit.StatusDenied, &DeniedError{Decision: dec})
 	}
 
-	if tool.Risk != core.RiskRead && prep.Preview != nil && rec.Change == nil {
+	if risk != core.RiskRead && prep.Preview != nil && rec.Change == nil {
 		// Every write is a dry run first, and the diff is part of its record.
 		change, err := prep.Preview(ctx, profile)
 		if errors.Is(err, core.ErrInvalidInput) {
@@ -365,13 +376,15 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		rec.Change = change
 	}
 
-	if tool.Risk != core.RiskRead {
+	if risk != core.RiskRead {
 		intent := rec
 		intent.Phase = audit.PhaseIntent
-		if _, err := e.audit.Write(actx, intent); err != nil {
+		written, err := e.audit.Write(actx, intent)
+		if err != nil {
 			e.log.Error("audit intent write failed; refusing the call", "tool", name, "error", err)
 			return nil, finish(audit.StatusError, ErrAuditUnavailable)
 		}
+		ctx = core.WithAuditID(ctx, written.ID)
 	}
 
 	out, err := prep.Run(ctx, profile)
@@ -529,4 +542,16 @@ func redactArgs(args map[string]any) map[string]any {
 	}
 	out, _ := redact.Value(args).(map[string]any)
 	return out
+}
+
+func riskRank(r core.Risk) int {
+	switch r {
+	case core.RiskRead:
+		return 0
+	case core.RiskWrite:
+		return 1
+	case core.RiskDestructive:
+		return 2
+	}
+	return 2
 }

@@ -102,6 +102,14 @@ func (w *workloads) WorkloadLabels(ctx context.Context, ref capability.WorkloadR
 	return meta.GetLabels(), nil
 }
 
+func (w *workloads) WorkloadMetadata(ctx context.Context, ref capability.WorkloadRef) (*capability.Metadata, error) {
+	meta, _, err := w.object(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return &capability.Metadata{Labels: meta.GetLabels(), Annotations: meta.GetAnnotations()}, nil
+}
+
 // object reads the workload once and returns its metadata and pod selector.
 func (w *workloads) object(ctx context.Context, ref capability.WorkloadRef) (metav1.Object, *metav1.LabelSelector, error) {
 	var meta metav1.Object
