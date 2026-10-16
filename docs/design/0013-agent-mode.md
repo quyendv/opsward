@@ -54,7 +54,8 @@ and the audit has every call.
 
 ```yaml
 agent:
-  provider: anthropic            # the Messages API; openai (chat completions) is planned
+  provider: anthropic            # the Messages API, or openai: chat completions, which
+                                 # other providers and local servers (vLLM, Ollama) speak
   model: claude-sonnet-5-5
   apiKey: { file: /etc/opsward/anthropic-key }
   url: https://api.anthropic.com # default; a gateway or proxy that speaks the same API
@@ -65,7 +66,8 @@ alerts:
   agent: true                    # analyze investigated alerts with the agent
 ```
 
-`agent` and `alerts.agent` are restart-only. The provider speaks HTTP directly: no SDK, so
+`apiKey` may be left out with `openai`, for a local server that takes none. `agent` and
+`alerts.agent` are restart-only. The provider speaks HTTP directly: no SDK, so
 the client's behaviour (timeouts, what it logs) is Opsward's. It sends assistant turns back
 exactly as they came (thinking blocks carry a signature the API checks), caches the system
 prompt, retries once after 429, 529 and 5xx answers as `retry-after` says, and follows no

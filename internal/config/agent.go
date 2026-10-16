@@ -8,7 +8,7 @@ import (
 
 // Agent configures agent mode (docs/design/0013); restart-only.
 type Agent struct {
-	Provider   string     `yaml:"provider"` // anthropic
+	Provider   string     `yaml:"provider"` // anthropic or openai (chat completions)
 	Model      string     `yaml:"model"`
 	APIKey     *SecretRef `yaml:"apiKey"`
 	URL        string     `yaml:"url"`        // default per provider
@@ -22,8 +22,13 @@ func (c *Config) agentDefaults() {
 	if a == nil {
 		return
 	}
-	if a.URL == "" && a.Provider == "anthropic" {
-		a.URL = "https://api.anthropic.com"
+	if a.URL == "" {
+		switch a.Provider {
+		case "anthropic":
+			a.URL = "https://api.anthropic.com"
+		case "openai":
+			a.URL = "https://api.openai.com"
+		}
 	}
 	if a.MaxSteps == 0 {
 		a.MaxSteps = 8
@@ -46,13 +51,14 @@ func (c *Config) validateAgent(fail func(string, ...any)) {
 	if a == nil {
 		return
 	}
-	if a.Provider != "anthropic" {
-		fail("agent.provider: %q is not available; use anthropic", a.Provider)
+	if a.Provider != "anthropic" && a.Provider != "openai" {
+		fail("agent.provider: %q is not available; use anthropic or openai", a.Provider)
 	}
 	if a.Model == "" {
 		fail("agent.model is required")
 	}
-	if a.APIKey == nil || (a.APIKey.File == "" && a.APIKey.Env == "") {
+	// A local server speaking chat completions takes no key.
+	if (a.Provider == "anthropic" && a.APIKey == nil) || (a.APIKey != nil && a.APIKey.File == "" && a.APIKey.Env == "") {
 		fail("agent.apiKey { file } or { env } is required")
 	}
 	if u, err := url.Parse(a.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
@@ -79,7 +85,7 @@ func (c *Config) agentWarnings() []string {
 	if c.Alerts == nil || !c.Alerts.Agent {
 		out = append(out, "agent is configured but alerts.agent is off: no investigation uses it")
 	}
-	if strings.HasPrefix(a.URL, "http://") {
+	if strings.HasPrefix(a.URL, "http://") && a.APIKey != nil {
 		out = append(out, "agent.url is plain http: the API key crosses the network in clear")
 	}
 	if a.MaxPerHour != nil && *a.MaxPerHour == 0 {
