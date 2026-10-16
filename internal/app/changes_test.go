@@ -25,7 +25,7 @@ func giteaRepo(t *testing.T) *httptest.Server {
 		case "/git/trees/c0ffee":
 			_ = json.NewEncoder(w).Encode(map[string]any{"tree": []map[string]any{{"path": "apps/api/values.yaml", "type": "blob"}}})
 		case "/contents/apps/api/values.yaml":
-			_ = json.NewEncoder(w).Encode(map[string]any{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte("replicaCount: 2\n"))})
+			_ = json.NewEncoder(w).Encode(map[string]any{"type": "file", "encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte("replicaCount: 2\n"))})
 		default:
 			http.NotFound(w, r)
 		}

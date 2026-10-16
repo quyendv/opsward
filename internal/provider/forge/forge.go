@@ -165,3 +165,36 @@ func noDotSegments(p string) error {
 	}
 	return nil
 }
+
+// fileFrom decodes a contents API answer for path. Only a regular file is content: a
+// directory answers with a list, and GitHub answers a symlink to a file with the target's
+// content and path.
+func fileFrom(raw json.RawMessage, path string) (content []byte, sha string, err error) {
+	if t := bytes.TrimSpace(raw); len(t) > 0 && t[0] == '[' {
+		return nil, "", fmt.Errorf("%s is a directory", path)
+	}
+	var out struct{ Type, Path, Encoding, Content, SHA string }
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, "", fmt.Errorf("%s: %w", path, err)
+	}
+	if out.Type != "file" || (out.Path != "" && out.Path != path) {
+		return nil, "", fmt.Errorf("%s is not a regular file", path)
+	}
+	b, err := decodeContent(out.Encoding, out.Content)
+	return b, out.SHA, err
+}
+
+// opened returns the request's URL, or err after deleting the branch made for it, so
+// that a failed proposal leaves nothing behind.
+func opened(ctx context.Context, url string, err error, deleteBranch func(context.Context) error) (string, error) {
+	if err == nil {
+		return url, nil
+	}
+	// The caller's context may be what failed; the deletion still runs, briefly.
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), requestTimeout)
+	defer cancel()
+	if derr := deleteBranch(dctx); derr != nil {
+		return "", fmt.Errorf("%w; the branch it was made from could not be deleted: %w", err, derr)
+	}
+	return "", err
+}

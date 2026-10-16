@@ -260,25 +260,33 @@ func TestProposeChangeRefusesACommitForAPullRequest(t *testing.T) {
 	}
 }
 
-// Without a source there is nothing to edit: the call says so and proposes nothing,
-// whatever the strategy.
-func TestProposeChangeFallsBackToSuggest(t *testing.T) {
-	src, fg, cfg := changeFixture("pull-request")
+// Without a source there is nothing to edit. Under suggest the call says so; under
+// pull-request it is refused in the preview, before any approval request is made for an
+// empty change.
+func TestProposeChangeWithoutASource(t *testing.T) {
+	args := json.RawMessage(`{` + target + `,"title":"t","edits":[{"path":"apps/api/values.yaml","old":"replicaCount: 2","new":"replicaCount: 4"}]}`)
+	src, fg, cfg := changeFixture("suggest")
 	src.annotations = nil
 	tl, _ := ProposeChange(src, cfg)
-	p, _ := tl.Prepare(json.RawMessage(`{` + target + `,"title":"t","edits":[{"path":"apps/api/values.yaml","old":"replicaCount: 2","new":"replicaCount: 4"}]}`))
-	out, err := p.Run(core.WithAuditID(context.Background(), "x"), "operator")
+	p, _ := tl.Prepare(args)
+	out, err := p.Run(context.Background(), "reader")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ch := out.(*core.Change)
-	if ch.Strategy != "suggest" || !strings.Contains(ch.Note, "source not resolved") || len(fg.proposals) != 0 {
-		t.Fatalf("change = %+v, proposals %d", ch, len(fg.proposals))
+	if ch := out.(*core.Change); ch.Strategy != "suggest" || !strings.Contains(ch.Note, "source not resolved") || len(fg.proposals) != 0 {
+		t.Fatalf("suggest: change = %+v", ch)
+	}
+
+	src, fg, cfg = changeFixture("pull-request")
+	src.annotations = nil
+	tl, _ = ProposeChange(src, cfg)
+	p, _ = tl.Prepare(args)
+	_, err = p.Preview(context.Background(), "operator")
+	if !errors.Is(err, core.ErrInvalidInput) || !strings.Contains(err.Error(), "source not resolved") || len(fg.proposals) != 0 {
+		t.Fatalf("pull-request: err = %v", err)
 	}
 }
 
-// Secret manifests in the source keep their keys and lose their values, in contents and
-// in diffs.
 func TestSecretManifestValuesStayOut(t *testing.T) {
 	src, fg, cfg := changeFixture("pull-request")
 	rs, _ := ResolveSource(src, cfg)
@@ -312,7 +320,8 @@ func TestDiffHasNoLineTheFileLacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "--- a/apps/api/templates/deploy.yaml\n+++ b/apps/api/templates/deploy.yaml\n@@ -1 +1 @@\n-kind: Deployment\n+kind: StatefulSet\n"
+	want := "diff --git a/apps/api/templates/deploy.yaml b/apps/api/templates/deploy.yaml\nindex 6c24b02fa77b..c2269132cc43\n" +
+		"--- a/apps/api/templates/deploy.yaml\n+++ b/apps/api/templates/deploy.yaml\n@@ -1 +1 @@\n-kind: Deployment\n+kind: StatefulSet\n"
 	if d := out.(*core.Change).Diff; d != want {
 		t.Fatalf("diff = %q, want %q", d, want)
 	}
@@ -327,5 +336,29 @@ func TestLinesEndEveryLine(t *testing.T) {
 		if got := lines(in); !slices.Equal(got, want) {
 			t.Errorf("lines(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Approvals compare diffs, which are redacted: a file whose secret values changed since
+// the preview must still show a different diff, through the blob ids of its index line.
+func TestDiffChangesWithRedactedContent(t *testing.T) {
+	src, fg, cfg := changeFixture("pull-request")
+	tl, _ := ProposeChange(src, cfg)
+	p, _ := tl.Prepare(json.RawMessage(`{` + target + `,"title":"t","edits":[{"path":"apps/api/templates/secret.yaml","old":"tier: backend","new":"tier: api"}]}`))
+	first, err := p.Preview(context.Background(), "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(first.Diff, "diff --git a/apps/api/templates/secret.yaml b/apps/api/templates/secret.yaml\nindex ") {
+		t.Fatalf("diff = %q", first.Diff)
+	}
+	main := fg.repos["team-a/gitops"]["main"]
+	main["apps/api/templates/secret.yaml"] = strings.Replace(main["apps/api/templates/secret.yaml"], "QUFBQUFBQUE=", "QkJCQkJCQkI=", 1)
+	second, err := p.Preview(context.Background(), "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Diff == second.Diff {
+		t.Fatalf("the diff did not change with the secret:\n%s", first.Diff)
 	}
 }

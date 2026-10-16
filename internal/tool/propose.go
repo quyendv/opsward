@@ -2,6 +2,8 @@ package tool
 
 import (
 	"context"
+	"crypto/sha1" //nolint:gosec // G505: Git object ids
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -282,8 +284,13 @@ func ProposeChange(src capability.WorkloadSource, cfg ChangeConfig) (engine.Tool
 func propose(ctx context.Context, c *Changes, w capability.Workloads, v proposeInput, strategy string, apply bool) (*core.Change, error) {
 	s, err := c.resolve(ctx, w, v.workloadInput)
 	if errors.Is(err, source.ErrUnresolved) {
-		return &core.Change{Strategy: strategySuggest, Note: err.Error() + "; nothing was proposed. Make the change in its source by hand, " +
-			"or have the workload annotated with its source."}, nil
+		hint := "make the change in its source by hand, or have the workload annotated with its source"
+		if strategy == strategyPullRequest {
+			// Refused, not answered: under pull-request this is a write, and an approval
+			// request for nothing would only reach an approver.
+			return nil, fmt.Errorf("%w: %w; %s", core.ErrInvalidInput, err, hint)
+		}
+		return &core.Change{Strategy: strategySuggest, Note: err.Error() + "; nothing was proposed: " + hint + "."}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -359,6 +366,9 @@ func propose(ctx context.Context, c *Changes, w capability.Workloads, v proposeI
 		if err != nil {
 			return nil, err
 		}
+		// The blob ids are of the real content: approvals compare diffs, and a change
+		// that redaction hides must still change the diff.
+		fmt.Fprintf(&diff, "diff --git a/%s b/%s\nindex %s..%s\n", p, p, blobID(before), blobID([]byte(after)))
 		diff.WriteString(d)
 	}
 	ch := &core.Change{Strategy: strategy, Diff: redact.String(diff.String())}
@@ -399,4 +409,12 @@ func lines(s string) []string {
 	}
 	out[len(out)-1] += "\n"
 	return out
+}
+
+// blobID is the abbreviated Git blob id of content, as git diff shows it.
+func blobID(content []byte) string {
+	h := sha1.New() //nolint:gosec // G401: Git's object id, not a security hash
+	fmt.Fprintf(h, "blob %d\x00", len(content))
+	h.Write(content)
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }

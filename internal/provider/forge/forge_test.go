@@ -24,6 +24,9 @@ type fakeHost struct {
 	branches map[string]map[string]string // branch -> path -> content
 	prs      []map[string]any
 	auth     []string
+	failPR   bool     // pull requests are refused
+	modes    []string // "path mode" of GitHub tree entries written
+	deleted  []string // branches deleted
 }
 
 func newHost(t *testing.T) *fakeHost {
@@ -31,6 +34,8 @@ func newHost(t *testing.T) *fakeHost {
 		"apps/api/values.yaml":           "replicaCount: 2\n",
 		"apps/api/templates/deploy.yaml": "kind: Deployment\n",
 		"apps/web/values.yaml":           "replicaCount: 1\n",
+		"apps/api/link.yaml":             "values.yaml",
+		"scripts/run.sh":                 "#!/bin/sh\n",
 	}}}
 }
 
@@ -58,16 +63,23 @@ func readJSON(r *http.Request) map[string]any {
 	return v
 }
 
-// tree lists a branch's files and the directories above them, as Git trees do.
-func (h *fakeHost) tree(ref string) []map[string]any {
+// tree lists the files at baseSHA and the directories above them, as Git trees do.
+func (h *fakeHost) tree() []map[string]any {
 	var out []map[string]any
 	dirs := map[string]bool{}
-	for p := range h.files(ref) {
-		out = append(out, map[string]any{"path": p, "type": "blob"})
+	for p := range h.files(baseSHA) {
+		mode := "100644"
+		switch {
+		case strings.HasSuffix(p, ".sh"):
+			mode = "100755"
+		case strings.Contains(p, "link"):
+			mode = "120000"
+		}
+		out = append(out, map[string]any{"path": p, "type": "blob", "mode": mode})
 		for d := path.Dir(p); d != "."; d = path.Dir(d) {
 			if !dirs[d] {
 				dirs[d] = true
-				out = append(out, map[string]any{"path": d, "type": "tree"})
+				out = append(out, map[string]any{"path": d, "type": "tree", "mode": "040000"})
 			}
 		}
 	}
@@ -109,7 +121,7 @@ func (h *fakeHost) github() http.Handler {
 		case r.Method == http.MethodGet && p == "":
 			writeJSON(w, map[string]any{"default_branch": "main"})
 		case r.Method == http.MethodGet && p == "/git/trees/"+baseSHA && r.URL.Query().Get("recursive") == "1":
-			writeJSON(w, map[string]any{"tree": h.tree(baseSHA), "truncated": false})
+			writeJSON(w, map[string]any{"tree": h.tree(), "truncated": false})
 		case r.Method == http.MethodGet && p == "/branches/release/1.0":
 			writeJSON(w, map[string]any{"commit": map[string]any{"sha": baseSHA}})
 		case r.Method == http.MethodGet && p == "/branches/main":
@@ -118,6 +130,11 @@ func (h *fakeHost) github() http.Handler {
 			http.Error(w, `{"message":"Branch not found"}`, http.StatusNotFound)
 		case r.Method == http.MethodGet && p == "/commits/v1.0":
 			writeJSON(w, map[string]any{"sha": baseSHA})
+		case r.Method == http.MethodGet && p == "/git/trees/base-tree" && r.URL.Query().Get("recursive") == "1":
+			writeJSON(w, map[string]any{"tree": h.tree(), "truncated": false})
+		case r.Method == http.MethodDelete && strings.HasPrefix(p, "/git/refs/heads/"):
+			h.deleted = append(h.deleted, strings.TrimPrefix(p, "/git/refs/heads/"))
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && p == "/git/commits/"+baseSHA:
 			writeJSON(w, map[string]any{"tree": map[string]any{"sha": "base-tree"}})
 		case r.Method == http.MethodPost && p == "/git/trees":
@@ -132,6 +149,7 @@ func (h *fakeHost) github() http.Handler {
 			for _, e := range body["tree"].([]any) {
 				m := e.(map[string]any)
 				files[m["path"].(string)] = m["content"].(string)
+				h.modes = append(h.modes, m["path"].(string)+" "+m["mode"].(string))
 			}
 			h.branches["pending"] = files
 			writeJSON(w, map[string]any{"sha": "new-tree"})
@@ -145,6 +163,8 @@ func (h *fakeHost) github() http.Handler {
 			body := readJSON(r)
 			h.branches[strings.TrimPrefix(body["ref"].(string), "refs/heads/")] = h.branches["pending"]
 			writeJSON(w, map[string]any{"ref": body["ref"]})
+		case r.Method == http.MethodPost && p == "/pulls" && h.failPR:
+			http.Error(w, `{"message":"Validation Failed"}`, http.StatusUnprocessableEntity)
 		case r.Method == http.MethodPost && p == "/pulls":
 			body := readJSON(r)
 			h.prs = append(h.prs, body)
@@ -181,7 +201,7 @@ func (h *fakeHost) gitea() http.Handler {
 			writeJSON(w, []map[string]any{{"sha": baseSHA}})
 		case r.Method == http.MethodGet && p == "/git/trees/"+baseSHA && r.URL.Query().Get("recursive") == "true":
 			// Two pages, to exercise paging.
-			all, page := h.tree(baseSHA), r.URL.Query().Get("page")
+			all, page := h.tree(), r.URL.Query().Get("page")
 			half := len(all) / 2
 			if page == "1" {
 				writeJSON(w, map[string]any{"tree": all[:half], "truncated": true, "page": 1})
@@ -203,6 +223,11 @@ func (h *fakeHost) gitea() http.Handler {
 			}
 			h.branches[body["new_branch"].(string)] = files
 			writeJSON(w, map[string]any{"commit": map[string]any{"sha": "c"}})
+		case r.Method == http.MethodPost && p == "/pulls" && h.failPR:
+			http.Error(w, `{"message":"pull request already exists"}`, http.StatusConflict)
+		case r.Method == http.MethodDelete && strings.HasPrefix(p, "/branches/"):
+			h.deleted = append(h.deleted, strings.TrimPrefix(p, "/branches/"))
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && p == "/pulls":
 			h.prs = append(h.prs, readJSON(r))
 			writeJSON(w, map[string]any{"html_url": "https://git.example.com/example-org/gitops/pulls/3"})
@@ -237,7 +262,7 @@ func (h *fakeHost) gitlab() http.Handler {
 				h.t.Errorf("tree query = %v", q)
 			}
 			var out []map[string]any
-			for _, e := range h.tree(baseSHA) {
+			for _, e := range h.tree() {
 				if strings.HasPrefix(e["path"].(string), q.Get("path")+"/") {
 					out = append(out, e)
 				}
@@ -270,6 +295,12 @@ func (h *fakeHost) gitlab() http.Handler {
 			}
 			h.branches[body["branch"].(string)] = files
 			writeJSON(w, map[string]any{"id": "c"})
+		case r.Method == http.MethodPost && p == "/merge_requests" && h.failPR:
+			http.Error(w, `{"message":["Another open merge request already exists"]}`, http.StatusConflict)
+		case r.Method == http.MethodDelete && strings.HasPrefix(p, "/repository/branches/"):
+			b, _ := url.PathUnescape(strings.TrimPrefix(p, "/repository/branches/"))
+			h.deleted = append(h.deleted, b)
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && p == "/merge_requests":
 			h.prs = append(h.prs, readJSON(r))
 			writeJSON(w, map[string]any{"web_url": "https://gitlab.example.com/example-org/gitops/-/merge_requests/9"})
@@ -317,7 +348,7 @@ func TestForges(t *testing.T) {
 				t.Fatalf("missing file: %v, %v", found, err)
 			}
 			files, truncated, err := f.ListFiles(ctx, "example-org/gitops", baseSHA, "apps/api")
-			if err != nil || truncated || !slices.Equal(files, []string{"apps/api/templates/deploy.yaml", "apps/api/values.yaml"}) {
+			if err != nil || truncated || !slices.Equal(files, []string{"apps/api/link.yaml", "apps/api/templates/deploy.yaml", "apps/api/values.yaml"}) {
 				t.Fatalf("ListFiles = %v, %v, %v", files, truncated, err)
 			}
 			u, err := f.Propose(ctx, "example-org/gitops", capability.Proposal{
@@ -381,5 +412,87 @@ func TestForgeRefusesDotSegments(t *testing.T) {
 	}
 	if hits != 0 {
 		t.Fatalf("%d requests reached the forge", hits)
+	}
+}
+
+// forgeFor serves h with the forge of kind and returns it.
+func forgeFor(t *testing.T, kind string, h *fakeHost) capability.Forge {
+	t.Helper()
+	handler := map[string]http.Handler{"github": h.github(), "gitea": h.gitea(), "gitlab": h.gitlab()}[kind]
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	f, err := New(Options{Type: kind, URL: srv.URL, Token: func() (string, error) { return "t", nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// A branch made for a pull request that could not be opened is removed, not left behind.
+func TestProposeDeletesTheBranchWhenThePullRequestFails(t *testing.T) {
+	for _, kind := range []string{"github", "gitea", "gitlab"} {
+		t.Run(kind, func(t *testing.T) {
+			h := newHost(t)
+			h.failPR = true
+			f := forgeFor(t, kind, h)
+			_, err := f.Propose(context.Background(), "example-org/gitops", capability.Proposal{
+				Base: "main", BaseCommit: baseSHA, Branch: "opsward/abc", Title: "t", Message: "t",
+				Files: map[string][]byte{"apps/api/values.yaml": []byte("replicaCount: 4\n")},
+			})
+			if err == nil || !slices.Equal(h.deleted, []string{"opsward/abc"}) {
+				t.Fatalf("err = %v, deleted %v", err, h.deleted)
+			}
+		})
+	}
+}
+
+// GitHub trees take a mode per entry: an edited file keeps its own, and a symlink is not
+// rewritten as a file.
+func TestGitHubProposalKeepsModes(t *testing.T) {
+	h := newHost(t)
+	f := forgeFor(t, "github", h)
+	_, err := f.Propose(context.Background(), "example-org/gitops", capability.Proposal{
+		Base: "main", BaseCommit: baseSHA, Branch: "opsward/abc", Title: "t", Message: "t",
+		Files: map[string][]byte{"scripts/run.sh": []byte("#!/bin/sh\nexit 0\n"), "apps/api/values.yaml": []byte("replicaCount: 4\n")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(h.modes)
+	if !slices.Equal(h.modes, []string{"apps/api/values.yaml 100644", "scripts/run.sh 100755"}) {
+		t.Fatalf("modes = %v", h.modes)
+	}
+	_, err = f.Propose(context.Background(), "example-org/gitops", capability.Proposal{
+		Base: "main", BaseCommit: baseSHA, Branch: "opsward/def", Title: "t", Message: "t",
+		Files: map[string][]byte{"apps/api/link.yaml": []byte("other.yaml")},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("symlink: err = %v", err)
+	}
+}
+
+// Only regular files are read: a directory or a symlink is an error that says so.
+func TestReadFileRefusesDirectoriesAndSymlinks(t *testing.T) {
+	answers := map[string]string{
+		"github:dir":  `[{"type":"file","path":"apps/api/values.yaml"}]`,
+		"github:link": `{"type":"file","path":"apps/api/values.yaml","encoding":"base64","content":"eA=="}`,
+		"gitea:dir":   `[{"type":"file","path":"apps/api/values.yaml"}]`,
+		"gitea:link":  `{"type":"symlink","path":"apps/api/link.yaml","target":"values.yaml"}`,
+	}
+	for _, kind := range []string{"github", "gitea"} {
+		for _, what := range []string{"dir", "link"} {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, answers[kind+":"+what])
+			}))
+			f, _ := New(Options{Type: kind, URL: srv.URL, Token: func() (string, error) { return "t", nil }})
+			p := map[string]string{"dir": "apps/api", "link": "apps/api/link.yaml"}[what]
+			_, found, err := f.ReadFile(context.Background(), "example-org/gitops", baseSHA, p)
+			want := map[string]string{"dir": "is a directory", "link": "not a regular file"}[what]
+			if found || err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s %s: found %v, err %v; want %q", kind, what, found, err, want)
+			}
+			srv.Close()
+		}
 	}
 }

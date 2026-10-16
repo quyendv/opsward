@@ -44,12 +44,12 @@ func (g *gitlab) Propose(ctx context.Context, repo string, p capability.Proposal
 	var mr struct {
 		WebURL string `json:"web_url"`
 	}
-	if err := g.do(ctx, http.MethodPost, project(repo)+"/merge_requests", map[string]any{
+	err := g.do(ctx, http.MethodPost, project(repo)+"/merge_requests", map[string]any{
 		"source_branch": p.Branch, "target_branch": p.Base, "title": p.Title, "description": p.Body,
-	}, &mr); err != nil {
-		return "", err
-	}
-	return mr.WebURL, nil
+	}, &mr)
+	return opened(ctx, mr.WebURL, err, func(ctx context.Context) error {
+		return g.do(ctx, http.MethodDelete, project(repo)+"/repository/branches/"+url.PathEscape(p.Branch), nil, nil)
+	})
 }
 
 func (g *gitlab) DefaultBranch(ctx context.Context, repo string) (string, error) {
