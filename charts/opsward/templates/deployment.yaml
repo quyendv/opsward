@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "opsward.fullname" . }}
+  labels: {{- include "opsward.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    # SQLite on a ReadWriteOnce volume: the old pod must let go of it first.
+    type: {{ if and .Values.persistence.enabled (include "opsward.sqlite" .) }}Recreate{{ else }}RollingUpdate{{ end }}
+  selector:
+    matchLabels: {{- include "opsward.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "opsward.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      annotations:
+        checksum/restart: {{ include "opsward.restartHash" . }}
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "opsward.fullname" . }}
+      automountServiceAccountToken: false # the pod's own identity carries no token
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opsward
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --config
+            - /etc/opsward/config/opsward.yaml
+          ports:
+            - name: http
+              containerPort: 8080
+          {{- $scheme := ternary "HTTPS" "HTTP" (hasKey (dig "server" "http" dict .Values.config) "tls") }}
+          livenessProbe:
+            httpGet: { path: /healthz, port: http, scheme: {{ $scheme }} }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http, scheme: {{ $scheme }} }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # A directory, not a subPath: edits reach the process, which reloads them.
+            - name: config
+              mountPath: /etc/opsward/config
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/opsward
+            - name: tmp
+              mountPath: /tmp
+            {{- range .Values.localProfiles }}
+            - name: kubeconfig-{{ . }}
+              mountPath: /etc/opsward/kubeconfig/{{ . }}
+              readOnly: true
+            - name: token-{{ . }}
+              mountPath: /etc/opsward/tokens/{{ . }}
+              readOnly: true
+            {{- end }}
+            {{- range .Values.extraSecretMounts }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "opsward.fullname" . }}
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          {{- if and .Values.persistence.enabled (include "opsward.sqlite" .) }}
+          persistentVolumeClaim:
+            claimName: {{ include "opsward.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- range .Values.localProfiles }}
+        - name: kubeconfig-{{ . }}
+          configMap:
+            name: {{ include "opsward.fullname" $ }}-kubeconfigs
+            items:
+              - { key: {{ . }}, path: kubeconfig }
+        - name: token-{{ . }}
+          secret:
+            secretName: opsward-{{ . }}-token
+        {{- end }}
+        {{- range .Values.extraSecretMounts }}
+        - name: {{ .name }}
+          secret:
+            secretName: {{ .secretName }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

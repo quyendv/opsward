@@ -1,0 +1,4 @@
+# expect: the chart runs Opsward in remote mode
+config:
+  identity: { mode: local, principal: { subject: me } }
+  storage: { path: /var/lib/opsward/opsward.db }

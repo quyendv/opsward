@@ -1,0 +1,4 @@
+# expect: localProfiles: "reader" appears twice
+config:
+  identity: { mode: remote }
+localProfiles: [reader, reader]

@@ -1,0 +1,56 @@
+# Postgres with two replicas, an Ingress, credentials from Secrets, reviewed RBAC.
+replicaCount: 2
+config:
+  identity: { mode: remote }
+  server:
+    http:
+      tls: { certFile: /etc/opsward/secrets/tls/tls.crt, keyFile: /etc/opsward/secrets/tls/tls.key }
+  storage:
+    type: postgres
+    dsn: { file: /etc/opsward/secrets/postgres/dsn }
+  providers:
+    kubernetes:
+      clusters:
+        local:
+          profiles:
+            reader: { kubeconfig: /etc/opsward/kubeconfig/reader/kubeconfig }
+            operator: { kubeconfig: /etc/opsward/kubeconfig/operator/kubeconfig }
+        cluster-b:
+          profiles:
+            reader: { kubeconfig: /etc/opsward/secrets/cluster-b/kubeconfig }
+  environments:
+    - { name: staging, cluster: local, namespaces: [team-a-api] }
+    - { name: production, cluster: cluster-b }
+  policy:
+    roles: { viewer: { risk: [read] }, restarter: { tools: [restart_workload] } }
+    bindings:
+      - { name: view, subjects: { groups: [team-a] }, role: viewer }
+      - { name: restart, subjects: { groups: [team-a] }, role: restarter, scope: { environments: [staging] } }
+localProfiles: [reader, operator]
+extraSecretMounts:
+  - { name: postgres, secretName: opsward-postgres, mountPath: /etc/opsward/secrets/postgres }
+  - { name: cluster-b, secretName: opsward-cluster-b, mountPath: /etc/opsward/secrets/cluster-b }
+  - { name: tls, secretName: opsward-tls, mountPath: /etc/opsward/secrets/tls }
+ingress:
+  enabled: true
+  className: nginx
+  host: opsward.example.com
+  tls: [{ hosts: [opsward.example.com], secretName: opsward-tls }]
+rbac:
+  rendered: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: opsward:reader
+    rules:
+      - apiGroups: [apps]
+        resources: [deployments]
+        verbs: [get]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: opsward:reader
+      namespace: team-a-api
+    roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "opsward:reader" }
+    subjects: [{ kind: ServiceAccount, name: opsward-reader, namespace: opsward }]

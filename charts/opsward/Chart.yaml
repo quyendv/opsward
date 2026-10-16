@@ -1,0 +1,11 @@
+apiVersion: v2
+name: opsward
+description: A guarded gateway that lets AI agents operate infrastructure within the permissions you grant.
+type: application
+# Set to the release's version when the chart is published with it.
+version: 0.0.0-dev
+appVersion: "0.0.0-dev"
+home: https://github.com/quyendv/opsward
+sources: [https://github.com/quyendv/opsward]
+license: Apache-2.0
+keywords: [mcp, kubernetes, gitops, ai-agents]

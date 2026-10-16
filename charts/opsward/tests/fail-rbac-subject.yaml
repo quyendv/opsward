@@ -1,0 +1,16 @@
+# expect: rbac.rendered: ClusterRoleBinding x binds ServiceAccount kube-system/default
+config:
+  identity: { mode: remote }
+localProfiles: [reader]
+rbac:
+  rendered: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata: { name: "opsward:reader" }
+    rules: []
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata: { name: x }
+    roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "opsward:reader" }
+    subjects: [{ kind: ServiceAccount, name: default, namespace: kube-system }]

@@ -1,0 +1,6 @@
+{{- /* The reviewed output of opsward rbac render --cluster; the chart never derives RBAC
+itself, and installs nothing else from it. */ -}}
+{{- with .Values.rbac.rendered }}
+{{- include "opsward.rbac" $ }}
+{{ . }}
+{{- end }}

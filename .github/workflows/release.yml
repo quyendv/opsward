@@ -72,3 +72,26 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+  chart:
+    # The chart names the image of the same version: publish it only once that exists.
+    needs: [image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # oci://ghcr.io/<owner>/charts/opsward
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          version: 2026.10.8
+      - run: mise run chart
+      # The chart's version and appVersion are the release's, so the chart runs the image
+      # built from the same tag.
+      - run: |
+          version="${GITHUB_REF_NAME#v}"
+          helm package charts/opsward --version "$version" --app-version "$version" -d "$RUNNER_TEMP"
+          helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GITHUB_TOKEN"
+          helm push "$RUNNER_TEMP/opsward-$version.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

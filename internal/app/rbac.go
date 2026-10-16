@@ -23,6 +23,9 @@ type RBACOptions struct {
 	ServiceAccountNamespace string
 	// Subjects replace the default subject of a profile.
 	Subjects map[string]rbacv1.Subject
+	// Cluster, if set, limits the output to one cluster: what is applied there, or
+	// installed with the Helm chart running in it.
+	Cluster string
 }
 
 // ParseRBACSubject reads <profile>=<User|Group|ServiceAccount>:<name>, where a
@@ -78,6 +81,12 @@ func RenderRBAC(cfg *config.Config, opt RBACOptions) (string, error) {
 		clusters = append(clusters, name)
 	}
 	slices.Sort(clusters)
+	if opt.Cluster != "" {
+		if _, ok := cfg.Providers.Kubernetes.Clusters[opt.Cluster]; !ok {
+			return "", fmt.Errorf("--cluster: the configuration has no cluster %q", opt.Cluster)
+		}
+		clusters = []string{opt.Cluster}
+	}
 	bound := map[string]bool{}
 	for _, cluster := range clusters {
 		objs, err := clusterRBAC(cfg, cluster, grants, needs, pol.NeedsLabels(), opt, bound)

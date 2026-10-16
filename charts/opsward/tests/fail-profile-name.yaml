@@ -1,0 +1,5 @@
+# expect: localProfiles: "Ops_B" is not a DNS-1123 label
+localProfiles: [Ops_B]
+config:
+  identity: { mode: remote }
+  storage: { path: /var/lib/opsward/opsward.db }

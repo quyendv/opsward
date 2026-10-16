@@ -52,6 +52,17 @@ claude mcp add --transport http opsward https://opsward.example.com/mcp \
 
 The client stores that header in its configuration; give each person their own token.
 
+To run it in a cluster, install the Helm chart (`charts/opsward`, design note
+[0011](docs/design/0011-running-in-a-cluster.md)):
+
+```sh
+helm install opsward oci://ghcr.io/quyendv/charts/opsward -n opsward --create-namespace -f values.yaml
+```
+
+`values.yaml` holds the configuration under `config` and names the profiles to create in
+that cluster under `localProfiles`; `opsward rbac render --cluster <it>
+--service-account-namespace opsward` prints the RBAC they need.
+
 Tools: `list_environments`, `list_namespaces`, `list_workloads` (each showing only what the
 caller may work on), `get_workload_status`, `list_workload_events`, `list_workload_logs`,
 `diagnose_workload`, `search_knowledge`, `get_knowledge`, `restart_workload` and

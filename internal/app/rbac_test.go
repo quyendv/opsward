@@ -264,3 +264,21 @@ func TestRenderRBACDeliveryWithoutForges(t *testing.T) {
 		t.Fatalf("no delivery Role:\n%s", out)
 	}
 }
+
+// A chart installs what is rendered into one cluster: --cluster limits the output to it.
+func TestRenderRBACOneCluster(t *testing.T) {
+	cfg, err := config.Parse([]byte(rbacConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := RenderRBAC(cfg, RBACOptions{Cluster: "cluster-b", Subjects: map[string]rbacv1.Subject{"ops-b": {Kind: "User", Name: "x"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "# Cluster cluster-b") || strings.Contains(out, "# Cluster cluster-a") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if _, err := RenderRBAC(cfg, RBACOptions{Cluster: "cluster-z"}); err == nil || !strings.Contains(err.Error(), "cluster-z") {
+		t.Fatalf("unknown cluster: err = %v", err)
+	}
+}
