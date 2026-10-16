@@ -80,7 +80,7 @@ func RenderRBAC(cfg *config.Config, opt RBACOptions) (string, error) {
 	slices.Sort(clusters)
 	bound := map[string]bool{}
 	for _, cluster := range clusters {
-		objs, err := clusterRBAC(cfg, cluster, grants, needs, opt, bound)
+		objs, err := clusterRBAC(cfg, cluster, grants, needs, pol.NeedsLabels(), opt, bound)
 		if err != nil {
 			return "", err
 		}
@@ -89,9 +89,12 @@ func RenderRBAC(cfg *config.Config, opt RBACOptions) (string, error) {
 		}
 		fmt.Fprintf(&b, "\n# Cluster %s\n", cluster)
 		for _, o := range objs {
-			y, err := yaml.Marshal(o)
+			y, err := yaml.Marshal(o.obj)
 			if err != nil {
 				return "", err
+			}
+			if o.note != "" {
+				b.WriteString("# " + o.note + "\n")
 			}
 			b.WriteString("---\n")
 			b.Write(y)
@@ -109,11 +112,18 @@ func RenderRBAC(cfg *config.Config, opt RBACOptions) (string, error) {
 type profileUse struct {
 	ops        []string
 	namespaces []string // of the environments it serves
-	wide       bool     // an environment it serves has namespace patterns
+	// wide names the environments it serves that have namespace patterns, with them.
+	wide []string
+}
+
+// object is one rendered object, with a note shown above it.
+type object struct {
+	obj  any
+	note string
 }
 
 // clusterRBAC renders one cluster's objects, and records in bound the profiles it binds.
-func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[string][]string, needs map[string][]string, opt RBACOptions, bound map[string]bool) ([]any, error) {
+func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[string][]string, needs map[string][]string, labels bool, opt RBACOptions, bound map[string]bool) ([]object, error) {
 	declared := cfg.Providers.Kubernetes.Clusters[cluster].Profiles
 	uses := map[string]*profileUse{}
 	use := func(profile string, env config.Environment, ops ...string) {
@@ -127,12 +137,16 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 				u.ops = append(u.ops, op)
 			}
 		}
+		var patterns []string
 		for _, ns := range env.Namespaces {
 			if strings.ContainsAny(ns, "*?[") {
-				u.wide = true
+				patterns = append(patterns, ns)
 			} else if !slices.Contains(u.namespaces, ns) {
 				u.namespaces = append(u.namespaces, ns)
 			}
+		}
+		if w := fmt.Sprintf("environment %s (%s)", env.Name, strings.Join(patterns, ", ")); len(patterns) > 0 && !slices.Contains(u.wide, w) {
+			u.wide = append(u.wide, w)
 		}
 	}
 	for _, env := range cfg.Environments {
@@ -143,8 +157,9 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 			for _, t := range tools {
 				use(profile, env, needs[t]...)
 				// The engine reads a targeted workload's labels with the reader before
-				// authorization, whatever profile the call then runs with.
-				if slices.Contains(needs[t], capability.OpWorkloadsGet) {
+				// authorization, whatever profile the call then runs with, when policy
+				// looks at labels.
+				if labels && slices.Contains(needs[t], capability.OpWorkloadsGet) {
 					if _, ok := declared[core.ProfileReader]; ok {
 						use(core.ProfileReader, env, capability.OpWorkloadsGet)
 					}
@@ -160,7 +175,7 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 		}
 		return rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: opt.ServiceAccountNamespace, Name: "opsward-" + profile}
 	}
-	var objs []any
+	var objs []object
 	profiles := make([]string, 0, len(uses))
 	for p := range uses {
 		profiles = append(profiles, p)
@@ -176,40 +191,46 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name}
 		subjects := []rbacv1.Subject{subject(profile)}
 		if len(namespaced) > 0 {
-			objs = append(objs, clusterRole(name, namespaced))
-			if u.wide {
-				objs = append(objs, clusterRoleBinding(name, ref, subjects))
+			objs = append(objs, object{obj: clusterRole(name, namespaced)})
+			if len(u.wide) > 0 {
+				slices.Sort(u.wide)
+				objs = append(objs, object{
+					obj:  clusterRoleBinding(name, ref, subjects),
+					note: fmt.Sprintf("%s is bound cluster-wide by the namespace patterns of %s.", name, strings.Join(u.wide, ", ")),
+				})
 			} else {
 				slices.Sort(u.namespaces)
 				for _, ns := range u.namespaces {
-					objs = append(objs, roleBinding(name, ns, ref, subjects))
+					objs = append(objs, object{obj: roleBinding(name, ns, ref, subjects)})
 				}
 			}
 		}
 		if len(clusterRules) > 0 {
 			cname := name + ":cluster"
-			objs = append(objs, clusterRole(cname, clusterRules),
-				clusterRoleBinding(cname, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: cname}, subjects))
+			objs = append(objs, object{obj: clusterRole(cname, clusterRules)},
+				object{obj: clusterRoleBinding(cname, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: cname}, subjects)})
 		}
 	}
 	if d := cfg.Providers.Delivery; d != nil && d.Cluster == cluster && len(cfg.Providers.Forges) > 0 {
 		rules, _ := kubernetes.Rules([]string{capability.OpApplicationsGet})
 		name := rbacPrefix + d.Profile + ":delivery"
-		objs = append(objs,
-			&rbacv1.Role{TypeMeta: typeMeta("Role"), ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: d.Namespace}, Rules: rules},
-			roleBinding(name, d.Namespace, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name}, []rbacv1.Subject{subject(d.Profile)}))
+		for _, ns := range append([]string{d.Namespace}, d.ApplicationNamespaces...) {
+			objs = append(objs,
+				object{obj: &rbacv1.Role{TypeMeta: typeMeta("Role"), ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Rules: rules}},
+				object{obj: roleBinding(name, ns, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name}, []rbacv1.Subject{subject(d.Profile)})})
+		}
 	}
 	return objs, unique(objs)
 }
 
 // unique refuses two objects of one kind and name in one namespace: kubectl apply would
 // merge them into one, granting one subject the other's rules.
-func unique(objs []any) error {
+func unique(objs []object) error {
 	seen := map[string]bool{}
 	for _, o := range objs {
 		var kind string
 		var meta metav1.ObjectMeta
-		switch v := o.(type) {
+		switch v := o.obj.(type) {
 		case *rbacv1.ClusterRole:
 			kind, meta = v.Kind, v.ObjectMeta
 		case *rbacv1.ClusterRoleBinding:

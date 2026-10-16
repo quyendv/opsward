@@ -152,15 +152,37 @@ func Compile(cfg Config, cat Catalog, log *slog.Logger) (*Policy, []string, erro
 func defaultProfiles(r Role, cat Catalog) []string {
 	var out []string
 	for name, t := range cat.Tools {
-		if t.Global || !r.contains(name, t.Risk) {
+		for _, p := range profilesFor(r, name, t, "") {
+			if !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// profilesFor returns the profiles calls to the tool run with under a binding of role r
+// that names profile (or none): a call runs at the tool's risk or a lower one it declares,
+// and a binding without a profile uses the default one for that risk. Global tools use no
+// profile.
+func profilesFor(r Role, name string, t ToolInfo, profile string) []string {
+	if t.Global {
+		return nil
+	}
+	var out []string
+	for _, risk := range append([]core.Risk{t.Risk}, t.Risks...) {
+		if !r.contains(name, risk) {
 			continue
 		}
-		need := core.ProfileOperator
-		if t.Risk == core.RiskRead {
-			need = core.ProfileReader
+		p := profile
+		if p == "" {
+			p = core.ProfileOperator
+			if risk == core.RiskRead {
+				p = core.ProfileReader
+			}
 		}
-		if !slices.Contains(out, need) {
-			out = append(out, need)
+		if !slices.Contains(out, p) {
+			out = append(out, p)
 		}
 	}
 	return out

@@ -19,6 +19,8 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - Profile names must be DNS-1123 labels (lowercase letters, digits and `-`).
+- Argo CD Applications outside `providers.delivery.namespace` are read only from the
+  namespaces `providers.delivery.applicationNamespaces` lists.
 - `list_workloads` without a namespace, in an environment that lists its namespaces, lists
   them one by one without listing the cluster's namespaces first.
 

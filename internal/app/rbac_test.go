@@ -87,6 +87,7 @@ func TestRenderRBAC(t *testing.T) {
 		"kind: RoleBinding\nmetadata:\n  name: opsward:reader\n  namespace: team-a-api",
 		"kind: ClusterRoleBinding\nmetadata:\n  name: opsward:ops-b",
 		"name: opsward:reader:delivery\n  namespace: argocd",
+		"# opsward:reader is bound cluster-wide by the namespace patterns of environment production (*).\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRoleBinding\nmetadata:\n  name: opsward:reader\n",
 	} {
 		if !strings.Contains(got, must) {
 			t.Errorf("output misses %q", must)
@@ -194,5 +195,51 @@ func TestRenderRBACRefusesAnUnusedSubject(t *testing.T) {
 	_, err = RenderRBAC(cfg, RBACOptions{Subjects: map[string]rbacv1.Subject{"oprator": {Kind: "User", Name: "x"}}})
 	if err == nil || !strings.Contains(err.Error(), `"oprator"`) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// The reader reads targets' labels before authorization only when a binding looks at
+// them (apps or a labels condition); otherwise it needs no grant for that.
+func TestRenderRBACReaderForLabelsOnlyWhenRead(t *testing.T) {
+	doc := strings.Replace(rbacConfig, "    - { name: view, subjects: { groups: [team-a] }, role: viewer }\n", "", 1)
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := RenderRBAC(cfg, RBACOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "name: opsward:reader\n") {
+		t.Errorf("the reader is granted although no binding reads labels:\n%s", out)
+	}
+	doc = strings.Replace(doc, "role: restarter, scope: { environments: [staging] } }", "role: restarter, scope: { environments: [staging], apps: [checkout] } }", 1)
+	if cfg, err = config.Parse([]byte(doc)); err != nil {
+		t.Fatal(err)
+	}
+	if out, err = RenderRBAC(cfg, RBACOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "kind: RoleBinding\nmetadata:\n  name: opsward:reader\n  namespace: team-a-api") {
+		t.Errorf("the reader is not granted for an apps-scoped binding:\n%s", out)
+	}
+}
+
+func TestRenderRBACApplicationNamespaces(t *testing.T) {
+	doc := strings.Replace(rbacConfig, "  delivery: { type: argocd, cluster: cluster-a }", "  delivery: { type: argocd, cluster: cluster-a, applicationNamespaces: [team-a-apps] }", 1)
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := RenderRBAC(cfg, RBACOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ns := range []string{"argocd", "team-a-apps"} {
+		for _, kind := range []string{"Role", "RoleBinding"} {
+			if !strings.Contains(out, "kind: "+kind+"\nmetadata:\n  name: opsward:reader:delivery\n  namespace: "+ns+"\n") {
+				t.Errorf("no %s in %s", kind, ns)
+			}
+		}
 	}
 }
