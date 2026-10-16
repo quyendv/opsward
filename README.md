@@ -2,7 +2,7 @@
 
 **A guarded gateway that lets AI agents operate your infrastructure, within the permissions you grant.**
 
-> Status: pre-alpha. Workload, metrics and logs tools, knowledge packs, narrow changes with approvals and pull requests against a GitOps source work over MCP stdio, or over HTTP for a team; nothing is stable.
+> Status: pre-alpha. Workload, metrics and logs tools, knowledge packs, narrow changes with approvals, pull requests against a GitOps source and alert investigation work over MCP stdio, or over HTTP for a team; nothing is stable.
 
 ## Why
 
@@ -75,6 +75,8 @@ metrics backend also `get_workload_metrics` and `query_metrics`, and with Loki `
 In remote mode Opsward can also take Alertmanager's alerts (`alerts` in the
 configuration, design note [0012](docs/design/0012-alert-investigation.md)): each firing
 alert is mapped to its workload and diagnosed, and the result goes to a webhook or Slack.
+With agent mode on (`agent`, design note [0013](docs/design/0013-agent-mode.md)), a model
+then looks further with the read tools and adds a short analysis.
 Free-form queries are rewritten so that they cannot leave the caller's namespace and
 cluster; without a namespace they span the cluster, where the environment and policy allow. Results that match a knowledge document carry its
 summary as a note. Edits to the configuration file apply without a restart; after editing

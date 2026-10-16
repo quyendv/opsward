@@ -10,7 +10,7 @@ is not raw API access, which many MCP servers already offer, but **typed operati
 per-principal policy, audit, redaction, and a write path that proposes changes instead of
 making them**.
 
-Status: **pre-alpha.** Nothing is stable. Workload, metrics and logs tools, knowledge packs, narrow changes with approvals and pull requests against a GitOps source work end to end over MCP stdio, and over HTTP with API tokens or OIDC.
+Status: **pre-alpha.** Nothing is stable. Workload, metrics and logs tools, knowledge packs, narrow changes with approvals, pull requests against a GitOps source and alert investigation work end to end over MCP stdio, and over HTTP with API tokens or OIDC.
 Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0001](docs/design/0001-architecture.md) for the architecture,
 [0002](docs/design/0002-identity-policy-storage.md) for identity, policy and storage,
@@ -21,7 +21,8 @@ Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0009](docs/design/0009-rbac-render.md) for rendering backend permissions,
 [0010](docs/design/0010-delivery-status.md) for delivery status,
 [0011](docs/design/0011-running-in-a-cluster.md) for running in a cluster,
-[0012](docs/design/0012-alert-investigation.md) for alert investigation.
+[0012](docs/design/0012-alert-investigation.md) for alert investigation,
+[0013](docs/design/0013-agent-mode.md) for agent mode.
 
 ## Layout
 
@@ -42,6 +43,8 @@ internal/tool/               the agent's vocabulary
 internal/knowledge/          knowledge packs; builtin/ holds the generic pack
 internal/adapter/<protocol>/ the only place protocol SDKs appear (mcp); alertmanager receives alerts
 internal/notify/             where alert investigations are sent: webhook, Slack
+internal/agent/              agent mode: a model over the read tools, through the engine
+internal/llm/                model provider clients (Anthropic Messages API), plain HTTP
 internal/app/                wiring from configuration
 examples/                    configuration examples
 charts/opsward/              Helm chart; scripts/chart-test.sh (mise run chart) tests it

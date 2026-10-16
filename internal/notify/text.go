@@ -33,6 +33,12 @@ func Text(n Notification) string {
 		fmt.Fprintf(&b, "Not investigated: %s\n", esc(n.Error))
 		return b.String()
 	}
+	switch {
+	case n.Analysis != "":
+		fmt.Fprintf(&b, "Analysis: %s\n", esc(n.Analysis))
+	case n.AnalysisNote != "":
+		fmt.Fprintf(&b, "No analysis: %s\n", esc(n.AnalysisNote))
+	}
 	d, _ := n.Diagnosis.(map[string]any)
 	status, _ := d["status"].(map[string]any)
 	if r, ok := status["replicas"].(map[string]any); ok {

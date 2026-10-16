@@ -25,6 +25,7 @@ kind: PersistentVolumeClaim
 mountPath: /var/lib/opsward
 replicas: 1
 type: Recreate
+terminationGracePeriodSeconds: 150
 # Health.
 path: /healthz
 path: /readyz

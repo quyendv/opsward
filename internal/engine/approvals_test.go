@@ -488,3 +488,30 @@ func TestPreparedRiskMustBeDeclared(t *testing.T) {
 		t.Fatalf("an undeclared lower risk was taken: %v", risks)
 	}
 }
+
+// Calls nobody waits on (an alert investigation, an agent) cannot become approval
+// requests: an approve decision denies them, and no request is stored.
+func TestUnattendedCallsAreNotApproved(t *testing.T) {
+	tl := Tool{
+		Name: "peek", Risk: core.RiskRead, InputSchema: &jsonschema.Schema{Type: "object"},
+		Prepare: func(json.RawMessage) (*Prepared, error) {
+			return &Prepared{
+				Scope: core.Scope{Environment: "staging", Namespace: "team-a-api", Kind: "Deployment", Name: "api"}, Args: map[string]any{},
+				Run: func(context.Context, string) (any, error) { return "ok", nil },
+			}, nil
+		},
+	}
+	store := &memApprovals{}
+	e, _ := New(Options{
+		Tools: []Tool{tl}, Environments: []Environment{{Name: "staging", Namespaces: []string{"*"}}},
+		Authorizer: authorizerFunc(func(core.Request) core.Decision {
+			return core.Decision{Effect: core.EffectApprove, Rule: "careful", Approvers: &core.Approvers{Groups: []string{"platform"}}}
+		}),
+		Auditor: &recordingAuditor{}, Approvals: store,
+	})
+	_, err := e.Invoke(core.WithUnattended(context.Background()), alice, "peek", json.RawMessage(`{}`))
+	var denied *DeniedError
+	if !errors.As(err, &denied) || !strings.Contains(err.Error(), "approval") || len(store.m) != 0 {
+		t.Fatalf("err = %v, stored %d", err, len(store.m))
+	}
+}

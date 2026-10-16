@@ -23,7 +23,7 @@ type SecretRef struct {
 // UnmarshalYAML rejects an inline value without repeating it: it is likely a secret.
 func (r *SecretRef) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: a secret (storage.dsn, a forge token, an alert notifier) must be { file: PATH } or { env: NAME }; an inline value is not accepted", n.Line)
+		return fmt.Errorf("line %d: a secret (storage.dsn, a forge token, an alert notifier, a model key) must be { file: PATH } or { env: NAME }; an inline value is not accepted", n.Line)
 	}
 	type plain SecretRef
 	return n.Decode((*plain)(r))

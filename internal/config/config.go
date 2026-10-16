@@ -46,6 +46,8 @@ type Config struct {
 	SourceResolution SourceResolution `yaml:"sourceResolution"`
 	// Alerts, when set, investigates Alertmanager's alerts (docs/design/0012).
 	Alerts *Alerts `yaml:"alerts"`
+	// Agent, when set, configures the model agent mode uses (docs/design/0013).
+	Agent *Agent `yaml:"agent"`
 }
 
 // Approvals configures approval requests (docs/design/0007).
@@ -250,6 +252,7 @@ func (c *Config) applyDefaults() {
 	}
 	c.changeDefaults()
 	c.alertsDefaults()
+	c.agentDefaults()
 	for _, b := range c.backends() {
 		if b.NamespaceLabel == "" {
 			b.NamespaceLabel = "namespace"
@@ -347,6 +350,7 @@ func (c *Config) validate() error {
 	}
 	c.validateChange(seen, fail)
 	c.validateAlerts(fail)
+	c.validateAgent(fail)
 	return errors.Join(errs...)
 }
 
@@ -422,6 +426,7 @@ func (c *Config) Warnings() []string {
 	}
 	out = append(out, c.remoteWarnings()...)
 	out = append(out, c.alertWarnings()...)
+	out = append(out, c.agentWarnings()...)
 	sort.Strings(out)
 	return out
 }
@@ -444,6 +449,9 @@ func (c *Config) RestartRequired(next *Config) []string {
 	}
 	if !reflect.DeepEqual(c.Alerts, next.Alerts) {
 		out = append(out, "alerts")
+	}
+	if !reflect.DeepEqual(c.Agent, next.Agent) {
+		out = append(out, "agent")
 	}
 	if !reflect.DeepEqual(c.Audit, next.Audit) {
 		out = append(out, "audit")

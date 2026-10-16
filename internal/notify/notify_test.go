@@ -121,3 +121,16 @@ func TestTextListsUnavailablePartsInOrder(t *testing.T) {
 		t.Fatalf("order:\n%s", got)
 	}
 }
+
+func TestTextShowsTheAnalysis(t *testing.T) {
+	n := note()
+	n.Analysis = "Out of memory: raise the limit to 512Mi. <!here>"
+	got := Text(n)
+	if !strings.Contains(got, "Analysis: Out of memory: raise the limit to 512Mi. &lt;!here&gt;") {
+		t.Fatalf("text:\n%s", got)
+	}
+	n.Analysis, n.AnalysisNote = "", "the agent's hourly limit is reached"
+	if got := Text(n); !strings.Contains(got, "No analysis: the agent's hourly limit is reached") {
+		t.Fatalf("text:\n%s", got)
+	}
+}
