@@ -70,7 +70,7 @@ type App struct {
 	lib        *knowledge.Library
 	metrics    *metricsRoutes // nil without any metrics backend
 	logs       *logsRoutes    // nil without any logs backend
-	changes    *changeRoutes  // nil without any forge
+	changes    *changeRoutes  // nil without a forge or providers.delivery
 	envs       environments
 	tools      []engine.Tool
 }
@@ -176,11 +176,13 @@ func checkTools(cfg *config.Config) ([]engine.Tool, error) {
 	if cfg.Identity.Mode == config.ModeRemote {
 		approvals = noApprovals{}
 	}
+	// An empty changeRoutes registers the tools; its Changes is nil, so they must not
+	// be run from here.
 	var changes tool.ChangeConfig
-	if len(cfg.Providers.Forges) > 0 {
+	if f := featuresOf(cfg); f.proposals || f.delivery {
 		changes = &changeRoutes{}
 	}
-	return buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals, changes)
+	return buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals, changes, featuresOf(cfg))
 }
 
 // Open builds the App: store, audit writer, providers, tools, policy, knowledge and engine.
@@ -235,7 +237,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	if a.changes != nil {
 		changes = a.changes
 	}
-	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs, approvalTools, changes); err != nil {
+	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs, approvalTools, changes, featuresOf(cfg)); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
@@ -503,7 +505,17 @@ func (a *App) Close() error {
 
 // buildTools registers the tools whose backends are configured (docs/design/0001,
 // "Registration follows capability"). ms and ls are nil when not configured.
-func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments, approvals tool.ApprovalStore, changes tool.ChangeConfig) ([]engine.Tool, error) {
+// features are the optional tool groups a configuration enables.
+type features struct {
+	proposals bool // a forge: resolve_source, propose_change
+	delivery  bool // providers.delivery: get_delivery_status
+}
+
+func featuresOf(cfg *config.Config) features {
+	return features{proposals: len(cfg.Providers.Forges) > 0, delivery: cfg.Providers.Delivery != nil}
+}
+
+func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments, approvals tool.ApprovalStore, changes tool.ChangeConfig, f features) ([]engine.Tool, error) {
 	builders := []func() (engine.Tool, error){
 		func() (engine.Tool, error) { return tool.RestartWorkload(src) },
 		func() (engine.Tool, error) { return tool.ScaleWorkload(src) },
@@ -526,11 +538,14 @@ func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capabi
 	if ls != nil {
 		builders = append(builders, func() (engine.Tool, error) { return tool.QueryLogs(ls) })
 	}
-	if changes != nil {
+	if changes != nil && f.proposals {
 		builders = append(builders,
 			func() (engine.Tool, error) { return tool.ResolveSource(src, changes) },
 			func() (engine.Tool, error) { return tool.ProposeChange(src, changes) },
 		)
+	}
+	if changes != nil && f.delivery {
+		builders = append(builders, func() (engine.Tool, error) { return tool.DeliveryStatus(src, changes) })
 	}
 	if approvals != nil {
 		builders = append(builders,

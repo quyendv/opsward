@@ -49,6 +49,8 @@ providers:
     namespace: argocd         # default
     labelTracking: false      # default: the tracking-id annotation
     applicationNamespaces: [] # other namespaces Applications may live in
+    destinations:             # other clusters, as Applications name them (0010)
+      cluster-b: [https://cluster-b.example.com]
   forges:
     - name: github
       type: github            # github, gitea (also Forgejo) or gitlab

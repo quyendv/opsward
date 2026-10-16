@@ -211,7 +211,7 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 				object{obj: clusterRoleBinding(cname, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: cname}, subjects)})
 		}
 	}
-	if d := cfg.Providers.Delivery; d != nil && d.Cluster == cluster && len(cfg.Providers.Forges) > 0 {
+	if d := cfg.Providers.Delivery; d != nil && d.Cluster == cluster {
 		rules, _ := kubernetes.Rules([]string{capability.OpApplicationsGet})
 		name := rbacPrefix + d.Profile + ":delivery"
 		for _, ns := range append([]string{d.Namespace}, d.ApplicationNamespaces...) {

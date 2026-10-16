@@ -15,12 +15,20 @@ All notable changes to this project are documented here. The format follows
   for the delivery profile. Objects are named `opsward:<profile>`; subjects default to
   ServiceAccounts `opsward-<profile>` (`--service-account-namespace`, `--subject`).
   Nothing is applied.
+- `get_delivery_status`: how Argo CD sees a workload, from the Application that manages
+  it: sync status with the live and target revisions, health, the last sync operation and
+  its error, conditions, the resources out of sync or unhealthy (unhealthy first, at most
+  50; only the workload's namespace is shown by name) and the last 5 deployments.
+  Registered with `providers.delivery`, which no longer needs a forge.
 
 ### Changed
 
 - Profile names must be DNS-1123 labels (lowercase letters, digits and `-`).
 - Argo CD Applications outside `providers.delivery.namespace` are read only from the
   namespaces `providers.delivery.applicationNamespaces` lists.
+- An Argo CD Application manages a workload only if it deploys to the workload's
+  cluster: in-cluster for the delivery cluster, or a destination
+  `providers.delivery.destinations` lists for another cluster.
 - `list_workloads` without a namespace, in an environment that lists its namespaces, lists
   them one by one without listing the cluster's namespaces first.
 

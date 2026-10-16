@@ -10,6 +10,7 @@ import (
 	"github.com/quyendv/opsward/internal/capability"
 	"github.com/quyendv/opsward/internal/core"
 	"github.com/quyendv/opsward/internal/engine"
+	"github.com/quyendv/opsward/internal/source"
 )
 
 // callMethods maps fakeSource's recorded calls to the Workloads methods they stand for.
@@ -56,6 +57,9 @@ func TestToolsDeclareWhatTheyUse(t *testing.T) {
 		{func(s *fakeSource) (engine.Tool, error) {
 			_, _, cfg := changeFixture("pull-request")
 			return ResolveSource(s, cfg)
+		}, `{` + w + `}`},
+		{func(s *fakeSource) (engine.Tool, error) {
+			return DeliveryStatus(s, staticChanges{&Changes{Resolve: source.Options{ApplicationNamespace: "argocd", Applications: appWith("Synced", 0), Destinations: inCluster}}})
 		}, `{` + w + `}`},
 		{func(s *fakeSource) (engine.Tool, error) {
 			_, _, cfg := changeFixture("pull-request")
