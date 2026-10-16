@@ -102,7 +102,11 @@ func WorkloadLogs(src capability.WorkloadSource) (engine.Tool, error) {
 				opt.TailLines = defaultTailLines
 			}
 			return workloadPrepared(src, v.workloadInput, obj, func(ctx context.Context, w capability.Workloads, ref capability.WorkloadRef) (any, error) {
-				return w.WorkloadLogs(ctx, ref, opt)
+				logs, err := w.WorkloadLogs(ctx, ref, opt)
+				if err == nil {
+					cutContainerLines(logs.Logs)
+				}
+				return logs, err
 			}), nil
 		},
 	}, nil

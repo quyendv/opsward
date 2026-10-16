@@ -73,6 +73,8 @@ type LogStream struct {
 type LogsResult struct {
 	Query   string      `json:"query"` // as sent, after confinement
 	Streams []LogStream `json:"streams"`
+	// LinesOmitted counts lines left out, oldest first, to keep the result readable.
+	LinesOmitted int `json:"linesOmitted,omitempty"`
 }
 
 // Logs queries one environment's logs. Implementations confine every query.

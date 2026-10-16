@@ -24,7 +24,7 @@ range query returned every point of every series, when the agent needed an overv
 |---|---|---|
 | `list_environments` | none | name, cluster, namespace patterns, whether metrics and logs are available |
 | `list_namespaces` | `environment` | namespaces of the cluster that match the environment's patterns |
-| `list_workloads` | `environment`, `namespace` | Deployments, StatefulSets and DaemonSets: kind, name, desired and ready replicas |
+| `list_workloads` | `environment`, optional `namespace`, `unhealthy` | Deployments, StatefulSets and DaemonSets: namespace, kind, name, desired and ready replicas; without a namespace, across the environment's namespaces; with `unhealthy`, only those with fewer ready replicas than desired |
 
 A listing cannot be authorized as one call: whether a scoped principal may see
 namespace `team-a-api` or workload `api` depends on the item. Listing tools are therefore
@@ -51,11 +51,19 @@ single binding chooses a profile for the whole result.
 patterns without wildcards that match no namespace of the cluster, which usually means a
 typing mistake in the configuration.
 
+Asked "is anything unhealthy", an agent otherwise lists every namespace one call at a time;
+`list_workloads` with `unhealthy` and no namespace answers in one call.
+
 ## Summaries
 
 A series is returned with `min`, `max`, `avg`, `last` and `samples` (the number of points
 it had). Points are returned only when the call asks for them with `points: true`, and
 then as before, at most 60 per series. `diagnose_workload` returns summaries only.
+
+Log results are bounded the same way: a line longer than 2,000 characters is cut, with the
+number of characters left out, and a result past 48 KiB leaves out lines oldest first and
+counts them in `linesOmitted`. Structured logs run to kilobytes per line, and a result an
+agent cannot read whole is a result it cannot use.
 
 ## Cluster-wide queries
 

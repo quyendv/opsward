@@ -43,12 +43,16 @@ func (f *fakeMetrics) Query(ctx context.Context, ns string, q capability.Metrics
 type fakeLogs struct {
 	namespace string
 	q         capability.LogsQuery
+	result    *capability.LogsResult
 }
 
 func (f *fakeLogs) Logs(string) (capability.Logs, error) { return f, nil }
 
 func (f *fakeLogs) Query(_ context.Context, ns string, q capability.LogsQuery) (*capability.LogsResult, error) {
 	f.namespace, f.q = ns, q
+	if f.result != nil {
+		return f.result, nil
+	}
 	return &capability.LogsResult{Query: q.Query}, nil
 }
 
@@ -246,5 +250,35 @@ func TestQueryToolsAcceptClusterWideCalls(t *testing.T) {
 	}
 	if _, _, err := runTool(t, ql, `{"environment":"production","query":"{app=\"api\"}"}`); err != nil {
 		t.Fatalf("query_logs without namespace: %v", err)
+	}
+}
+
+// Long log lines (structured JSON) and many of them must fit what an agent can read: each
+// line is cut, and the oldest lines go first when the whole result is too large.
+func TestQueryLogsBoundsLineLengthAndResultSize(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	var lines []string
+	for i := range 600 {
+		lines = append(lines, fmt.Sprintf("line-%03d %s", i, strings.Repeat("y", 1500)))
+	}
+	lines = append(lines, long)
+	l := &fakeLogs{result: &capability.LogsResult{Streams: []capability.LogStream{{Labels: map[string]string{"pod": "a"}, Lines: lines}}}}
+	tl, _ := QueryLogs(l)
+	_, out, err := runTool(t, tl, `{"environment":"production","namespace":"shop","query":"{a=\"b\"}","limit":1000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := out.(*capability.LogsResult)
+	b, _ := json.Marshal(r)
+	if len(b) > maxLogResultBytes+4096 {
+		t.Fatalf("result is %d bytes", len(b))
+	}
+	got := r.Streams[0].Lines
+	last := got[len(got)-1]
+	if len(last) > maxLogLineChars+64 || !strings.Contains(last, "more characters") {
+		t.Fatalf("long line kept as %d chars: %.80s", len(last), last)
+	}
+	if r.LinesOmitted == 0 || strings.HasPrefix(got[0], "line-000") {
+		t.Fatalf("omitted %d; first kept line %.20s: the oldest should go first", r.LinesOmitted, got[0])
 	}
 }

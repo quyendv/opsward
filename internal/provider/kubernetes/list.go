@@ -33,24 +33,24 @@ func (w *workloads) ListWorkloads(ctx context.Context, namespace string) ([]capa
 		return nil, err
 	}
 	for _, d := range deps.Items {
-		out = append(out, capability.WorkloadSummary{Kind: "Deployment", Name: d.Name, Desired: replicasOrOne(d.Spec.Replicas), Ready: d.Status.ReadyReplicas, Labels: d.Labels})
+		out = append(out, capability.WorkloadSummary{Namespace: d.Namespace, Kind: "Deployment", Name: d.Name, Desired: replicasOrOne(d.Spec.Replicas), Ready: d.Status.ReadyReplicas, Labels: d.Labels})
 	}
 	sts, err := apps.StatefulSets(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 	for _, s := range sts.Items {
-		out = append(out, capability.WorkloadSummary{Kind: "StatefulSet", Name: s.Name, Desired: replicasOrOne(s.Spec.Replicas), Ready: s.Status.ReadyReplicas, Labels: s.Labels})
+		out = append(out, capability.WorkloadSummary{Namespace: s.Namespace, Kind: "StatefulSet", Name: s.Name, Desired: replicasOrOne(s.Spec.Replicas), Ready: s.Status.ReadyReplicas, Labels: s.Labels})
 	}
 	dss, err := apps.DaemonSets(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 	for _, d := range dss.Items {
-		out = append(out, capability.WorkloadSummary{Kind: "DaemonSet", Name: d.Name, Desired: d.Status.DesiredNumberScheduled, Ready: d.Status.NumberReady, Labels: d.Labels})
+		out = append(out, capability.WorkloadSummary{Namespace: d.Namespace, Kind: "DaemonSet", Name: d.Name, Desired: d.Status.DesiredNumberScheduled, Ready: d.Status.NumberReady, Labels: d.Labels})
 	}
 	slices.SortFunc(out, func(a, b capability.WorkloadSummary) int {
-		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
 	})
 	return out, nil
 }

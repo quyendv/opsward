@@ -10,6 +10,8 @@ All notable changes to this project are documented here. The format follows
 
 - `list_environments`, `list_namespaces` and `list_workloads`, authorized per item: each
   shows only what the caller may work on. The reader profile needs `list` on namespaces.
+  `list_workloads` without a namespace spans the environment, and `unhealthy` keeps only
+  workloads with fewer ready replicas than desired.
 - `query_metrics` and `query_logs` without a namespace query the whole cluster, where the
   environment spans every namespace and a binding not restricted to namespaces allows it.
 
@@ -17,6 +19,8 @@ All notable changes to this project are documented here. The format follows
 
 - Metrics results are summaries by default: each series has `min`, `max`, `avg`, `last`
   and `samples`; points are returned with `points: true`.
+- Log lines longer than 2,000 characters are cut, and `query_logs` results past 48 KiB
+  leave out the oldest lines, counted in `linesOmitted`.
 
 ## [0.2.0] - 2026-10-16
 

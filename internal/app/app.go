@@ -454,7 +454,7 @@ func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capabi
 	builders := []func() (engine.Tool, error){
 		func() (engine.Tool, error) { return tool.ListEnvironments(envs) },
 		func() (engine.Tool, error) { return tool.ListNamespaces(envs, src) },
-		func() (engine.Tool, error) { return tool.ListWorkloads(src) },
+		func() (engine.Tool, error) { return tool.ListWorkloads(envs, src) },
 		func() (engine.Tool, error) { return tool.WorkloadStatus(src) },
 		func() (engine.Tool, error) { return tool.WorkloadEvents(src) },
 		func() (engine.Tool, error) { return tool.WorkloadLogs(src) },

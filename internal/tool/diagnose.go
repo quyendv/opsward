@@ -99,6 +99,7 @@ func diagnose(ctx context.Context, w capability.Workloads, ms capability.Metrics
 			d.Unavailable["logs."+p.Name] = err.Error()
 			continue
 		}
+		cutContainerLines(logs.Logs)
 		d.Logs = append(d.Logs, logs.Logs...)
 	}
 

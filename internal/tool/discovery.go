@@ -138,16 +138,27 @@ func inPatterns(patterns []string, name string) bool {
 	return false
 }
 
-// ListWorkloads is list_workloads: a namespace's workloads the caller can work on.
-func ListWorkloads(ws capability.WorkloadSource) (engine.Tool, error) {
-	in, err := newInput[namespaceInput](refineNamespaceInput)
+type listWorkloadsInput struct {
+	Environment string `json:"environment" jsonschema:"name of a configured environment"`
+	Namespace   string `json:"namespace,omitempty" jsonschema:"namespace to list; omit for every namespace of the environment you can work in"`
+	Unhealthy   bool   `json:"unhealthy,omitempty" jsonschema:"only workloads with fewer ready replicas than desired"`
+}
+
+// ListWorkloads is list_workloads: the workloads the caller can work on, in a namespace
+// or across the environment.
+func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool, error) {
+	in, err := newInput[listWorkloadsInput](func(s *jsonschema.Schema) {
+		s.Properties["environment"].MinLength = jsonschema.Ptr(1)
+		s.Properties["namespace"].MinLength = jsonschema.Ptr(1)
+	})
 	if err != nil {
 		return engine.Tool{}, err
 	}
 	return engine.Tool{
 		Name: "list_workloads",
-		Description: "List the Deployments, StatefulSets and DaemonSets of a namespace that you can work on, with " +
-			"desired and ready replicas.",
+		Description: "List the Deployments, StatefulSets and DaemonSets you can work on, with desired and ready " +
+			"replicas: in one namespace, or across the environment without one. unhealthy keeps only those with " +
+			"fewer ready replicas than desired, the quickest way to find what is broken.",
 		Risk: core.RiskRead, InputSchema: in.schema, Args: in.names, List: true,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
@@ -157,6 +168,10 @@ func ListWorkloads(ws capability.WorkloadSource) (engine.Tool, error) {
 			return &engine.Prepared{
 				Scope: core.Scope{Environment: v.Environment, Namespace: v.Namespace}, Args: obj,
 				RunList: func(ctx context.Context, profile string) ([]engine.Item, error) {
+					env, ok := environment(envs, v.Environment)
+					if !ok {
+						return nil, fmt.Errorf("unknown environment %q", v.Environment)
+					}
 					w, err := ws.Workloads(v.Environment, profile)
 					if err != nil {
 						return nil, err
@@ -167,9 +182,13 @@ func ListWorkloads(ws capability.WorkloadSource) (engine.Tool, error) {
 					}
 					items := make([]engine.Item, 0, len(list))
 					for _, s := range list {
+						// A named namespace was checked against the environment before the call ran.
+						if (v.Namespace == "" && !inPatterns(env.Namespaces, s.Namespace)) || (v.Unhealthy && s.Ready >= s.Desired) {
+							continue
+						}
 						items = append(items, engine.Item{
 							Scope: core.Scope{
-								Environment: v.Environment, Namespace: v.Namespace, Kind: s.Kind, Name: s.Name,
+								Environment: v.Environment, Namespace: s.Namespace, Kind: s.Kind, Name: s.Name,
 								Labels: s.Labels, LabelsKnown: true,
 							},
 							Data: s,

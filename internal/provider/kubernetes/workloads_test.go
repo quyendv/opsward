@@ -639,3 +639,11 @@ func TestListNamespacesAndWorkloads(t *testing.T) {
 		t.Fatalf("labels for policy are missing: %+v", ws[1])
 	}
 }
+
+func TestListWorkloadsInEveryNamespace(t *testing.T) {
+	c := fake.NewClientset(deployment(), &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "kube-system"}})
+	ws, err := NewWorkloads(c).ListWorkloads(context.Background(), "")
+	if err != nil || len(ws) != 2 || ws[0].Namespace != "kube-system" || ws[1].Namespace != "shop" {
+		t.Fatalf("ListWorkloads(all) = %+v, %v", ws, err)
+	}
+}

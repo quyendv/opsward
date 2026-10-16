@@ -76,14 +76,11 @@ func TestListNamespacesFiltersByEnvironmentPatterns(t *testing.T) {
 
 func TestListWorkloadsItemsCarryLabelsForPolicy(t *testing.T) {
 	src := &fakeSource{summaries: []capability.WorkloadSummary{
-		{Kind: "Deployment", Name: "api", Desired: 2, Ready: 1, Labels: map[string]string{"app.kubernetes.io/part-of": "checkout"}},
+		{Namespace: "shop", Kind: "Deployment", Name: "api", Desired: 2, Ready: 1, Labels: map[string]string{"app.kubernetes.io/part-of": "checkout"}},
 	}}
-	tl, err := ListWorkloads(src)
+	tl, err := ListWorkloads(testEnvs, src)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := tl.Prepare(json.RawMessage(`{"environment":"staging"}`)); err == nil {
-		t.Fatal("namespace is required")
 	}
 	prep, err := tl.Prepare(json.RawMessage(`{"environment":"staging","namespace":"shop"}`))
 	if err != nil {
@@ -100,5 +97,39 @@ func TestListWorkloadsItemsCarryLabelsForPolicy(t *testing.T) {
 	out, _ := json.Marshal(items[0].Data)
 	if strings.Contains(string(out), "checkout") {
 		t.Fatalf("labels returned: %s", out)
+	}
+}
+
+// Without a namespace, list_workloads spans the environment's namespaces; unhealthy keeps
+// only workloads with fewer ready replicas than desired.
+func TestListWorkloadsAcrossNamespacesAndUnhealthy(t *testing.T) {
+	src := &fakeSource{summaries: []capability.WorkloadSummary{
+		{Namespace: "kube-system", Kind: "DaemonSet", Name: "proxy", Desired: 1, Ready: 1},
+		{Namespace: "shared", Kind: "Deployment", Name: "web", Desired: 2, Ready: 2},
+		{Namespace: "team-a-api", Kind: "Deployment", Name: "api", Desired: 2, Ready: 1},
+	}}
+	tl, err := ListWorkloads(testEnvs, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prep, err := tl.Prepare(json.RawMessage(`{"environment":"staging"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := prep.RunList(context.Background(), "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range items {
+		got = append(got, it.Scope.Namespace+"/"+it.Scope.Name)
+	}
+	if strings.Join(got, ",") != "shared/web,team-a-api/api" || src.calls[len(src.calls)-1] != "workloads:" {
+		t.Fatalf("items = %v (calls %v); kube-system is outside the environment", got, src.calls)
+	}
+	prep, _ = tl.Prepare(json.RawMessage(`{"environment":"staging","unhealthy":true}`))
+	items, _ = prep.RunList(context.Background(), "reader")
+	if len(items) != 1 || items[0].Scope.Name != "api" {
+		t.Fatalf("unhealthy = %+v", items)
 	}
 }

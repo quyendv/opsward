@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
 
@@ -24,7 +25,57 @@ const (
 	maxLogQueryLength = 2048
 	defaultLogLines   = 100
 	maxLogLines       = 1000
+	// maxLogLineChars cuts single lines, such as structured JSON, that would crowd out
+	// the rest; maxLogResultBytes bounds a log result to what an agent can read at once.
+	maxLogLineChars   = 2000
+	maxLogResultBytes = 48 << 10
 )
+
+// cutLine shortens a line beyond maxLogLineChars, on a character boundary, and says by
+// how much.
+func cutLine(s string) string {
+	if len(s) <= maxLogLineChars {
+		return s
+	}
+	end := maxLogLineChars
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return fmt.Sprintf("%s … [%d more characters]", s[:end], len(s)-end)
+}
+
+// cutContainerLines cuts long lines of container logs, which are already bounded per
+// container in bytes.
+func cutContainerLines(logs []capability.ContainerLog) {
+	for i := range logs {
+		for j, l := range logs[i].Lines {
+			logs[i].Lines[j] = cutLine(l)
+		}
+	}
+}
+
+// boundLogs cuts long lines and, past maxLogResultBytes, leaves out lines oldest first:
+// streams come most recently active first, so their newest lines are kept first.
+func boundLogs(r *capability.LogsResult) {
+	if r == nil {
+		return
+	}
+	budget := maxLogResultBytes
+	for i := range r.Streams {
+		lines := r.Streams[i].Lines
+		keep := len(lines)
+		for j := len(lines) - 1; j >= 0; j-- {
+			lines[j] = cutLine(lines[j])
+			if budget < len(lines[j]) {
+				keep = len(lines) - 1 - j
+				break
+			}
+			budget -= len(lines[j])
+		}
+		r.LinesOmitted += len(lines) - keep
+		r.Streams[i].Lines = lines[len(lines)-keep:]
+	}
+}
 
 // window parses a range such as "30m" or "6h"; empty means the default.
 func window(s string) (time.Duration, error) {
@@ -53,16 +104,6 @@ func rangeQuery(query string, d time.Duration) capability.MetricsQuery {
 		step = time.Second
 	}
 	return capability.MetricsQuery{Query: query, Range: true, Start: end.Add(-d), End: end, Step: step}
-}
-
-type namespaceInput struct {
-	Environment string `json:"environment" jsonschema:"name of a configured environment"`
-	Namespace   string `json:"namespace" jsonschema:"namespace the query is confined to"`
-}
-
-func refineNamespaceInput(s *jsonschema.Schema) {
-	s.Properties["environment"].MinLength = jsonschema.Ptr(1)
-	s.Properties["namespace"].MinLength = jsonschema.Ptr(1)
 }
 
 // queryScope is the scope of a query tool: a namespace, or the whole cluster where the
@@ -195,7 +236,9 @@ func QueryLogs(src capability.LogsSource) (engine.Tool, error) {
 					if err != nil {
 						return nil, err
 					}
-					return l.Query(ctx, v.Namespace, capability.LogsQuery{Query: v.Query, Since: since, Limit: limit})
+					r, err := l.Query(ctx, v.Namespace, capability.LogsQuery{Query: v.Query, Since: since, Limit: limit})
+					boundLogs(r)
+					return r, err
 				},
 			}, nil
 		},
