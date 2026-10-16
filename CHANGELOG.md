@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-16
+
+Backend permissions and delivery state: the RBAC each credential profile needs, derived from
+policy, and how Argo CD sees a workload.
+
 ### Added
 
 - `opsward rbac render --config FILE` prints the Kubernetes RBAC each profile needs for
@@ -150,7 +155,8 @@ First release: a single-user, read-only gateway over MCP stdio.
   and cluster before they are sent.
 - `diagnose_workload`: status, events, failing containers' logs and resource use in one call.
 
-[Unreleased]: https://github.com/quyendv/opsward/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/quyendv/opsward/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/quyendv/opsward/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/quyendv/opsward/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/quyendv/opsward/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/quyendv/opsward/compare/v0.1.0...v0.2.0
