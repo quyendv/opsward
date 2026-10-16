@@ -50,6 +50,19 @@ type Store interface {
 	// TouchAPIToken records that the token was used at at.
 	TouchAPIToken(ctx context.Context, id string, at time.Time) error
 
+	// CreateApproval stores a new approval request. docs/design/0007.
+	CreateApproval(ctx context.Context, a Approval) error
+	// Approval returns the request with id.
+	Approval(ctx context.Context, id string) (Approval, bool, error)
+	// ListApprovals returns the requests created at or after since, newest first.
+	ListApprovals(ctx context.Context, since time.Time) ([]Approval, error)
+	// DecideApproval sets a pending request's status to approved or denied. It reports
+	// whether it did: a request that is not pending is left as it is.
+	DecideApproval(ctx context.Context, id, status, by, reason string, at time.Time) (bool, error)
+	// UseApproval marks an approved request used, in one atomic step, and reports whether
+	// it did: a request runs at most once.
+	UseApproval(ctx context.Context, id string, at time.Time) (bool, error)
+
 	// Ping reports whether the store answers queries.
 	Ping(ctx context.Context) error
 	Close() error
@@ -67,4 +80,35 @@ type APIToken struct {
 	ExpiresAt   time.Time
 	RevokedAt   time.Time // zero: not revoked
 	LastUsedAt  time.Time // zero: never used
+}
+
+// Approval request statuses.
+const (
+	ApprovalPending  = "pending"
+	ApprovalApproved = "approved"
+	ApprovalDenied   = "denied"
+	ApprovalUsed     = "used"
+)
+
+// Approval is a call waiting for, or carrying, an approver's decision.
+type Approval struct {
+	ID          string
+	Requester   string // the requester's subject
+	Tool        string
+	Environment string
+	Namespace   string
+	Kind        string
+	Name        string
+	ArgsHash    string // the call's arguments, without the approval id
+	Diff        string
+	// ApproverUsers and ApproverGroups are named by the binding that required approval.
+	ApproverUsers  []string
+	ApproverGroups []string
+	Status         string
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
+	DecidedBy      string
+	DecidedAt      time.Time // zero: not decided
+	Reason         string
+	UsedAt         time.Time // zero: not used
 }

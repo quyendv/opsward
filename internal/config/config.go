@@ -41,6 +41,13 @@ type Config struct {
 	Environments []Environment `yaml:"environments"`
 	Policy       policy.Config `yaml:"policy"`
 	Knowledge    Knowledge     `yaml:"knowledge"`
+	Approvals    Approvals     `yaml:"approvals"`
+}
+
+// Approvals configures approval requests (docs/design/0007).
+type Approvals struct {
+	// TTL is how long a request can be decided and used; default one hour.
+	TTL *Duration `yaml:"ttl"`
 }
 
 // Knowledge selects knowledge packs.
@@ -195,6 +202,10 @@ func (c *Config) applyDefaults() {
 		c.Identity.Mode = ModeLocal
 	}
 	c.oidcDefaults()
+	if c.Approvals.TTL == nil {
+		d := Duration(time.Hour)
+		c.Approvals.TTL = &d
+	}
 	if c.Identity.APITokens.MaxTTL == nil {
 		d := Duration(DefaultAPITokenMaxTTL)
 		c.Identity.APITokens.MaxTTL = &d
@@ -245,6 +256,9 @@ func (c *Config) validate() error {
 	c.validateIdentity(fail)
 
 	c.validateStorage(fail)
+	if d := c.Approvals.TTL.Std(); d <= 0 || d > 24*time.Hour {
+		fail("approvals.ttl must be positive and at most 24h")
+	}
 	if *c.Storage.AuditRetention < 0 {
 		fail("storage.auditRetention must not be negative")
 	}
@@ -394,6 +408,9 @@ func (c *Config) RestartRequired(next *Config) []string {
 	}
 	if !reflect.DeepEqual(c.Storage, next.Storage) {
 		out = append(out, "storage")
+	}
+	if !reflect.DeepEqual(c.Approvals, next.Approvals) {
+		out = append(out, "approvals")
 	}
 	if !reflect.DeepEqual(c.Audit, next.Audit) {
 		out = append(out, "audit")

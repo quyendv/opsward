@@ -339,3 +339,20 @@ func TestDecideEmailSubjectsIgnoreCase(t *testing.T) {
 		}
 	}
 }
+
+// An approval names who may approve, so the request can be checked against it later.
+func TestDecideApproveCarriesApprovers(t *testing.T) {
+	roles := map[string]Role{"viewer": {Risk: []core.Risk{core.RiskRead}}}
+	p := mustCompile(t, Config{Roles: roles, Bindings: []Binding{
+		{Name: "ask", Role: "viewer", Effect: core.EffectApprove, Approvers: Subjects{Users: []string{"Lead@Example.com"}, Groups: []string{"platform"}}},
+	}})
+	d := p.Decide(request("alice@example.com", teamA, "get_workload_status", core.RiskRead, apiScope))
+	if d.Effect != core.EffectApprove || d.Approvers == nil ||
+		strings.Join(d.Approvers.Users, ",") != "Lead@Example.com" || strings.Join(d.Approvers.Groups, ",") != "platform" {
+		t.Fatalf("decision = %+v", d)
+	}
+	if !d.Approvers.Includes(core.Principal{Subject: "lead@example.com"}) || !d.Approvers.Includes(core.Principal{Subject: "x", Groups: []string{"platform"}}) ||
+		d.Approvers.Includes(core.Principal{Subject: "x", Groups: []string{"team-a"}}) {
+		t.Fatal("Includes")
+	}
+}

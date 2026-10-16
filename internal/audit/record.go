@@ -31,6 +31,8 @@ const (
 	StatusInvalid     = "invalid"
 	StatusError       = "error"
 	StatusUnknownTool = "unknown_tool"
+	// StatusPending: the call needs approval and became an approval request.
+	StatusPending = "pending"
 )
 
 // Record is one audit entry. Writer, Seq, Prev and Hash are set by the Writer.
@@ -50,6 +52,7 @@ type Record struct {
 	Args       map[string]any `json:"args,omitempty"`
 	Decision   *core.Decision `json:"decision,omitempty"`
 	Outcome    *Outcome       `json:"outcome,omitempty"`
+	Change     *core.Change   `json:"change,omitempty"`
 	Checkpoint *Checkpoint    `json:"checkpoint,omitempty"`
 }
 

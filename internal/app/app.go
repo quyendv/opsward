@@ -157,7 +157,11 @@ func Check(cfg *config.Config) ([]string, error) {
 	if len(cfg.LogsBackends()) > 0 {
 		ls = placeholder{}
 	}
-	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{})
+	var approvals tool.ApprovalStore
+	if cfg.Identity.Mode == config.ModeRemote {
+		approvals = noApprovals{}
+	}
+	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals)
 	if err != nil {
 		return nil, err
 	}
@@ -198,16 +202,6 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	if a.logs != nil {
 		ls = a.logs
 	}
-	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs); err != nil {
-		return nil, err
-	}
-	d, err := derive(cfg, a.tools, opt.Logger)
-	if err != nil {
-		return nil, err
-	}
-	a.apply(d)
-	a.Warnings = d.warnings
-
 	st, w, closers, err := openAudit(ctx, cfg, opt)
 	if err != nil {
 		return nil, err
@@ -215,8 +209,27 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	a.Store, a.Audit, a.closers = st, w, closers
 	a.Identity = identity.New(identity.Options{Store: st, Groups: cfg.Identity.Groups, Logger: opt.Logger, OIDC: oidcOptions(cfg)})
 
+	// Approvals need a second person: they exist in remote mode only.
+	var approvals engine.Approvals
+	var approvalTools tool.ApprovalStore
+	if cfg.Identity.Mode == config.ModeRemote {
+		approvals, approvalTools = st, st
+	}
+	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs, approvalTools); err != nil {
+		_ = a.Close()
+		return nil, err
+	}
+	d, err := derive(cfg, a.tools, opt.Logger)
+	if err != nil {
+		_ = a.Close()
+		return nil, err
+	}
+	a.apply(d)
+	a.Warnings = d.warnings
+
 	a.Engine, err = engine.New(engine.Options{
 		Tools: a.tools, Environments: d.envs, Authorizer: d.policy, Auditor: w, Annotator: a.lib, Logger: opt.Logger,
+		Approvals: approvals, ApprovalTTL: cfg.Approvals.TTL.Std(),
 	})
 	if err != nil {
 		_ = a.Close()
@@ -456,8 +469,10 @@ func (a *App) Close() error {
 
 // buildTools registers the tools whose backends are configured (docs/design/0001,
 // "Registration follows capability"). ms and ls are nil when not configured.
-func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments) ([]engine.Tool, error) {
+func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments, approvals tool.ApprovalStore) ([]engine.Tool, error) {
 	builders := []func() (engine.Tool, error){
+		func() (engine.Tool, error) { return tool.RestartWorkload(src) },
+		func() (engine.Tool, error) { return tool.ScaleWorkload(src) },
 		func() (engine.Tool, error) { return tool.ListEnvironments(envs) },
 		func() (engine.Tool, error) { return tool.ListNamespaces(envs, src) },
 		func() (engine.Tool, error) { return tool.ListWorkloads(envs, src) },
@@ -476,6 +491,12 @@ func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capabi
 	}
 	if ls != nil {
 		builders = append(builders, func() (engine.Tool, error) { return tool.QueryLogs(ls) })
+	}
+	if approvals != nil {
+		builders = append(builders,
+			func() (engine.Tool, error) { return tool.ListApprovals(approvals) },
+			func() (engine.Tool, error) { return tool.DecideApproval(approvals) },
+		)
 	}
 	tools := make([]engine.Tool, 0, len(builders))
 	for _, b := range builders {
@@ -497,4 +518,19 @@ func catalog(cfg *config.Config, tools []engine.Tool) policy.Catalog {
 		cat.Environments[e.Name] = cfg.Profiles(e)
 	}
 	return cat
+}
+
+// noApprovals registers the approval tools for Check without a store.
+type noApprovals struct{}
+
+func (noApprovals) Approval(context.Context, string) (store.Approval, bool, error) {
+	return store.Approval{}, false, errors.New("not available while checking")
+}
+
+func (noApprovals) ListApprovals(context.Context, time.Time) ([]store.Approval, error) {
+	return nil, errors.New("not available while checking")
+}
+
+func (noApprovals) DecideApproval(context.Context, string, string, string, string, time.Time) (bool, error) {
+	return false, errors.New("not available while checking")
 }

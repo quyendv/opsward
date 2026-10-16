@@ -60,6 +60,9 @@ type Prepared struct {
 	Resolve func(ctx context.Context) (map[string]string, error)
 	// Run performs the call with the named profile.
 	Run func(ctx context.Context, profile string) (any, error)
+	// Preview, if set, reports what a write would change, as a dry run with the named
+	// profile: shown to approvers and recorded in the audit (docs/design/0007).
+	Preview func(ctx context.Context, profile string) (*core.Change, error)
 	// RunList performs a List tool's call with the named profile.
 	RunList func(ctx context.Context, profile string) ([]Item, error)
 	// Wrap, if set, shapes a List tool's kept items into its result; by default the
@@ -121,17 +124,23 @@ type Options struct {
 	Authorizer   Authorizer
 	Auditor      Auditor
 	Annotator    Annotator // optional
-	Logger       *slog.Logger
-	Now          func() time.Time
+	// Approvals stores approval requests; without it, calls that need approval are
+	// refused (local mode).
+	Approvals   Approvals
+	ApprovalTTL time.Duration
+	Logger      *slog.Logger
+	Now         func() time.Time
 }
 
 // Engine is the single authorization point. It is safe for concurrent use.
 type Engine struct {
-	tools map[string]Tool
-	state atomic.Pointer[state]
-	audit Auditor
-	log   *slog.Logger
-	now   func() time.Time
+	approvals   Approvals
+	approvalTTL time.Duration
+	tools       map[string]Tool
+	state       atomic.Pointer[state]
+	audit       Auditor
+	log         *slog.Logger
+	now         func() time.Time
 }
 
 // state is what a configuration reload replaces. A call reads it once, so it runs
@@ -157,7 +166,7 @@ type DeniedError struct {
 
 func (e *DeniedError) Error() string {
 	if e.Decision.Effect == core.EffectApprove {
-		return fmt.Sprintf("requires approval, which is not available in this version (rule %s)", e.Decision.Rule)
+		return fmt.Sprintf("requires approval (rule %s), and approvals need a second person: they are available in remote mode only", e.Decision.Rule)
 	}
 	return fmt.Sprintf("denied by policy (rule %s)", e.Decision.Rule)
 }
@@ -178,7 +187,7 @@ func New(opt Options) (*Engine, error) {
 	if opt.Authorizer == nil || opt.Auditor == nil {
 		return nil, errors.New("engine: Authorizer and Auditor are required")
 	}
-	e := &Engine{tools: map[string]Tool{}, audit: opt.Auditor, log: opt.Logger, now: opt.Now}
+	e := &Engine{approvals: opt.Approvals, approvalTTL: opt.ApprovalTTL, tools: map[string]Tool{}, audit: opt.Auditor, log: opt.Logger, now: opt.Now}
 	if e.log == nil {
 		e.log = slog.Default()
 	}
@@ -295,8 +304,45 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		dec.Effect = core.EffectApprove
 	}
 	rec.Decision = &dec
-	if dec.Effect != core.EffectAllow {
+	profile := dec.Profile
+	if profile == "" {
+		profile = ProfileOperator
+		if tool.Risk == core.RiskRead {
+			profile = ProfileReader
+		}
+	}
+	ctx = core.WithPrincipal(ctx, p)
+	switch dec.Effect {
+	case core.EffectAllow:
+	case core.EffectApprove:
+		if e.approvals == nil {
+			return nil, finish(audit.StatusDenied, &DeniedError{Decision: dec})
+		}
+		id, _ := prep.Args[ApprovalArg].(string)
+		if id == "" {
+			return e.requestApproval(ctx, p, name, prep, &rec, &dec, profile, start, finish)
+		}
+		change, err := e.useApproval(ctx, p, name, prep, id, profile)
+		if err != nil {
+			return nil, finish(audit.StatusDenied, err)
+		}
+		dec.Approval, rec.Change = id, change
+	case core.EffectDeny:
 		return nil, finish(audit.StatusDenied, &DeniedError{Decision: dec})
+	default:
+		return nil, finish(audit.StatusDenied, &DeniedError{Decision: dec})
+	}
+
+	if tool.Risk != core.RiskRead && prep.Preview != nil && rec.Change == nil {
+		// Every write is a dry run first, and the diff is part of its record.
+		change, err := prep.Preview(ctx, profile)
+		if errors.Is(err, core.ErrInvalidInput) {
+			return nil, finish(audit.StatusInvalid, err)
+		}
+		if err != nil {
+			return nil, finish(audit.StatusError, err)
+		}
+		rec.Change = change
 	}
 
 	if tool.Risk != core.RiskRead {
@@ -308,13 +354,6 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 		}
 	}
 
-	profile := dec.Profile
-	if profile == "" {
-		profile = ProfileOperator
-		if tool.Risk == core.RiskRead {
-			profile = ProfileReader
-		}
-	}
 	out, err := prep.Run(ctx, profile)
 	if errors.Is(err, core.ErrInvalidInput) {
 		return nil, finish(audit.StatusInvalid, err)
