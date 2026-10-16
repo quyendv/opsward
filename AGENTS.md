@@ -19,7 +19,8 @@ Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0007](docs/design/0007-operate-and-approvals.md) for writes and approvals,
 [0008](docs/design/0008-propose-change.md) for proposing changes,
 [0009](docs/design/0009-rbac-render.md) for rendering backend permissions,
-[0010](docs/design/0010-delivery-status.md) for delivery status.
+[0010](docs/design/0010-delivery-status.md) for delivery status,
+[0011](docs/design/0011-running-in-a-cluster.md) for running in a cluster.
 
 ## Layout
 
@@ -41,6 +42,7 @@ internal/knowledge/          knowledge packs; builtin/ holds the generic pack
 internal/adapter/<protocol>/ the only place protocol SDKs appear (mcp)
 internal/app/                wiring from configuration
 examples/                    configuration examples
+charts/opsward/              Helm chart; scripts/chart-test.sh (mise run chart) tests it
 ```
 
 ## Commands

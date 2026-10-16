@@ -1,0 +1,5 @@
+# expect: more than one replica needs storage.type postgres
+replicaCount: 2
+config:
+  identity: { mode: remote }
+  storage: { path: /var/lib/opsward/opsward.db }

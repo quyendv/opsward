@@ -1,0 +1,47 @@
+{{- /* Each local profile: a ServiceAccount, its token, and a kubeconfig that uses the
+token in-cluster (docs/design/0011). */ -}}
+{{- range .Values.localProfiles }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opsward-{{ . }}
+  labels: {{- include "opsward.labels" $ | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: opsward-{{ . }}-token
+  labels: {{- include "opsward.labels" $ | nindent 4 }}
+  annotations:
+    kubernetes.io/service-account.name: opsward-{{ . }}
+type: kubernetes.io/service-account-token
+{{- end }}
+{{- if .Values.localProfiles }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "opsward.fullname" . }}-kubeconfigs
+  labels: {{- include "opsward.labels" . | nindent 4 }}
+data:
+  {{- range .Values.localProfiles }}
+  {{ . }}: |
+    apiVersion: v1
+    kind: Config
+    clusters:
+      - name: in-cluster
+        cluster:
+          server: https://kubernetes.default.svc
+          certificate-authority: /etc/opsward/tokens/{{ . }}/ca.crt
+    users:
+      - name: opsward-{{ . }}
+        user:
+          tokenFile: /etc/opsward/tokens/{{ . }}/token
+    contexts:
+      - name: {{ . }}
+        context: { cluster: in-cluster, user: opsward-{{ . }}, namespace: {{ $.Release.Namespace }} }
+    current-context: {{ . }}
+  {{- end }}
+{{- end }}

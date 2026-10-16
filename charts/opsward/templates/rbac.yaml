@@ -1,0 +1,4 @@
+{{- /* The reviewed output of opsward rbac render; the chart never derives RBAC itself. */ -}}
+{{- with .Values.rbac.rendered }}
+{{ . }}
+{{- end }}

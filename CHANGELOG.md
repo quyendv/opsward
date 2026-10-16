@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A Helm chart, `charts/opsward`, published with each release as
+  `oci://ghcr.io/quyendv/charts/opsward`: Opsward in remote mode behind a Service, the
+  configuration in a ConfigMap that reloads without a restart, SQLite on a volume (or
+  Postgres with more replicas), and a ServiceAccount with a token and a kubeconfig for each
+  profile in `localProfiles`, the subjects `opsward rbac render` binds. The pod runs as
+  non-root with a read-only filesystem and no token of its own.
+
 ## [0.5.0] - 2026-10-16
 
 Backend permissions and delivery state: the RBAC each credential profile needs, derived from

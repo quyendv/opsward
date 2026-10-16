@@ -1,0 +1,12 @@
+Opsward serves MCP at http://{{ include "opsward.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/mcp
+{{- if .Values.localProfiles }}
+
+The profiles {{ join ", " .Values.localProfiles }} have ServiceAccounts but no permissions until
+you grant them. Print what your policy needs, review it, and apply it (or pass it as
+rbac.rendered):
+  opsward rbac render --config <your config> --service-account-namespace {{ .Release.Namespace }}
+{{- end }}
+
+Create an API token for a person or a pipeline:
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "opsward.fullname" . }} -- \
+    /opsward token create --config /etc/opsward/config/opsward.yaml --subject alice@example.com

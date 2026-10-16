@@ -11,6 +11,7 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
       - id: check-yaml
+        exclude: ^charts/[^/]+/templates/ # Go templates; scripts/chart-test.sh renders and checks them
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files

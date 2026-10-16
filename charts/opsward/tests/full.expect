@@ -1,0 +1,11 @@
+replicas: 2
+type: RollingUpdate
+kind: Ingress
+host: opsward.example.com
+secretName: opsward-tls
+secretName: opsward-postgres
+mountPath: /etc/opsward/secrets/cluster-b
+name: opsward-operator
+name: opsward:reader
+emptyDir: {}
+! kind: PersistentVolumeClaim

@@ -1,0 +1,18 @@
+# The smallest remote deployment: SQLite on a volume, one local reader profile.
+config:
+  identity: { mode: remote }
+  server: { http: { address: "0.0.0.0:8080" } }
+  storage: { path: /var/lib/opsward/opsward.db }
+  audit: { stream: { type: stdout } }
+  providers:
+    kubernetes:
+      clusters:
+        local:
+          profiles:
+            reader: { kubeconfig: /etc/opsward/kubeconfig/reader/kubeconfig }
+  environments:
+    - { name: staging, cluster: local }
+  policy:
+    roles: { viewer: { risk: [read] } }
+    bindings: [{ name: view, subjects: { groups: [team-a] }, role: viewer }]
+localProfiles: [reader]

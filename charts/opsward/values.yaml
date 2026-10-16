@@ -1,0 +1,60 @@
+# The Opsward configuration (docs/design/0011). It runs in remote mode; credentials are
+# referenced by file, from Secrets mounted with extraSecretMounts. server.http.address
+# defaults to 0.0.0.0:8080 and storage.path to /var/lib/opsward/opsward.db.
+config:
+  identity:
+    mode: remote
+
+# Profiles in the cluster Opsward runs in. Each gets a ServiceAccount opsward-<profile>, a
+# token, and a kubeconfig at /etc/opsward/kubeconfig/<profile>/kubeconfig for the
+# configuration to name. Grant them what `opsward rbac render
+# --service-account-namespace <release namespace>` prints.
+localProfiles: []
+
+rbac:
+  # The output of opsward rbac render, reviewed, installed with the release:
+  #   --set-file rbac.rendered=rbac.yaml
+  rendered: ""
+
+# Secrets mounted read-only for credential files the configuration references:
+# kubeconfigs of other clusters, forge tokens, a Postgres DSN.
+#   - { name: forge-token, secretName: opsward-forge, mountPath: /etc/opsward/secrets/forge }
+extraSecretMounts: []
+
+image:
+  repository: ghcr.io/quyendv/opsward
+  # Default: the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# More than one replica needs storage.type postgres in config.
+replicaCount: 1
+
+persistence:
+  # SQLite's file; not needed with Postgres.
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: opsward.example.com
+  tls: []
+
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { memory: 256Mi }
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

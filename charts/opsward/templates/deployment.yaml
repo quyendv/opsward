@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "opsward.fullname" . }}
+  labels: {{- include "opsward.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    # SQLite on a ReadWriteOnce volume: the old pod must let go of it first.
+    type: {{ if gt (int .Values.replicaCount) 1 }}RollingUpdate{{ else }}Recreate{{ end }}
+  selector:
+    matchLabels: {{- include "opsward.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "opsward.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "opsward.fullname" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opsward
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --config
+            - /etc/opsward/config/opsward.yaml
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # A directory, not a subPath: edits reach the process, which reloads them.
+            - name: config
+              mountPath: /etc/opsward/config
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/opsward
+            {{- range .Values.localProfiles }}
+            - name: kubeconfig-{{ . }}
+              mountPath: /etc/opsward/kubeconfig/{{ . }}
+              readOnly: true
+            - name: token-{{ . }}
+              mountPath: /etc/opsward/tokens/{{ . }}
+              readOnly: true
+            {{- end }}
+            {{- range .Values.extraSecretMounts }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "opsward.fullname" . }}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "opsward.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- range .Values.localProfiles }}
+        - name: kubeconfig-{{ . }}
+          configMap:
+            name: {{ include "opsward.fullname" $ }}-kubeconfigs
+            items:
+              - { key: {{ . }}, path: kubeconfig }
+        - name: token-{{ . }}
+          secret:
+            secretName: opsward-{{ . }}-token
+        {{- end }}
+        {{- range .Values.extraSecretMounts }}
+        - name: {{ .name }}
+          secret:
+            secretName: {{ .secretName }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,30 @@
+# The configuration, mounted as a directory so edits reload.
+kind: ConfigMap
+opsward.yaml: |
+mountPath: /etc/opsward/config
+# The reader profile: a ServiceAccount, its token, and a kubeconfig using it in-cluster.
+name: opsward-reader
+type: kubernetes.io/service-account-token
+kubernetes.io/service-account.name: opsward-reader
+tokenFile: /etc/opsward/tokens/reader/token
+server: https://kubernetes.default.svc
+mountPath: /etc/opsward/kubeconfig/reader
+# The pod's own identity carries no token.
+automountServiceAccountToken: false
+# Hardening.
+runAsNonRoot: true
+readOnlyRootFilesystem: true
+- ALL
+type: RuntimeDefault
+# SQLite on a volume, one replica, replaced rather than rolled.
+kind: PersistentVolumeClaim
+mountPath: /var/lib/opsward
+replicas: 1
+type: Recreate
+# Health.
+path: /healthz
+path: /readyz
+- serve
+- /etc/opsward/config/opsward.yaml
+! kind: Ingress
+! kind: ClusterRole
