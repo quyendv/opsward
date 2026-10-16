@@ -104,8 +104,18 @@ func (c *Config) validateAlerts(fail func(string, ...any)) {
 
 // alertWarnings describes alert settings that are valid but probably not what was meant.
 func (c *Config) alertWarnings() []string {
-	if c.Alerts != nil && len(c.Alerts.Notify) == 0 {
-		return []string{fmt.Sprintf("alerts: no notify target; investigations of alerts from %s are only audited", c.Alerts.Principal)}
+	if c.Alerts == nil {
+		return nil
 	}
-	return nil
+	var out []string
+	if len(c.Alerts.Notify) == 0 {
+		out = append(out, fmt.Sprintf("alerts: no notify target; investigations of alerts from %s are only audited", c.Alerts.Principal))
+	}
+	for i, n := range c.Alerts.Notify {
+		// Not echoed: a query is where some services take a token.
+		if u, err := url.Parse(n.URL); n.Type == "webhook" && err == nil && u.RawQuery != "" {
+			out = append(out, fmt.Sprintf("alerts.notify[%d]: url has a query; a credential there is logged by proxies, use token", i))
+		}
+	}
+	return out
 }

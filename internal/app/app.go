@@ -127,7 +127,7 @@ func derive(cfg *config.Config, tools []engine.Tool, log *slog.Logger) (*derived
 	}
 	d.policy, d.pack = pol, pack
 	d.alertEnvs = alertEnvs(cfg)
-	d.warnings = append(append(cfg.Warnings(), pw...), kw...)
+	d.warnings = append(append(append(cfg.Warnings(), pw...), kw...), alertPolicyWarnings(cfg, pol)...)
 	for _, e := range cfg.Environments {
 		d.envs = append(d.envs, engine.Environment{Name: e.Name, Namespaces: e.Namespaces})
 		d.envCluster[e.Name] = e.Cluster
@@ -265,7 +265,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 		return nil, err
 	}
 	a.Principal = core.Principal{Subject: cfg.Identity.Principal.Subject, Groups: cfg.Identity.Principal.Groups}
-	if a.Alerts, err = openAlerts(cfg, a.Engine, &a.alertEnvs, opt.Logger); err != nil {
+	if a.Alerts, err = openAlerts(cfg, a.Engine, w, &a.alertEnvs, opt.Logger); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
