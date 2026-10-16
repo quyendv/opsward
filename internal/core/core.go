@@ -1,7 +1,10 @@
 // Package core holds the vocabulary shared by the engine, policy and audit packages.
 package core
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Risk is the risk class a tool declares. It is never inferred from a call.
 type Risk string
@@ -60,6 +63,16 @@ type Principal struct {
 	// Credential names what the caller authenticated with: "token:<id>" or "oidc".
 	// Empty in local mode, and then absent from the JSON, so older records hash the same.
 	Credential string `json:"credential,omitempty"`
+}
+
+// NormalizeSubject lowercases a subject that is an email address, so that policy and
+// group membership do not depend on the case an issuer or an operator wrote it in.
+// Other subjects, such as opaque IDs, are compared exactly.
+func NormalizeSubject(s string) string {
+	if strings.Contains(s, "@") {
+		return strings.ToLower(s)
+	}
+	return s
 }
 
 // Scope is what a call targets, extracted from typed arguments.

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"crypto/rand"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -136,5 +137,41 @@ func TestSessionTimeouts(t *testing.T) {
 	}
 	if got := show(openDSN(t, dsn+"&idle_in_transaction_session_timeout=5s"), "idle_in_transaction_session_timeout"); got != "5s" {
 		t.Errorf("the DSN's own value was overridden: %s", got)
+	}
+}
+
+// Once migrated, the store runs with a role that can use the tables but not create any.
+func TestRunsWithoutCreatePrivilege(t *testing.T) {
+	ctx := context.Background()
+	dsn := storetest.PostgresSchema(t)
+	_ = openDSN(t, dsn) // migrates as the owner
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := u.Query().Get("search_path")
+	role := "r_" + strings.ToLower(rand.Text())[:12]
+	owner := openDSN(t, dsn).(*Store)
+	for _, q := range []string{
+		"CREATE ROLE " + role + " LOGIN PASSWORD 'runtime'",
+		"GRANT USAGE ON SCHEMA " + schema + " TO " + role,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA " + schema + " TO " + role,
+	} {
+		if _, err := owner.pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = owner.pool.Exec(context.Background(), "DROP OWNED BY "+role)
+		_, _ = owner.pool.Exec(context.Background(), "DROP ROLE "+role)
+	})
+	u.User = url.UserPassword(role, "runtime")
+	s, err := Open(ctx, u.String())
+	if err != nil {
+		t.Fatalf("Open as a role without CREATE: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	if err := s.AppendAudit(ctx, store.AuditRow{Writer: "w", Seq: 1, ID: "x", Phase: "outcome", Hash: "h", Body: []byte("{}")}); err != nil {
+		t.Fatal(err)
 	}
 }

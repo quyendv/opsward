@@ -70,3 +70,26 @@ func TestOIDCGroupsPrefixDefaultsToOIDC(t *testing.T) {
 		t.Fatalf("explicit empty prefix = %q", got)
 	}
 }
+
+func TestOIDCAudienceIsNormalized(t *testing.T) {
+	doc := strings.Replace(withOIDC("    issuer: https://id.example.com\n"), "https://opsward.example.com", "HTTPS://Opsward.Example.COM/", 1)
+	c, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Identity.OIDC.Audience; got != "https://opsward.example.com/mcp" {
+		t.Fatalf("audience = %q", got)
+	}
+}
+
+func TestOIDCScopesMustBeScopeTokens(t *testing.T) {
+	for _, scope := range []string{`"read write"`, `"é"`, `"a\"b"`, `""`} {
+		_, err := Parse([]byte(withOIDC("    issuer: https://id.example.com\n    scopes: [" + scope + "]\n")))
+		if err == nil || !strings.Contains(err.Error(), "identity.oidc.scopes") {
+			t.Errorf("scope %s: err = %v", scope, err)
+		}
+	}
+	if _, err := Parse([]byte(withOIDC("    issuer: https://id.example.com\n    scopes: [opsward, \"api://opsward/.default\"]\n"))); err != nil {
+		t.Fatal(err)
+	}
+}

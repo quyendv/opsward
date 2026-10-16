@@ -345,3 +345,21 @@ func TestMetadataURL(t *testing.T) {
 		}
 	}
 }
+
+// Behind a path, metadata is where RFC 9728 puts it for that resource.
+func TestHTTPResourceMetadataUnderAPath(t *testing.T) {
+	srv := httptest.NewServer(NewHTTPHandler(httpEngine(t, &nopAuditor{}), HTTPOptions{
+		Authenticate: tokens(nil),
+		Resource:     &Resource{URL: "https://example.com/tools/opsward/mcp", AuthorizationServers: []string{"https://id.example.com"}},
+	}))
+	defer srv.Close()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/.well-known/oauth-protected-resource/tools/opsward/mcp", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}

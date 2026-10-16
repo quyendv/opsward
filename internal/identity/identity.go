@@ -78,6 +78,7 @@ func (a *Authenticator) SetGroups(groups map[string][]string) {
 	m := map[string][]string{}
 	for g, members := range groups {
 		for _, s := range members {
+			s = core.NormalizeSubject(s)
 			m[s] = append(m[s], g)
 		}
 	}
@@ -126,7 +127,8 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (core.Pr
 			a.log.Warn("recording API token use failed", "token", id, "error", err)
 		}
 	}
-	return core.Principal{Subject: t.Subject, Groups: a.groups(t.Subject, t.Groups), Credential: "token:" + id}, t.ExpiresAt, nil
+	subject := core.NormalizeSubject(t.Subject)
+	return core.Principal{Subject: subject, Groups: a.groups(subject, t.Groups), Credential: "token:" + id}, t.ExpiresAt, nil
 }
 
 // groups is the union of a credential's groups and the subject's internal groups.

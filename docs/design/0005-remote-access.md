@@ -149,6 +149,10 @@ opaque access tokens needs a broker in front that issues JWTs:
 - signature against the issuer's published keys, found by discovery. The keys are fetched
   again only for a key ID not held yet, and at most once every 30 seconds: a forged token
   must not make Opsward call the issuer on every request;
+- a JWT `typ` of none, `JWT` or `at+jwt`, and no `typ` claim other than `Bearer` or
+  `at+jwt`, so that ID tokens are refused whatever their audience;
+- an algorithm the issuer lists in `id_token_signing_alg_values_supported`, never a
+  symmetric one or `none`;
 - `iss` equal to the issuer, `aud` containing `audience`, `exp` in the future (`nbf` is
   allowed five minutes of clock skew);
 - when `subjectClaim` is `email`, `email_verified` must be `true`.
@@ -156,7 +160,8 @@ opaque access tokens needs a broker in front that issues JWTs:
 `audience` defaults to the MCP resource URL, `publicURL` + `/mcp`, which MCP clients send
 as the resource indicator (RFC 8707) when they request a token. Binding tokens to that
 audience keeps tokens issued for other applications of the same issuer, ID tokens
-included, from being accepted.
+included, from being accepted. Do not set `audience` to a client ID: tokens that client obtains for
+itself would then be accepted too.
 
 The issuer is discovered at start-up. If it cannot be reached, Opsward starts anyway and
 retries in the background, waiting from one second up to a minute between attempts; until
@@ -217,8 +222,9 @@ Sessions get `idle_in_transaction_session_timeout` and TCP keepalive settings un
 DSN sets its own, so that a replica that dies inside a transaction releases its locks in
 seconds rather than when the operating system's keepalive notices, about two hours later.
 
-Times are stored as integer nanoseconds in both stores, because the audit hash covers
-them and Postgres timestamps keep only microseconds. Both stores pass one conformance test
+Times are stored as integer nanoseconds in both stores, the precision of the records
+themselves; Postgres timestamps keep only microseconds. The DSN is read at start-up: a
+rotated database password applies after a restart. Both stores pass one conformance test
 suite. CI runs it against a Postgres service and fails if the database is missing; locally
 it runs when `OPSWARD_TEST_POSTGRES_DSN` is set.
 

@@ -32,7 +32,14 @@ type keySet struct {
 	mu      sync.Mutex
 	keys    []jose.JSONWebKey
 	fetched time.Time // last attempt, successful or not
+	lastErr error     // its error
 }
+
+// keyStatus lets a caller of the verifier learn that keys could not be fetched, which
+// go-oidc's error does not carry.
+type keyStatus struct{ unavailable error }
+
+type keyStatusKey struct{}
 
 // VerifySignature implements oidc.KeySet.
 func (k *keySet) VerifySignature(ctx context.Context, raw string) ([]byte, error) {
@@ -48,6 +55,9 @@ func (k *keySet) VerifySignature(ctx context.Context, raw string) ([]byte, error
 		return payload, err
 	}
 	if err := k.refresh(ctx); err != nil {
+		if st, ok := ctx.Value(keyStatusKey{}).(*keyStatus); ok {
+			st.unavailable = err
+		}
 		return nil, err
 	}
 	payload, tried, err := k.verify(jws, kid)
@@ -80,9 +90,14 @@ func (k *keySet) refresh(ctx context.Context) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if !k.fetched.IsZero() && k.now().Sub(k.fetched) < k.minRefresh {
-		return nil
+		return k.lastErr
 	}
 	k.fetched = k.now()
+	k.lastErr = k.fetch(ctx)
+	return k.lastErr
+}
+
+func (k *keySet) fetch(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, k.url, nil)
 	if err != nil {
 		return fmt.Errorf("issuer keys: %w", err)
