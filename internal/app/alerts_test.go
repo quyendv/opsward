@@ -84,6 +84,12 @@ alerts:
 	case <-time.After(10 * time.Second):
 		t.Fatal("no notification")
 	}
+	// Another principal's delivery is refused, and audited as a denial.
+	w = httptest.NewRecorder()
+	a.Alerts.Handle(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/alerts/alertmanager", strings.NewReader(body)), core.Principal{Subject: "mallory@example.com"})
+	if w.Code != http.StatusForbidden || !strings.Contains(stream.String(), `"rule":"alerts.principal"`) {
+		t.Fatalf("refusal: %d, audit:\n%s", w.Code, stream.String())
+	}
 	// The investigation is audited as the alerts principal, through the alertmanager adapter.
 	if out := stream.String(); !strings.Contains(out, `"subject":"alertmanager"`) || !strings.Contains(out, `"adapter":"alertmanager"`) ||
 		!strings.Contains(out, `"tool":"diagnose_workload"`) {
@@ -107,4 +113,31 @@ func (l *lockedBuilder) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.b.String()
+}
+
+// Alerts whose principal no binding lets diagnose would all be denied: validate says so.
+func TestCheckWarnsWhenAlertsCannotDiagnose(t *testing.T) {
+	doc := strings.Replace(remoteDoc, "%DB%", "/var/lib/opsward/o.db", 1) + `
+alerts:
+  principal: alertmanager
+  notify: [{ type: webhook, url: https://hooks.example.com/x }]
+`
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnings, err := Check(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := strings.Join(warnings, "\n"); !strings.Contains(w, "no binding lets alertmanager run diagnose_workload") {
+		t.Fatalf("warnings:\n%s", w)
+	}
+	cfg, err = config.Parse([]byte(doc + "policy:\n  roles: { d: { tools: [diagnose_workload] } }\n  bindings: [{ name: a, subjects: { users: [alertmanager] }, role: d }]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warnings, _ := Check(cfg); strings.Contains(strings.Join(warnings, "\n"), "no binding lets") {
+		t.Fatalf("warned although a binding allows it: %v", warnings)
+	}
 }

@@ -55,3 +55,13 @@ func TestAlertsAreRestartOnly(t *testing.T) {
 		t.Fatalf("RestartRequired = %v", got)
 	}
 }
+
+func TestAlertWebhookQueryWarns(t *testing.T) {
+	c, err := Parse([]byte(remote + strings.Replace(alertsSection, "https://hooks.example.com/opsward", `"https://hooks.example.com/opsward?token=x"`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := strings.Join(c.Warnings(), "\n"); !strings.Contains(w, "alerts.notify[0]: url has a query") || strings.Contains(w, "token=x") {
+		t.Fatalf("warnings:\n%s", w)
+	}
+}

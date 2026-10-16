@@ -46,6 +46,9 @@ type Options struct {
 	Timeout time.Duration
 	Now     func() time.Time
 	Logger  *slog.Logger
+	// Refused, if set, records a delivery refused for its principal: a denial, which is
+	// audited like every other.
+	Refused func(ctx context.Context, p core.Principal, reason string)
 }
 
 // Receiver takes Alertmanager webhooks and investigates their firing alerts.
@@ -104,6 +107,10 @@ func (r *Receiver) Handle(w http.ResponseWriter, req *http.Request, p core.Princ
 	}
 	if core.NormalizeSubject(p.Subject) != core.NormalizeSubject(r.opt.Principal) {
 		r.opt.Logger.Warn("alerts refused: not the alerts principal", "subject", p.Subject)
+		if r.opt.Refused != nil {
+			p.Adapter = Adapter
+			r.opt.Refused(req.Context(), p, "not alerts.principal")
+		}
 		http.Error(w, "this principal may not send alerts", http.StatusForbidden)
 		return
 	}

@@ -21,8 +21,9 @@ later.
 (`http_config.authorization.credentials_file`). The token's principal, typically an API
 token with a subject such as `alertmanager`, is the caller of every investigation, so
 policy decides what alerts may investigate: a binding allowing `diagnose_workload` to that
-principal, as narrow as the operator wants. Investigations are audited like any call, with
-the adapter `alertmanager`.
+principal, as narrow as the operator wants (`opsward validate` warns when there is none).
+Investigations are audited like any call, with the adapter `alertmanager`; so is a delivery
+refused because another principal sent it, as a denial.
 
 The request is answered at once (202) with how many alerts were queued; investigations run
 in the background, a few at a time, from a bounded queue. A full queue drops the alert

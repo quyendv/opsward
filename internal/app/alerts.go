@@ -1,13 +1,18 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync/atomic"
 
 	"github.com/quyendv/opsward/internal/adapter/alertmanager"
+	"github.com/quyendv/opsward/internal/audit"
 	"github.com/quyendv/opsward/internal/config"
+	"github.com/quyendv/opsward/internal/core"
+	"github.com/quyendv/opsward/internal/engine"
 	"github.com/quyendv/opsward/internal/notify"
+	"github.com/quyendv/opsward/internal/policy"
 )
 
 // alertEnvironments is what alert mapping matches environments against; a reload
@@ -25,7 +30,7 @@ func alertEnvs(cfg *config.Config) []alertmanager.Environment {
 }
 
 // openAlerts builds the alert receiver (docs/design/0012), or nil without alerts.
-func openAlerts(cfg *config.Config, inv alertmanager.Invoker, envs *alertEnvironments, log *slog.Logger) (*alertmanager.Receiver, error) {
+func openAlerts(cfg *config.Config, inv alertmanager.Invoker, aud engine.Auditor, envs *alertEnvironments, log *slog.Logger) (*alertmanager.Receiver, error) {
 	a := cfg.Alerts
 	if a == nil {
 		return nil, nil
@@ -53,6 +58,16 @@ func openAlerts(cfg *config.Config, inv alertmanager.Invoker, envs *alertEnviron
 	}
 	return alertmanager.New(alertmanager.Options{
 		Invoker: inv, Notifiers: notifiers, Principal: a.Principal, Dedupe: a.Dedupe.Std(), Logger: log,
+		Refused: func(ctx context.Context, p core.Principal, reason string) {
+			rec := audit.Record{
+				Phase: audit.PhaseOutcome, Principal: p,
+				Decision: &core.Decision{Effect: core.EffectDeny, Rule: "alerts.principal"},
+				Outcome:  &audit.Outcome{Status: audit.StatusDenied, Error: reason},
+			}
+			if _, err := aud.Write(context.WithoutCancel(ctx), rec); err != nil {
+				log.Error("audit write failed", "what", "refused alert delivery", "error", err)
+			}
+		},
 		Mapping: func() (alertmanager.Mapping, []alertmanager.Environment) {
 			if p := envs.p.Load(); p != nil {
 				return mapping, *p
@@ -60,4 +75,28 @@ func openAlerts(cfg *config.Config, inv alertmanager.Invoker, envs *alertEnviron
 			return mapping, nil
 		},
 	}), nil
+}
+
+// alertPolicyWarnings warns when policy lets the alerts principal diagnose in no
+// environment: every investigation would then be denied.
+func alertPolicyWarnings(cfg *config.Config, pol *policy.Policy) []string {
+	a := cfg.Alerts
+	if a == nil {
+		return nil
+	}
+	p := core.Principal{Subject: core.NormalizeSubject(a.Principal)}
+	for g, members := range cfg.Identity.Groups {
+		for _, m := range members {
+			if core.NormalizeSubject(m) == p.Subject {
+				p.Groups = append(p.Groups, g)
+			}
+		}
+	}
+	for _, e := range cfg.Environments {
+		req := core.Request{Principal: p, Tool: "diagnose_workload", Risk: core.RiskRead, Scope: core.Scope{Environment: e.Name}}
+		if pol.Decide(req).Effect == core.EffectAllow {
+			return nil
+		}
+	}
+	return []string{fmt.Sprintf("alerts: no binding lets %s run diagnose_workload, so every investigation is denied (unless its token carries groups that are allowed)", a.Principal)}
 }

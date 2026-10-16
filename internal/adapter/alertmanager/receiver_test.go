@@ -292,3 +292,23 @@ func TestReceiverNormalizesThePrincipal(t *testing.T) {
 		t.Fatalf("code %d", w.Code)
 	}
 }
+
+type recordedRefusal struct {
+	p      core.Principal
+	reason string
+}
+
+// A delivery from another principal is a denial, and denials are audited.
+func TestReceiverAuditsRefusals(t *testing.T) {
+	var got []recordedRefusal
+	r := New(Options{
+		Invoker: &fakeEngine{}, Principal: "alertmanager", Mapping: func() (Mapping, []Environment) { return rules, envs },
+		Refused: func(_ context.Context, p core.Principal, reason string) {
+			got = append(got, recordedRefusal{p, reason})
+		},
+	})
+	post(t, r, "alice@example.com", webhook)
+	if len(got) != 1 || got[0].p.Subject != "alice@example.com" || got[0].p.Adapter != Adapter || !strings.Contains(got[0].reason, "alerts.principal") {
+		t.Fatalf("refusals = %+v", got)
+	}
+}
