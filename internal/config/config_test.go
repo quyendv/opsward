@@ -77,6 +77,7 @@ func TestParseRejects(t *testing.T) {
 		{"direct not yet", minimal + "    change: { strategy: direct }\n", `change strategy "direct" is not available`},
 		{"file stream without path", minimal + "audit:\n  stream: { type: file }\n", "audit.stream.path is required"},
 		{"tilde in kubeconfig", strings.Replace(minimal, "/etc/opsward/cluster-a-reader", "~/.kube/reader", 1), "~ is not expanded"},
+		{"profile name", strings.Replace(minimal, "          reader:", "          Ops_B:", 1), `profile "Ops_B": the name must be a DNS-1123 label`},
 		{"duplicate environment", minimal + "  - name: staging\n    cluster: cluster-a\n", `environment "staging": duplicate name`},
 	}
 	for _, tt := range tests {

@@ -44,6 +44,7 @@ func WorkloadEvents(src capability.WorkloadSource) (engine.Tool, error) {
 			"newest first. Scheduling failures, image pull errors, failed probes and failed pod creation appear here; " +
 			"OOM kills do not (see lastTerminated in get_workload_status).",
 		Risk:        core.RiskRead,
+		Needs:       []string{capability.OpWorkloadsGet, capability.OpWorkloadsPods, capability.OpWorkloadsEvents},
 		InputSchema: in.schema,
 		Args:        in.names,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
@@ -88,6 +89,7 @@ func WorkloadLogs(src capability.WorkloadSource) (engine.Tool, error) {
 			"in name order, or one pod with pod=. Use previous=true for a container in CrashLoopBackOff: the current " +
 			"instance has usually not failed yet. Long output keeps the newest lines and is marked truncated.",
 		Risk:        core.RiskRead,
+		Needs:       []string{capability.OpWorkloadsGet, capability.OpWorkloadsPods, capability.OpWorkloadsLogs},
 		InputSchema: in.schema,
 		Args:        in.names,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {

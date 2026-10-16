@@ -392,7 +392,7 @@ func TestPendingApprovalsAreCapped(t *testing.T) {
 func TestPreparedRiskOverridesTheTools(t *testing.T) {
 	var risks []core.Risk
 	tl := Tool{
-		Name: "propose", Risk: core.RiskWrite, InputSchema: &jsonschema.Schema{Type: "object"},
+		Name: "propose", Risk: core.RiskWrite, Risks: []core.Risk{core.RiskRead}, InputSchema: &jsonschema.Schema{Type: "object"},
 		Prepare: func(raw json.RawMessage) (*Prepared, error) {
 			var in struct{ Suggest bool }
 			_ = json.Unmarshal(raw, &in)
@@ -456,5 +456,35 @@ func TestRunSeesTheIntentRecordID(t *testing.T) {
 	}
 	if seen == "" || aud.records[0].Phase != audit.PhaseIntent || seen != aud.records[0].ID {
 		t.Fatalf("Run saw %q, intent record %+v", seen, aud.records[0])
+	}
+}
+
+// A call may lower its risk only to one its tool declares: policy and rendered RBAC were
+// derived from those.
+func TestPreparedRiskMustBeDeclared(t *testing.T) {
+	var risks []core.Risk
+	tl := Tool{
+		Name: "propose", Risk: core.RiskWrite, InputSchema: &jsonschema.Schema{Type: "object"},
+		Prepare: func(json.RawMessage) (*Prepared, error) {
+			return &Prepared{
+				Scope: core.Scope{Environment: "staging", Namespace: "team-a-api", Kind: "Deployment", Name: "api"}, Args: map[string]any{},
+				Run:  func(context.Context, string) (any, error) { return "ok", nil },
+				Risk: core.RiskRead,
+			}, nil
+		},
+	}
+	e, _ := New(Options{
+		Tools: []Tool{tl}, Environments: []Environment{{Name: "staging", Namespaces: []string{"*"}}},
+		Authorizer: authorizerFunc(func(r core.Request) core.Decision {
+			risks = append(risks, r.Risk)
+			return core.Decision{Effect: core.EffectAllow, Rule: "b"}
+		}),
+		Auditor: &recordingAuditor{},
+	})
+	if _, err := e.Invoke(context.Background(), alice, "propose", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if risks[0] != core.RiskWrite {
+		t.Fatalf("an undeclared lower risk was taken: %v", risks)
 	}
 }

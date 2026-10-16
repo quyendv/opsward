@@ -67,7 +67,9 @@ type Catalog struct {
 // ToolInfo describes a registered tool to policy.
 type ToolInfo struct {
 	Risk core.Risk
-	Args []string
+	// Risks are lower risks a call to the tool may take.
+	Risks []core.Risk
+	Args  []string
 	// Global tools are not bound to an environment and use no backend profile.
 	Global bool
 }

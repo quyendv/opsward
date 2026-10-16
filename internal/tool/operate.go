@@ -69,6 +69,7 @@ func RestartWorkload(src capability.WorkloadSource) (engine.Tool, error) {
 		Description: "Restart a workload's pods through its rollout, as kubectl rollout restart does. Previewed first; " +
 			"may need approval, in which case call again with the approval id once approved.",
 		Risk: core.RiskWrite, InputSchema: in.schema, Args: in.names,
+		Needs: []string{capability.OpWorkloadsGet, capability.OpWorkloadsRestart},
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
 			if err != nil {
@@ -97,6 +98,7 @@ func ScaleWorkload(src capability.WorkloadSource) (engine.Tool, error) {
 		Description: "Set a Deployment's or StatefulSet's replicas. Refused when a reconciler (Argo CD, Flux, Helm) " +
 			"manages it or an autoscaler targets it. Previewed first; may need approval.",
 		Risk: core.RiskWrite, InputSchema: in.schema, Args: in.names,
+		Needs: []string{capability.OpWorkloadsGet, capability.OpWorkloadsScale},
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
 			if err != nil {

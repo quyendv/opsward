@@ -286,6 +286,9 @@ func (c *Config) validate() error {
 			fail("cluster %q: at least one profile is required", name)
 		}
 		for pn, p := range cl.Profiles {
+			if !dnsLabel.MatchString(pn) {
+				fail("cluster %q profile %q: the name must be a DNS-1123 label (lowercase letters, digits and -)", name, pn)
+			}
 			switch {
 			case p.Kubeconfig == "":
 				fail("cluster %q profile %q: kubeconfig is required", name, pn)
@@ -467,6 +470,10 @@ func (c *Config) RestartRequired(next *Config) []string {
 	sort.Strings(out)
 	return out
 }
+
+// dnsLabel is a DNS-1123 label: profile names become Kubernetes object names
+// (docs/design/0009).
+var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // labelName is the label syntax both Prometheus and Loki accept unquoted.
 var labelName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)

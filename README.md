@@ -34,7 +34,8 @@ opsward validate --config examples/opsward.yaml
 ```
 
 Point `providers.kubernetes.clusters.*.profiles.reader.kubeconfig` at a kubeconfig whose
-credential is bound to a read-only role, then register `opsward serve --config <file>` as a
+credential is bound to a read-only role (`opsward rbac render --config <file>` prints the
+RBAC each profile needs for what your policy allows), then register `opsward serve --config <file>` as a
 stdio MCP server in your agent client. Every call is audited to the SQLite file in
 `storage.path` and to stderr; `opsward audit verify --config <file>` checks the chain.
 

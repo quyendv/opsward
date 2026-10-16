@@ -322,6 +322,7 @@ func GetWorkloadMetrics(ws capability.WorkloadSource, ms capability.MetricsSourc
 		Description: "Show a workload's CPU, memory or restarts per pod over a time range, with min, max and last, and " +
 			"for CPU and memory the pods' requests and limits.",
 		Risk:        core.RiskRead,
+		Needs:       []string{capability.OpWorkloadsGet, capability.OpWorkloadsPods},
 		InputSchema: in.schema,
 		Args:        in.names,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {

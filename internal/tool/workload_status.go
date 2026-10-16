@@ -42,6 +42,7 @@ func WorkloadStatus(src capability.WorkloadSource) (engine.Tool, error) {
 			"status conditions, and each pod's phase, readiness, restart count, waiting reason and last termination " +
 			"(reason such as OOMKilled, and exit code). Start here when a workload is unhealthy.",
 		Risk:        core.RiskRead,
+		Needs:       []string{capability.OpWorkloadsGet, capability.OpWorkloadsPods},
 		InputSchema: in.schema,
 		Args:        in.names,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
