@@ -113,12 +113,18 @@ func ScaleWorkload(src capability.WorkloadSource) (engine.Tool, error) {
 // ApprovalStore is what the approval tools read and decide.
 type ApprovalStore interface {
 	Approval(ctx context.Context, id string) (store.Approval, bool, error)
-	ListApprovals(ctx context.Context, since time.Time) ([]store.Approval, error)
+	ListApprovals(ctx context.Context, since time.Time, limit int) ([]store.Approval, error)
 	DecideApproval(ctx context.Context, id, status, by string, byGroups []string, reason string, at time.Time) (bool, error)
+	WithdrawApproval(ctx context.Context, id, by string, byGroups []string, reason string, at time.Time) (bool, error)
 }
 
-// approvalListWindow is how far back list_approvals looks.
-const approvalListWindow = 24 * time.Hour
+// approvalListWindow is how far back list_approvals looks, and approvalListScan how
+// many of the newest requests it reads; requests are capped per requester, so this covers
+// a busy day.
+const (
+	approvalListWindow = 24 * time.Hour
+	approvalListScan   = 1000
+)
 
 // ApprovalView is an approval request as the approval tools show it.
 type ApprovalView struct {
@@ -166,7 +172,7 @@ func ListApprovals(st ApprovalStore) (engine.Tool, error) {
 			return &engine.Prepared{Args: obj, Run: func(ctx context.Context, _ string) (any, error) {
 				p, _ := core.PrincipalFrom(ctx)
 				now := time.Now()
-				all, err := st.ListApprovals(ctx, now.Add(-approvalListWindow))
+				all, err := st.ListApprovals(ctx, now.Add(-approvalListWindow), approvalListScan)
 				if err != nil {
 					return nil, err
 				}
@@ -185,7 +191,7 @@ func ListApprovals(st ApprovalStore) (engine.Tool, error) {
 
 type decideInput struct {
 	ID       string `json:"id" jsonschema:"approval request id"`
-	Decision string `json:"decision" jsonschema:"approve or deny"`
+	Decision string `json:"decision" jsonschema:"approve or deny a pending request; withdraw an approval that has not been used yet"`
 	Reason   string `json:"reason,omitempty" jsonschema:"why, recorded with the decision"`
 }
 
@@ -193,7 +199,7 @@ type decideInput struct {
 func DecideApproval(st ApprovalStore) (engine.Tool, error) {
 	in, err := newInput[decideInput](func(s *jsonschema.Schema) {
 		s.Properties["id"].MinLength = jsonschema.Ptr(1)
-		s.Properties["decision"].Enum = []any{"approve", "deny"}
+		s.Properties["decision"].Enum = []any{"approve", "deny", "withdraw"}
 		s.Properties["reason"].MaxLength = jsonschema.Ptr(1024)
 	})
 	if err != nil {
@@ -201,8 +207,9 @@ func DecideApproval(st ApprovalStore) (engine.Tool, error) {
 	}
 	return engine.Tool{
 		Name: "decide_approval",
-		Description: "Approve or deny an approval request that you may decide (see list_approvals). You cannot decide " +
-			"your own request. The requester then calls again with the approval id.",
+		Description: "Approve or deny an approval request that you may decide (see list_approvals), or withdraw an " +
+			"approval before it is used. You cannot decide your own request. The requester then calls again with the " +
+			"approval id.",
 		Risk: core.RiskWrite, InputSchema: in.schema, Args: in.names, Global: true, NeverApproved: true,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
@@ -227,16 +234,28 @@ func DecideApproval(st ApprovalStore) (engine.Tool, error) {
 				case !now.Before(a.ExpiresAt):
 					return nil, core.InvalidInput(fmt.Sprintf("approval request %s has expired", v.ID))
 				}
-				status := store.ApprovalApproved
-				if v.Decision == "deny" {
+				by := core.NormalizeSubject(p.Subject)
+				var status string
+				var done bool
+				if v.Decision == "withdraw" {
 					status = store.ApprovalDenied
-				}
-				done, err := st.DecideApproval(ctx, v.ID, status, core.NormalizeSubject(p.Subject), p.Groups, v.Reason, now.UTC())
-				if err != nil {
-					return nil, err
-				}
-				if !done {
-					return nil, core.InvalidInput(fmt.Sprintf("approval request %s has already been decided, or has expired", v.ID))
+					if done, err = st.WithdrawApproval(ctx, v.ID, by, p.Groups, v.Reason, now.UTC()); err != nil {
+						return nil, err
+					}
+					if !done {
+						return nil, core.InvalidInput(fmt.Sprintf("approval request %s is not an approval that can still be withdrawn: not approved, already used, or expired", v.ID))
+					}
+				} else {
+					status = store.ApprovalApproved
+					if v.Decision == "deny" {
+						status = store.ApprovalDenied
+					}
+					if done, err = st.DecideApproval(ctx, v.ID, status, by, p.Groups, v.Reason, now.UTC()); err != nil {
+						return nil, err
+					}
+					if !done {
+						return nil, core.InvalidInput(fmt.Sprintf("approval request %s has already been decided, or has expired", v.ID))
+					}
 				}
 				a.Status, a.DecidedBy, a.Reason = status, core.NormalizeSubject(p.Subject), v.Reason
 				return view(a, p, now), nil

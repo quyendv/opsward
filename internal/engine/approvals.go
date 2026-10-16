@@ -25,11 +25,16 @@ const ApprovalArg = "approval"
 // DefaultApprovalTTL is how long a request can be decided and used.
 const DefaultApprovalTTL = time.Hour
 
+// MaxPendingApprovals bounds a requester's pending requests, so that one principal, or
+// an agent in a loop, cannot flood approvers.
+const MaxPendingApprovals = 20
+
 // Approvals stores approval requests (docs/design/0007). store.Store implements it.
 type Approvals interface {
 	CreateApproval(ctx context.Context, a store.Approval) error
 	Approval(ctx context.Context, id string) (store.Approval, bool, error)
 	UseApproval(ctx context.Context, id string, at time.Time) (bool, error)
+	CountPendingApprovals(ctx context.Context, requester string, now time.Time) (int, error)
 }
 
 // ApprovalRequiredError answers a call that needs approval: it was not run, and became
@@ -126,6 +131,13 @@ func (e *Engine) preview(ctx context.Context, prep *Prepared, profile string) (*
 func (e *Engine) requestApproval(ctx context.Context, p core.Principal, tool string, prep *Prepared, rec *audit.Record, dec *core.Decision,
 	profile string, now time.Time, finish func(string, error) error,
 ) (*Result, error) {
+	pending, err := e.approvals.CountPendingApprovals(ctx, core.NormalizeSubject(p.Subject), now)
+	if err != nil {
+		return nil, finish(audit.StatusError, err)
+	}
+	if pending >= MaxPendingApprovals {
+		return nil, finish(audit.StatusDenied, approvalErr("%d of your approval requests are pending: wait until some are decided or expire", pending))
+	}
 	change, err := e.preview(ctx, prep, profile)
 	if err != nil {
 		status := audit.StatusError

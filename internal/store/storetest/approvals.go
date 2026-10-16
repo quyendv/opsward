@@ -117,7 +117,7 @@ func Approvals(t *testing.T, open func(t *testing.T) store.Store) {
 		for i, id := range []string{"r1", "r2", "r3"} {
 			_ = s.CreateApproval(ctx, approval(id, t0.Add(time.Duration(i)*time.Hour)))
 		}
-		list, err := s.ListApprovals(ctx, t0.Add(30*time.Minute))
+		list, err := s.ListApprovals(ctx, t0.Add(30*time.Minute), 10)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,6 +127,58 @@ func Approvals(t *testing.T, open func(t *testing.T) store.Store) {
 		}
 		if !slices.Equal(ids, []string{"r3", "r2"}) {
 			t.Fatalf("ListApprovals = %v", ids)
+		}
+		if list, _ := s.ListApprovals(ctx, t0, 1); len(list) != 1 || list[0].ID != "r3" {
+			t.Fatalf("limit: %+v", list)
+		}
+	})
+
+	t.Run("count pending of a requester", func(t *testing.T) {
+		s := open(t)
+		_ = s.CreateApproval(ctx, approval("r1", t0))
+		_ = s.CreateApproval(ctx, approval("r2", t0))
+		other := approval("r3", t0)
+		other.Requester = "bob@example.com"
+		_ = s.CreateApproval(ctx, other)
+		_, _ = s.DecideApproval(ctx, "r2", store.ApprovalApproved, "lead@example.com", nil, "", t0)
+		if n, err := s.CountPendingApprovals(ctx, "alice@example.com", t0); err != nil || n != 1 {
+			t.Fatalf("pending = %d, %v", n, err)
+		}
+		if n, _ := s.CountPendingApprovals(ctx, "alice@example.com", t0.Add(2*time.Hour)); n != 0 {
+			t.Fatalf("expired requests are not pending: %d", n)
+		}
+	})
+
+	// An approver can take back an approval until it is used.
+	t.Run("withdraw an approved request", func(t *testing.T) {
+		s := open(t)
+		_ = s.CreateApproval(ctx, approval("r1", t0))
+		if ok, _ := s.WithdrawApproval(ctx, "r1", "lead@example.com", nil, "no", t0); ok {
+			t.Fatal("withdrew a pending request")
+		}
+		_, _ = s.DecideApproval(ctx, "r1", store.ApprovalApproved, "lead@example.com", nil, "", t0)
+		if ok, err := s.WithdrawApproval(ctx, "r1", "cto@example.com", []string{"platform"}, "rollback first", t0.Add(time.Minute)); err != nil || !ok {
+			t.Fatalf("WithdrawApproval = %v, %v", ok, err)
+		}
+		got, _, _ := s.Approval(ctx, "r1")
+		if got.Status != store.ApprovalDenied || got.DecidedBy != "cto@example.com" || got.Reason != "rollback first" {
+			t.Fatalf("withdrawn = %+v", got)
+		}
+		if ok, _ := s.UseApproval(ctx, "r1", t0.Add(2*time.Minute)); ok {
+			t.Fatal("a withdrawn approval was used")
+		}
+	})
+
+	t.Run("prune", func(t *testing.T) {
+		s := open(t)
+		_ = s.CreateApproval(ctx, approval("old", t0))
+		_ = s.CreateApproval(ctx, approval("new", t0.Add(48*time.Hour)))
+		n, err := s.PruneApprovals(ctx, t0.Add(24*time.Hour))
+		if err != nil || n != 1 {
+			t.Fatalf("PruneApprovals = %d, %v", n, err)
+		}
+		if _, ok, _ := s.Approval(ctx, "new"); !ok {
+			t.Fatal("pruned a live request")
 		}
 	})
 }

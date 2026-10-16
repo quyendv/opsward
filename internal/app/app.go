@@ -427,7 +427,11 @@ func orDefault(w, def io.Writer) io.Writer {
 	return def
 }
 
-// RunRetention prunes audit records now and then daily, until ctx is done.
+// approvalKeep is how long approval requests stay in the store after they expire.
+const approvalKeep = 7 * 24 * time.Hour
+
+// RunRetention prunes audit records and expired approval requests now and then daily,
+// until ctx is done.
 func (a *App) RunRetention(ctx context.Context) {
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
@@ -436,6 +440,13 @@ func (a *App) RunRetention(ctx context.Context) {
 			a.log.Error("audit retention failed", "error", err)
 		} else if n > 0 {
 			a.log.Info("audit retention pruned records", "count", n)
+		}
+		// The audit keeps every request and decision; the store keeps the requests a
+		// week past expiry, for list_approvals.
+		if n, err := a.Store.PruneApprovals(ctx, time.Now().Add(-approvalKeep)); err != nil {
+			a.log.Error("pruning approval requests failed", "error", err)
+		} else if n > 0 {
+			a.log.Info("pruned expired approval requests", "count", n)
 		}
 		select {
 		case <-ctx.Done():
@@ -527,8 +538,12 @@ func (noApprovals) Approval(context.Context, string) (store.Approval, bool, erro
 	return store.Approval{}, false, errors.New("not available while checking")
 }
 
-func (noApprovals) ListApprovals(context.Context, time.Time) ([]store.Approval, error) {
+func (noApprovals) ListApprovals(context.Context, time.Time, int) ([]store.Approval, error) {
 	return nil, errors.New("not available while checking")
+}
+
+func (noApprovals) WithdrawApproval(context.Context, string, string, []string, string, time.Time) (bool, error) {
+	return false, errors.New("not available while checking")
 }
 
 func (noApprovals) DecideApproval(context.Context, string, string, string, []string, string, time.Time) (bool, error) {

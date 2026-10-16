@@ -381,6 +381,9 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	if err != nil {
 		return nil, finish(audit.StatusError, err)
 	}
+	if c, ok := out.(*core.Change); ok {
+		rec.Change = c // what the write did, which may differ from its preview
+	}
 	data, err := normalize(out)
 	if err != nil {
 		return nil, finish(audit.StatusError, err)
