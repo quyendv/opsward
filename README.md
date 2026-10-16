@@ -2,7 +2,7 @@
 
 **A guarded gateway that lets AI agents operate your infrastructure, within the permissions you grant.**
 
-> Status: pre-alpha. Read-only workload, metrics and logs tools and knowledge packs work over MCP stdio, or over HTTP for a team with API tokens; nothing is stable.
+> Status: pre-alpha. Workload, metrics and logs tools, knowledge packs, narrow changes with approvals and pull requests against a GitOps source work over MCP stdio, or over HTTP for a team; nothing is stable.
 
 ## Why
 
@@ -55,7 +55,9 @@ Tools: `list_environments`, `list_namespaces`, `list_workloads` (each showing on
 caller may work on), `get_workload_status`, `list_workload_events`, `list_workload_logs`,
 `diagnose_workload`, `search_knowledge`, `get_knowledge`, `restart_workload` and
 `scale_workload` (previewed, and approved by someone else where policy says so; approvers
-use `list_approvals` and `decide_approval`); with a Prometheus-compatible
+use `list_approvals` and `decide_approval`); with a forge configured, `resolve_source`
+and `propose_change`, which turn a change into a diff or a pull request against the
+workload's GitOps source; with a Prometheus-compatible
 metrics backend also `get_workload_metrics` and `query_metrics`, and with Loki `query_logs`.
 Free-form queries are rewritten so that they cannot leave the caller's namespace and
 cluster; without a namespace they span the cluster, where the environment and policy allow. Results that match a knowledge document carry its

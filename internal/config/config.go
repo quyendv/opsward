@@ -42,6 +42,8 @@ type Config struct {
 	Policy       policy.Config `yaml:"policy"`
 	Knowledge    Knowledge     `yaml:"knowledge"`
 	Approvals    Approvals     `yaml:"approvals"`
+	// SourceResolution finds the files that declare a workload (docs/design/0008).
+	SourceResolution SourceResolution `yaml:"sourceResolution"`
 }
 
 // Approvals configures approval requests (docs/design/0007).
@@ -103,6 +105,8 @@ type Providers struct {
 	Kubernetes Kubernetes `yaml:"kubernetes"`
 	Metrics    *Backend   `yaml:"metrics"` // optional; restart-only (docs/design/0004)
 	Logs       *Backend   `yaml:"logs"`    // optional; restart-only
+	Delivery   *Delivery  `yaml:"delivery"`
+	Forges     []Forge    `yaml:"forges"`
 }
 
 // Backend is an HTTP query backend: Prometheus-compatible metrics or Loki logs.
@@ -236,12 +240,13 @@ func (c *Config) applyDefaults() {
 			e.Namespaces = []string{"*"}
 		}
 		if e.Change.Strategy == "" {
-			e.Change.Strategy = "suggest"
+			e.Change.Strategy = StrategySuggest
 		}
 		if e.ClusterLabelValue == "" {
 			e.ClusterLabelValue = e.Cluster
 		}
 	}
+	c.changeDefaults()
 	for _, b := range c.backends() {
 		if b.NamespaceLabel == "" {
 			b.NamespaceLabel = "namespace"
@@ -324,10 +329,17 @@ func (c *Config) validate() error {
 				fail("environment %q: invalid namespace pattern %q", e.Name, ns)
 			}
 		}
-		if e.Change.Strategy != "suggest" {
-			fail("environment %q: change strategy %q is not available in this version; use suggest", e.Name, e.Change.Strategy)
+		switch e.Change.Strategy {
+		case StrategySuggest:
+		case StrategyPullRequest:
+			if len(c.Providers.Forges) == 0 {
+				fail("environment %q: change strategy pull-request needs a forge in providers.forges", e.Name)
+			}
+		default:
+			fail("environment %q: change strategy %q is not available; use suggest or pull-request", e.Name, e.Change.Strategy)
 		}
 	}
+	c.validateChange(seen, fail)
 	return errors.Join(errs...)
 }
 
@@ -391,6 +403,16 @@ func (c *Config) Warnings() []string {
 			out = append(out, fmt.Sprintf("knowledge path %q is relative", p))
 		}
 	}
+	for _, f := range c.Providers.Forges {
+		if strings.HasPrefix(f.URL, "http://") {
+			out = append(out, fmt.Sprintf("forge %q sends its token over plain http", f.Name))
+		}
+		if f.Token.File != "" {
+			if _, err := os.Stat(f.Token.File); err != nil {
+				out = append(out, fmt.Sprintf("forge %q: token.file does not exist here", f.Name))
+			}
+		}
+	}
 	out = append(out, c.remoteWarnings()...)
 	sort.Strings(out)
 	return out
@@ -421,6 +443,12 @@ func (c *Config) RestartRequired(next *Config) []string {
 	}
 	if !reflect.DeepEqual(c.Providers.Logs, next.Providers.Logs) {
 		out = append(out, "providers.logs")
+	}
+	if !reflect.DeepEqual(c.Providers.Delivery, next.Providers.Delivery) {
+		out = append(out, "providers.delivery")
+	}
+	if !reflect.DeepEqual(c.Providers.Forges, next.Providers.Forges) {
+		out = append(out, "providers.forges")
 	}
 	for name, cl := range c.Providers.Kubernetes.Clusters {
 		other := next.Providers.Kubernetes.Clusters[name]

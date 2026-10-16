@@ -18,6 +18,8 @@ type fakeSource struct {
 	profiles []string
 	calls    []string
 
+	annotations map[string]string
+
 	events     []capability.Event
 	logs       *capability.WorkloadLogs
 	logOptions capability.LogOptions
@@ -107,6 +109,14 @@ func (f *fakeSource) WorkloadLabels(context.Context, capability.WorkloadRef) (ma
 		return nil, f.err
 	}
 	return f.workload.Labels, nil
+}
+
+func (f *fakeSource) WorkloadMetadata(context.Context, capability.WorkloadRef) (*capability.Metadata, error) {
+	f.calls = append(f.calls, "metadata")
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &capability.Metadata{Labels: f.workload.Labels, Annotations: f.annotations}, nil
 }
 
 const validArgs = `{"environment":"staging","namespace":"shop","kind":"Deployment","name":"api"}`

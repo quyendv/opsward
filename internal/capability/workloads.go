@@ -119,6 +119,8 @@ type Workloads interface {
 	// WorkloadLabels reads only the workload's labels, in one request. It runs before
 	// authorization, so it must not cost more than that.
 	WorkloadLabels(ctx context.Context, ref WorkloadRef) (map[string]string, error)
+	// WorkloadMetadata reads the workload's labels and annotations, in one request.
+	WorkloadMetadata(ctx context.Context, ref WorkloadRef) (*Metadata, error)
 	// WorkloadEvents returns events of the workload, of ReplicaSets it controls and of
 	// its pods, newest first, at most limit.
 	WorkloadEvents(ctx context.Context, ref WorkloadRef, limit int) ([]Event, error)
@@ -139,6 +141,12 @@ type Workloads interface {
 	// ScaleWorkload sets a Deployment's or StatefulSet's replicas. A workload that a
 	// reconciler manages or an autoscaler targets is refused (docs/design/0007).
 	ScaleWorkload(ctx context.Context, ref WorkloadRef, replicas int32, dryRun bool) (*WorkloadChange, error)
+}
+
+// Metadata is a workload's labels and annotations.
+type Metadata struct {
+	Labels      map[string]string
+	Annotations map[string]string
 }
 
 // WorkloadChange is a narrow change to a workload, previewed or made.

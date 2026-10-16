@@ -174,6 +174,8 @@ type Change struct {
 	Previous map[string]any `json:"previous,omitempty"`
 	// Note says something the caller should know, such as a reconciler that may act.
 	Note string `json:"note,omitempty"`
+	// URL is where a proposed change can be reviewed, such as a pull request.
+	URL string `json:"url,omitempty"`
 }
 
 type principalKey struct{}
@@ -187,4 +189,18 @@ func WithPrincipal(ctx context.Context, p Principal) context.Context {
 func PrincipalFrom(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(Principal)
 	return p, ok
+}
+
+type auditIDKey struct{}
+
+// WithAuditID returns ctx carrying the id of the intent record a write runs under.
+func WithAuditID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, auditIDKey{}, id)
+}
+
+// AuditIDFrom returns the id of the intent record a write runs under, so that what the
+// write creates can refer back to the audit.
+func AuditIDFrom(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(auditIDKey{}).(string)
+	return id, ok && id != ""
 }

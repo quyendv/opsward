@@ -70,6 +70,7 @@ type App struct {
 	lib        *knowledge.Library
 	metrics    *metricsRoutes // nil without any metrics backend
 	logs       *logsRoutes    // nil without any logs backend
+	changes    *changeRoutes  // nil without any forge
 	envs       environments
 	tools      []engine.Tool
 }
@@ -161,7 +162,11 @@ func Check(cfg *config.Config) ([]string, error) {
 	if cfg.Identity.Mode == config.ModeRemote {
 		approvals = noApprovals{}
 	}
-	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals)
+	var changes tool.ChangeConfig
+	if len(cfg.Providers.Forges) > 0 {
+		changes = &changeRoutes{}
+	}
+	tools, err := buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals, changes)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +220,16 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	if cfg.Identity.Mode == config.ModeRemote {
 		approvals, approvalTools = st, st
 	}
-	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs, approvalTools); err != nil {
+	// As for the backends: a nil *changeRoutes must not become a non-nil interface.
+	var changes tool.ChangeConfig
+	if a.changes, err = openChanges(cfg, a.source); err != nil {
+		_ = a.Close()
+		return nil, err
+	}
+	if a.changes != nil {
+		changes = a.changes
+	}
+	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs, approvalTools, changes); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
@@ -275,6 +289,9 @@ func (a *App) Reload(next *config.Config) error {
 	// between is decided by the new policy with the groups its token was resolved with,
 	// which a request authenticated just before the reload sees anyway.
 	a.Engine.Update(d.envs, d.policy, a.lib)
+	if a.changes != nil {
+		a.changes.update(next)
+	}
 	a.Identity.SetGroups(next.Identity.Groups)
 	a.cfg, a.Warnings = next, d.warnings
 	return nil
@@ -480,7 +497,7 @@ func (a *App) Close() error {
 
 // buildTools registers the tools whose backends are configured (docs/design/0001,
 // "Registration follows capability"). ms and ls are nil when not configured.
-func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments, approvals tool.ApprovalStore) ([]engine.Tool, error) {
+func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments, approvals tool.ApprovalStore, changes tool.ChangeConfig) ([]engine.Tool, error) {
 	builders := []func() (engine.Tool, error){
 		func() (engine.Tool, error) { return tool.RestartWorkload(src) },
 		func() (engine.Tool, error) { return tool.ScaleWorkload(src) },
@@ -502,6 +519,12 @@ func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capabi
 	}
 	if ls != nil {
 		builders = append(builders, func() (engine.Tool, error) { return tool.QueryLogs(ls) })
+	}
+	if changes != nil {
+		builders = append(builders,
+			func() (engine.Tool, error) { return tool.ResolveSource(src, changes) },
+			func() (engine.Tool, error) { return tool.ProposeChange(src, changes) },
+		)
 	}
 	if approvals != nil {
 		builders = append(builders,

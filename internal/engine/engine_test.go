@@ -35,6 +35,9 @@ func (a *recordingAuditor) Write(ctx context.Context, r audit.Record) (audit.Rec
 	if a.failOn != "" && r.Phase == a.failOn {
 		return audit.Record{}, errors.New("audit sink down")
 	}
+	if r.ID == "" {
+		r.ID = fmt.Sprintf("rec-%d", len(a.records)+1)
+	}
 	a.records = append(a.records, r)
 	return r, nil
 }

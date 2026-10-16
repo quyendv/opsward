@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -30,9 +31,11 @@ type Source struct {
 	envCluster map[string]string
 	profiles   map[string]map[string]Profile
 	newClient  ClientFactory
+	newDynamic DynamicFactory
 
-	mu      sync.Mutex
-	clients map[string]cachedClient
+	mu       sync.Mutex
+	clients  map[string]cachedClient
+	dynamics map[string]dynamic.Interface
 }
 
 // cachedClient remembers the kubeconfig content a client was built from, so that
@@ -50,7 +53,10 @@ func NewSource(envCluster map[string]string, profiles map[string]map[string]Prof
 	if f == nil {
 		f = FromKubeconfig
 	}
-	return &Source{envCluster: envCluster, profiles: profiles, newClient: f, clients: map[string]cachedClient{}}
+	return &Source{
+		envCluster: envCluster, profiles: profiles, newClient: f, newDynamic: DynamicFromKubeconfig,
+		clients: map[string]cachedClient{}, dynamics: map[string]dynamic.Interface{},
+	}
 }
 
 // Workloads implements capability.WorkloadSource. An unknown environment or a profile
@@ -92,6 +98,8 @@ func (s *Source) Update(envCluster map[string]string, profiles map[string]map[st
 			delete(s.clients, key)
 		}
 	}
+	// Dynamic clients are rare and cheap to rebuild.
+	s.dynamics = map[string]dynamic.Interface{}
 	s.envCluster, s.profiles = envCluster, profiles
 }
 
