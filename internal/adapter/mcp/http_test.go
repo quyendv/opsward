@@ -363,3 +363,36 @@ func TestHTTPResourceMetadataUnderAPath(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 }
+
+// Other endpoints, such as the alert webhook, authenticate like /mcp and get the
+// token's principal.
+func TestHTTPRoutesAuthenticate(t *testing.T) {
+	var got core.Principal
+	srv := httptest.NewServer(NewHTTPHandler(httpEngine(t, &nopAuditor{}), HTTPOptions{
+		Authenticate: tokens(map[string]string{"ta": "alertmanager"}),
+		Routes: map[string]PrincipalHandler{"/alerts/alertmanager": func(w http.ResponseWriter, _ *http.Request, p core.Principal) {
+			got = p
+			w.WriteHeader(http.StatusAccepted)
+		}},
+	}))
+	defer srv.Close()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/alerts/alertmanager", strings.NewReader("{}"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized || got.Subject != "" {
+		t.Fatalf("without a token: %d, %+v", resp.StatusCode, got)
+	}
+	req, _ = http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/alerts/alertmanager", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer ta")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted || got.Subject != "alertmanager" {
+		t.Fatalf("with a token: %d, %+v", resp.StatusCode, got)
+	}
+}

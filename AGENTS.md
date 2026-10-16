@@ -20,7 +20,8 @@ Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0008](docs/design/0008-propose-change.md) for proposing changes,
 [0009](docs/design/0009-rbac-render.md) for rendering backend permissions,
 [0010](docs/design/0010-delivery-status.md) for delivery status,
-[0011](docs/design/0011-running-in-a-cluster.md) for running in a cluster.
+[0011](docs/design/0011-running-in-a-cluster.md) for running in a cluster,
+[0012](docs/design/0012-alert-investigation.md) for alert investigation.
 
 ## Layout
 
@@ -39,7 +40,8 @@ internal/source/             finding the repository files that declare a workloa
 internal/confine/            PromQL and LogQL rewriting that keeps queries inside a scope
 internal/tool/               the agent's vocabulary
 internal/knowledge/          knowledge packs; builtin/ holds the generic pack
-internal/adapter/<protocol>/ the only place protocol SDKs appear (mcp)
+internal/adapter/<protocol>/ the only place protocol SDKs appear (mcp); alertmanager receives alerts
+internal/notify/             where alert investigations are sent: webhook, Slack
 internal/app/                wiring from configuration
 examples/                    configuration examples
 charts/opsward/              Helm chart; scripts/chart-test.sh (mise run chart) tests it

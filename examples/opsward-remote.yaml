@@ -79,6 +79,15 @@ sourceResolution:
 approvals:
   ttl: 1h
 
+# Alertmanager's alerts, investigated with diagnose_workload as the principal of the token
+# Alertmanager sends (webhook_configs.http_config.authorization.credentials_file), whom
+# policy must allow; see the alerts-investigate binding.
+alerts:
+  principal: alertmanager
+  environmentLabel: cluster      # matched against environments' clusterLabelValue
+  notify:
+    - { type: slack, webhookURL: { file: /etc/opsward/slack-webhook-url } }
+
 policy:
   roles:
     viewer: { risk: [read] }
@@ -86,6 +95,7 @@ policy:
     proposer: { tools: [propose_change] } # resolve_source is a read
     approver: { tools: [list_approvals, decide_approval] }
     requester: { tools: [list_approvals] } # to follow one's own requests
+    investigator: { tools: [diagnose_workload] }
   bindings:
     - name: platform-view-everything
       subjects: { groups: [platform] }
@@ -112,6 +122,9 @@ policy:
     - name: platform-approves
       subjects: { groups: [platform] }
       role: approver
+    - name: alerts-investigate
+      subjects: { users: [alertmanager] }
+      role: investigator
     - name: team-a-follows-requests
       subjects: { groups: [team-a] }
       role: requester
