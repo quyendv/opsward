@@ -44,7 +44,7 @@ internal/knowledge/          knowledge packs; builtin/ holds the generic pack
 internal/adapter/<protocol>/ the only place protocol SDKs appear (mcp); alertmanager receives alerts
 internal/notify/             where alert investigations are sent: webhook, Slack
 internal/agent/              agent mode: a model over the read tools, through the engine
-internal/llm/                model provider clients (Anthropic Messages API), plain HTTP
+internal/llm/                model provider clients (Anthropic Messages API, OpenAI chat completions), plain HTTP
 internal/app/                wiring from configuration
 examples/                    configuration examples
 charts/opsward/              Helm chart; scripts/chart-test.sh (mise run chart) tests it

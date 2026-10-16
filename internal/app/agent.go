@@ -61,10 +61,17 @@ func openAnalyzer(cfg *config.Config, e *engine.Engine, log *slog.Logger) func(c
 		return nil
 	}
 	c := cfg.Agent
-	key := c.APIKey
-	model := llm.NewAnthropic(llm.AnthropicOptions{
-		URL: c.URL, Model: c.Model, APIKey: func() (string, error) { return key.Resolve("agent.apiKey") },
-	})
+	var apiKey func() (string, error)
+	if key := c.APIKey; key != nil {
+		apiKey = func() (string, error) { return key.Resolve("agent.apiKey") }
+	}
+	var model llm.Model
+	switch c.Provider {
+	case "openai":
+		model = llm.NewOpenAI(llm.OpenAIOptions{URL: c.URL, Model: c.Model, APIKey: apiKey})
+	default:
+		model = llm.NewAnthropic(llm.AnthropicOptions{URL: c.URL, Model: c.Model, APIKey: apiKey})
+	}
 	ag := agent.New(agent.Options{
 		Model: model, Invoker: e, Tools: e.Tools(), Allowed: e.Allowed, MaxSteps: c.MaxSteps, Timeout: c.Timeout.Std(), Logger: log,
 	})

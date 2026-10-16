@@ -64,3 +64,28 @@ func TestAgentWarnings(t *testing.T) {
 		}
 	}
 }
+
+// A local server speaking chat completions takes no key.
+func TestAgentOpenAIWithoutKey(t *testing.T) {
+	c, err := Parse([]byte(remote + "agent:\n  provider: openai\n  model: qwen2.5:3b\n  url: http://127.0.0.1:11434\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Agent.URL != "http://127.0.0.1:11434" || c.Agent.APIKey != nil {
+		t.Fatalf("agent = %+v", c.Agent)
+	}
+	d, err := Parse([]byte(remote + "agent:\n  provider: openai\n  model: gpt-x\n  apiKey: { file: /etc/opsward/openai-key }\n"))
+	if err != nil || d.Agent.URL != "https://api.openai.com" {
+		t.Fatalf("defaults: %+v, %v", d.Agent, err)
+	}
+}
+
+func TestPlainHTTPWarnsOnlyWithAKey(t *testing.T) {
+	c, err := Parse([]byte(remote + "agent:\n  provider: openai\n  model: m\n  url: http://127.0.0.1:11434\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := strings.Join(c.Warnings(), "\n"); strings.Contains(w, "plain http") {
+		t.Fatalf("warned without a key:\n%s", w)
+	}
+}

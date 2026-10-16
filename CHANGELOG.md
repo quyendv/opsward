@@ -15,8 +15,9 @@ All notable changes to this project are documented here. The format follows
   the diagnosis in a second notification (`followUp`).
   Every scoped call is pinned to the alert's environment and namespace. Bounded by
   `maxSteps`, `timeout`, a results budget and `maxPerHour`; results reach the model
-  redacted. The provider is Anthropic's Messages API, spoken over HTTP; turning it on
-  sends redacted operational data to it.
+  redacted. Providers: Anthropic's Messages API, or OpenAI's chat completions, which other
+  providers and local servers (vLLM, Ollama) speak; turning agent mode on sends redacted
+  operational data to the provider.
 
 ### Changed
 
