@@ -21,6 +21,14 @@ rbac:
 #   - { name: forge-token, secretName: opsward-forge, mountPath: /etc/opsward/secrets/forge }
 extraSecretMounts: []
 
+# Environment, for credentials the configuration references with { env: NAME }.
+env: []
+envFrom: []
+
+# Other volumes, such as a ConfigMap of knowledge packs or a CA bundle.
+extraVolumes: []
+extraVolumeMounts: []
+
 image:
   repository: ghcr.io/quyendv/opsward
   # Default: the chart's appVersion.
@@ -47,7 +55,9 @@ ingress:
   className: ""
   annotations: {}
   host: opsward.example.com
+  # Bearer tokens cross the Ingress: set tls, or allowPlainHTTP when TLS ends in front of it.
   tls: []
+  allowPlainHTTP: false
 
 resources:
   requests: { cpu: 50m, memory: 64Mi }

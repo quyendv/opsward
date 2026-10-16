@@ -38,10 +38,16 @@ spec:
             - serve
             - --config
             - /etc/opsward/config/opsward.yaml
+          {{- with .Values.env }}
+          env: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom: {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 8080
-          {{- $scheme := ternary "HTTPS" "HTTP" (hasKey (dig "server" "http" dict .Values.config) "tls") }}
+          {{- $scheme := ternary "HTTPS" "HTTP" (hasKey (dig "server" "http" dict (fromYaml (include "opsward.config" .))) "tls") }}
           livenessProbe:
             httpGet: { path: /healthz, port: http, scheme: {{ $scheme }} }
           readinessProbe:
@@ -75,6 +81,7 @@ spec:
               mountPath: {{ .mountPath }}
               readOnly: true
             {{- end }}
+            {{- with .Values.extraVolumeMounts }}{{ toYaml . | nindent 12 }}{{ end }}
       volumes:
         - name: config
           configMap:
@@ -103,6 +110,7 @@ spec:
           secret:
             secretName: {{ .secretName }}
         {{- end }}
+        {{- with .Values.extraVolumes }}{{ toYaml . | nindent 8 }}{{ end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

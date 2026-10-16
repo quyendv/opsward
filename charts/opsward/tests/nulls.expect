@@ -1,0 +1,7 @@
+address: 0.0.0.0:8080
+path: /var/lib/opsward/opsward.db
+kind: Ingress
+name: OPSWARD_POSTGRES_DSN
+name: opsward-env
+mountPath: /etc/opsward/knowledge
+name: opsward-knowledge

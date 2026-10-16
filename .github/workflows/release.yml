@@ -80,6 +80,8 @@ jobs:
     permissions:
       contents: read
       packages: write # oci://ghcr.io/<owner>/charts/opsward
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
@@ -88,10 +90,18 @@ jobs:
       - run: mise run chart
       # The chart's version and appVersion are the release's, so the chart runs the image
       # built from the same tag.
-      - run: |
+      - id: push
+        run: |
           version="${GITHUB_REF_NAME#v}"
           helm package charts/opsward --version "$version" --app-version "$version" -d "$RUNNER_TEMP"
           helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GITHUB_TOKEN"
-          helm push "$RUNNER_TEMP/opsward-$version.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
+          helm push "$RUNNER_TEMP/opsward-$version.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts" 2>&1 | tee "$RUNNER_TEMP/push.log"
+          echo "digest=$(grep -o 'sha256:[0-9a-f]\{64\}' "$RUNNER_TEMP/push.log" | head -1)" >>"$GITHUB_OUTPUT"
+          echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts/opsward" >>"$GITHUB_OUTPUT"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.push.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

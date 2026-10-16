@@ -22,12 +22,21 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
+{{/* values is the configuration as given, without sections left empty (null). */}}
+{{- define "opsward.values" -}}
+{{- $cfg := dict -}}
+{{- range $k, $v := .Values.config -}}
+{{- if not (kindIs "invalid" $v) -}}{{- $_ := set $cfg $k $v -}}{{- end -}}
+{{- end -}}
+{{- toYaml $cfg -}}
+{{- end -}}
+
 {{/* The configuration with the chart's defaults under it, after checking what the chart
 needs of it. */}}
 {{- define "opsward.config" -}}
-{{- $cfg := deepCopy .Values.config -}}
+{{- $cfg := fromYaml (include "opsward.values" .) -}}
 {{- $defaults := dict "server" (dict "http" (dict "address" "0.0.0.0:8080")) -}}
-{{- if eq (dig "storage" "type" "sqlite" .Values.config) "sqlite" -}}
+{{- if eq (dig "storage" "type" "sqlite" $cfg) "sqlite" -}}
 {{- $_ := set $defaults "storage" (dict "path" "/var/lib/opsward/opsward.db") -}}
 {{- end -}}
 {{- $cfg = mergeOverwrite $defaults $cfg -}}
@@ -61,6 +70,9 @@ needs of it. */}}
 {{- if eq (dig "audit" "stream" "type" "" $cfg) "file" -}}
 {{- include "opsward.writable" (list "config.audit.stream.path" (dig "audit" "stream" "path" "" $cfg)) -}}
 {{- end -}}
+{{- if and .Values.ingress.enabled (not .Values.ingress.tls) (not .Values.ingress.allowPlainHTTP) -}}
+{{- fail "ingress: without tls, bearer tokens cross the network in clear; set ingress.tls, or ingress.allowPlainHTTP if TLS ends in front of the Ingress" -}}
+{{- end -}}
 {{- toYaml $cfg -}}
 {{- end -}}
 
@@ -73,7 +85,7 @@ needs of it. */}}
 
 {{/* sqlite reports whether the configuration stores in SQLite, on the chart's volume. */}}
 {{- define "opsward.sqlite" -}}
-{{- if eq (dig "storage" "type" "sqlite" .Values.config) "sqlite" -}}true{{- end -}}
+{{- if eq (dig "storage" "type" "sqlite" (fromYaml (include "opsward.values" .))) "sqlite" -}}true{{- end -}}
 {{- end -}}
 
 {{/* restartHash hashes the sections a running Opsward cannot reload
