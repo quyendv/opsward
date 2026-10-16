@@ -17,6 +17,9 @@ const (
 // diagnosis is wrong (pods not ready, warning events, the crashed container's last lines,
 // parts that could not be read).
 func Text(n Notification) string {
+	if n.FollowUp {
+		return followUp(n)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "*%s*", esc(n.Alert.Name))
 	if n.Alert.Severity != "" {
@@ -33,12 +36,7 @@ func Text(n Notification) string {
 		fmt.Fprintf(&b, "Not investigated: %s\n", esc(n.Error))
 		return b.String()
 	}
-	switch {
-	case n.Analysis != "":
-		fmt.Fprintf(&b, "Analysis: %s\n", esc(n.Analysis))
-	case n.AnalysisNote != "":
-		fmt.Fprintf(&b, "No analysis: %s\n", esc(n.AnalysisNote))
-	}
+
 	d, _ := n.Diagnosis.(map[string]any)
 	status, _ := d["status"].(map[string]any)
 	if r, ok := status["replicas"].(map[string]any); ok {
@@ -99,6 +97,22 @@ func Text(n Notification) string {
 		for _, part := range slices.Sorted(maps.Keys(u)) {
 			fmt.Fprintf(&b, "Unavailable, %s: %s\n", esc(part), esc(u[part]))
 		}
+	}
+	return b.String()
+}
+
+// followUp renders the analysis that follows an alert's diagnosis.
+func followUp(n Notification) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Analysis of *%s*", esc(n.Alert.Name))
+	if w := n.Workload; w != nil {
+		fmt.Fprintf(&b, ", %s %s/%s in %s", w.Kind, esc(w.Namespace), esc(w.Name), esc(w.Environment))
+	}
+	b.WriteString(":\n")
+	if n.Analysis != "" {
+		fmt.Fprintf(&b, "%s\n", esc(n.Analysis))
+	} else {
+		fmt.Fprintf(&b, "No analysis: %s\n", esc(n.AnalysisNote))
 	}
 	return b.String()
 }

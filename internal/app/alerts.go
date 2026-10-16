@@ -57,7 +57,7 @@ func openAlerts(cfg *config.Config, e *engine.Engine, aud engine.Auditor, envs *
 		}
 	}
 	return alertmanager.New(alertmanager.Options{
-		Invoker: e, Notifiers: notifiers, Analyze: openAnalyzer(cfg, e, e.Tools(), log), Principal: a.Principal, Dedupe: a.Dedupe.Std(), Logger: log,
+		Invoker: e, Notifiers: notifiers, Analyze: openAnalyzer(cfg, e, log), Principal: a.Principal, Dedupe: a.Dedupe.Std(), Logger: log,
 		Refused: func(ctx context.Context, p core.Principal, reason string) {
 			rec := audit.Record{
 				Phase: audit.PhaseOutcome, Principal: p,

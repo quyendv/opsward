@@ -26,6 +26,9 @@ type script struct {
 }
 
 func (s *script) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	if err := valid(req); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	s.seen = append(s.seen, req)
 	s.mu.Unlock()
@@ -44,6 +47,39 @@ func (s *script) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	r := s.turns[0]
 	s.turns = s.turns[1:]
 	return r, nil
+}
+
+// valid checks a request as the Messages API does: roles alternate from user, every
+// tool_use is answered by a tool_result in the next message, text is never empty.
+func valid(req llm.Request) error {
+	for i, m := range req.Messages {
+		want := "user"
+		if i%2 == 1 {
+			want = "assistant"
+		}
+		if m.Role != want {
+			return fmt.Errorf("message %d is %s, want %s", i, m.Role, want)
+		}
+		for _, b := range m.Content {
+			if b.Type == "text" && strings.TrimSpace(b.Text) == "" {
+				return fmt.Errorf("message %d has an empty text block", i)
+			}
+			if b.Type != "tool_use" {
+				continue
+			}
+			if i+1 == len(req.Messages) {
+				return fmt.Errorf("tool_use %s is the last message", b.ID)
+			}
+			answered := false
+			for _, r := range req.Messages[i+1].Content {
+				answered = answered || (r.Type == "tool_result" && r.ToolUseID == b.ID)
+			}
+			if !answered {
+				return fmt.Errorf("tool_use %s has no tool_result", b.ID)
+			}
+		}
+	}
+	return nil
 }
 
 func toolUse(id, name, input string) llm.Block {
@@ -141,8 +177,8 @@ func TestInvestigateRefusesUnofferedTools(t *testing.T) {
 
 func TestInvestigateStopsAtTheStepLimit(t *testing.T) {
 	var turns []*llm.Response
-	for range 10 {
-		turns = append(turns, &llm.Response{Content: []llm.Block{toolUse("t", "list_workload_logs", `{}`)}, StopReason: "tool_use"})
+	for i := range 10 {
+		turns = append(turns, &llm.Response{Content: []llm.Block{toolUse(fmt.Sprintf("t%d", i), "list_workload_logs", `{}`)}, StopReason: "tool_use"})
 	}
 	m := &script{turns: turns}
 	c := &calls{}
@@ -241,5 +277,20 @@ func TestInvestigatePassesNotes(t *testing.T) {
 	}
 	if r := m.seen[1].Messages[2].Content[0].Content; !strings.Contains(r, "check the last termination") {
 		t.Fatalf("result = %s", r)
+	}
+}
+
+// Tools the principal may not call are not offered: the model would spend steps on
+// denials.
+func TestInvestigateOffersOnlyAllowedTools(t *testing.T) {
+	m := &script{turns: []*llm.Response{{Content: []llm.Block{{Type: "text", Text: "ok"}}, StopReason: "end_turn"}}}
+	a := New(Options{Model: m, Invoker: &calls{}, Tools: tools, Allowed: func(_ core.Principal, tool string, s core.Scope) bool {
+		return tool == "get_workload_status" && s.Environment == "staging"
+	}})
+	if _, err := a.Investigate(context.Background(), core.Principal{Subject: "a"}, target, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.seen[0].Tools) != 1 || m.seen[0].Tools[0].Name != "get_workload_status" {
+		t.Fatalf("offered %+v", m.seen[0].Tools)
 	}
 }

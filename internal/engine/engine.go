@@ -568,3 +568,14 @@ func riskRank(r core.Risk) int {
 	}
 	return 2
 }
+
+// Allowed reports whether the current policy allows p the tool in scope, outright: what
+// an unattended caller, such as the agent, may expect to run. Invoke still decides.
+func (e *Engine) Allowed(p core.Principal, tool string, scope core.Scope) bool {
+	t, ok := e.tools[tool]
+	if !ok {
+		return false
+	}
+	st := e.state.Load()
+	return st.authz.Decide(core.Request{Principal: p, Tool: tool, Risk: t.Risk, Scope: scope, Now: e.now()}).Effect == core.EffectAllow
+}

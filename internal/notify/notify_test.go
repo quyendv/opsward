@@ -122,12 +122,16 @@ func TestTextListsUnavailablePartsInOrder(t *testing.T) {
 	}
 }
 
-func TestTextShowsTheAnalysis(t *testing.T) {
-	n := note()
-	n.Analysis = "Out of memory: raise the limit to 512Mi. <!here>"
+func TestTextOfAFollowUp(t *testing.T) {
+	n := Notification{Alert: note().Alert, Workload: note().Workload, FollowUp: true, Analysis: "Out of memory: raise the limit to 512Mi. <!here>"}
 	got := Text(n)
-	if !strings.Contains(got, "Analysis: Out of memory: raise the limit to 512Mi. &lt;!here&gt;") {
-		t.Fatalf("text:\n%s", got)
+	for _, want := range []string{"Analysis of *KubePodCrashLooping*", "Deployment team-a-api/api in staging", "Out of memory: raise the limit to 512Mi. &lt;!here&gt;"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("text misses %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "ready") {
+		t.Fatalf("a follow-up repeats the diagnosis:\n%s", got)
 	}
 	n.Analysis, n.AnalysisNote = "", "the agent's hourly limit is reached"
 	if got := Text(n); !strings.Contains(got, "No analysis: the agent's hourly limit is reached") {

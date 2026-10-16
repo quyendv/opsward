@@ -267,11 +267,21 @@ func (r *Receiver) investigate(run context.Context, j job) {
 			r.forget(a.key())
 		} else {
 			n.Diagnosis = res.Data
-			if r.opt.Analyze != nil {
-				n.Analysis, n.AnalysisNote = r.opt.Analyze(core.WithUnattended(run), j.p, n)
-			}
 		}
 	}
+	r.notify(parent, n)
+	if r.opt.Analyze == nil || n.Diagnosis == nil {
+		return
+	}
+	// The diagnosis went out at once; the analysis follows, so a page does not wait for
+	// a model.
+	f := notify.Notification{Alert: n.Alert, Workload: n.Workload, FollowUp: true}
+	f.Analysis, f.AnalysisNote = r.opt.Analyze(core.WithUnattended(run), j.p, n)
+	r.notify(parent, f)
+}
+
+// notify sends n to every notifier, within its own time limit.
+func (r *Receiver) notify(parent context.Context, n notify.Notification) {
 	nctx, ncancel := context.WithTimeout(context.WithoutCancel(parent), notifyTimeout)
 	defer ncancel()
 	for _, nt := range r.opt.Notifiers {

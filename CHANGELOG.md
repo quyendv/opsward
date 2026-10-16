@@ -11,7 +11,8 @@ All notable changes to this project are documented here. The format follows
 - Agent mode for alerts (`agent`, `alerts.agent: true`; off by default): after the
   diagnosis, a model reads the alert and the diagnosis, calls Opsward's read tools through
   the engine as the alerts principal (adapter `agent`, under policy and audit; tools that
-  can write are never offered), and its short analysis goes out with the notification.
+  can write are never offered, nor tools policy would deny), and its short analysis follows
+  the diagnosis in a second notification (`followUp`).
   Every scoped call is pinned to the alert's environment and namespace. Bounded by
   `maxSteps`, `timeout`, a results budget and `maxPerHour`; results reach the model
   redacted. The provider is Anthropic's Messages API, spoken over HTTP; turning it on

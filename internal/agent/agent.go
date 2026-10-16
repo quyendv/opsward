@@ -54,7 +54,11 @@ type Options struct {
 	Invoker Invoker
 	// Tools are the registered tools; only those whose declared risk is read, with no
 	// other risk, are offered.
-	Tools    []engine.Tool
+	Tools []engine.Tool
+	// Allowed, if set, reports whether policy may let p call the tool in scope (an
+	// empty scope for global tools); others are not offered, so the model does not
+	// spend steps on denials. Policy still decides every call.
+	Allowed  func(p core.Principal, tool string, scope core.Scope) bool
 	MaxSteps int
 	Timeout  time.Duration
 	Logger   *slog.Logger
@@ -63,8 +67,7 @@ type Options struct {
 // Agent investigates.
 type Agent struct {
 	opt     Options
-	tools   []llm.Tool
-	offered map[string]engine.Tool
+	offered []engine.Tool // read tools, in order
 }
 
 // Scope is where an investigation looks: every scoped call is pinned to it.
@@ -83,13 +86,12 @@ func New(opt Options) *Agent {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	a := &Agent{opt: opt, offered: map[string]engine.Tool{}}
+	a := &Agent{opt: opt}
 	for _, t := range opt.Tools {
 		if t.Risk != core.RiskRead || len(t.Risks) > 0 || excluded[t.Name] {
 			continue
 		}
-		a.tools = append(a.tools, llm.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
-		a.offered[t.Name] = t
+		a.offered = append(a.offered, t)
 	}
 	return a
 }
@@ -112,12 +114,25 @@ func (a *Agent) Investigate(ctx context.Context, p core.Principal, scope Scope, 
 	ctx, cancel := context.WithTimeout(core.WithUnattended(ctx), a.opt.Timeout)
 	defer cancel()
 	p.Adapter = Adapter
+	offered := map[string]engine.Tool{}
+	var tools []llm.Tool
+	for _, t := range a.offered {
+		s := core.Scope{Environment: scope.Environment}
+		if t.Global {
+			s = core.Scope{}
+		}
+		if a.opt.Allowed != nil && !a.opt.Allowed(p, t.Name, s) {
+			continue
+		}
+		offered[t.Name] = t
+		tools = append(tools, llm.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
 	out := &Analysis{}
 	budget := maxResultsBytes
 	msgs := []llm.Message{{Role: "user", Content: []llm.Block{{Type: "text", Text: prompt}}}}
 	final := false
 	for {
-		resp, err := a.opt.Model.Complete(ctx, llm.Request{System: system, Messages: msgs, Tools: a.tools, MaxTokens: maxTurnTokens})
+		resp, err := a.opt.Model.Complete(ctx, llm.Request{System: system, Messages: msgs, Tools: tools, MaxTokens: maxTurnTokens})
 		if err != nil {
 			// Text from a turn before is a step on the way, not an answer.
 			out.Text = ""
@@ -159,7 +174,7 @@ func (a *Agent) Investigate(ctx context.Context, p core.Principal, scope Scope, 
 				continue
 			}
 			out.Steps++
-			r := a.call(ctx, p, scope, u)
+			r := a.call(ctx, p, scope, offered, u)
 			budget -= len(r.Content)
 			results = append(results, r)
 		}
@@ -171,9 +186,9 @@ func (a *Agent) Investigate(ctx context.Context, p core.Principal, scope Scope, 
 }
 
 // call runs one tool call the model asked for, and returns its result for the model.
-func (a *Agent) call(ctx context.Context, p core.Principal, scope Scope, u llm.Block) llm.Block {
+func (a *Agent) call(ctx context.Context, p core.Principal, scope Scope, offered map[string]engine.Tool, u llm.Block) llm.Block {
 	res := llm.Block{Type: "tool_result", ToolUseID: u.ID}
-	t, ok := a.offered[u.Name]
+	t, ok := offered[u.Name]
 	if !ok {
 		res.IsError, res.Content = true, fmt.Sprintf("%s is not a tool you may call", u.Name)
 		return res

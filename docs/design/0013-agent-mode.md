@@ -19,7 +19,8 @@ acceptable for their data.
 
 ## The loop
 
-- The model sees the alert, the workload and the diagnosis, and the tools it may call.
+- The model sees the alert, the workload and the diagnosis, and the tools it may call:
+  those policy allows the alerts principal outright in the alert's environment.
 - **It may call only tools whose declared risk is `read`.** A tool that can write, at any
   strategy, is not offered, nor are the approval tools; agent mode never changes anything.
   Each call goes through the engine as the alerts principal, with the adapter `agent`, so
@@ -37,7 +38,9 @@ acceptable for their data.
   `timeout` (default 3 minutes); or at a turn the model could not finish (`max_tokens`,
   `refusal`), which is not taken as an answer. At most `maxPerHour` investigations (default
   20) run an agent; past that, alerts get the diagnosis alone and the notification says why.
-- On shutdown an analysis under way stops; the alert is notified with its diagnosis.
+- The diagnosis is notified at once; the analysis follows in a second notification
+  (`followUp`), so a page does not wait for a model. On shutdown an analysis under way
+  stops, and its follow-up says so.
 - The answer is the model's text, at most 2,000 bytes: what is wrong, the evidence for it,
   and what a person should do next. It is untrusted text: it is redacted, notifications
   escape it like every other value, and nothing acts on it.
