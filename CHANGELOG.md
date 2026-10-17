@@ -15,6 +15,9 @@ All notable changes to this project are documented here. The format follows
   `opsward rbac render` renders the profile's `impersonate` role, limited to the users and
   groups that reach it, and leaves the rules the tools need unbound for the operator to grant
   to people (design note 0014).
+- `list_workloads` across an environment keeps the namespaces the backend lets the caller
+  list and leaves out those it refuses, as for a profile acting as a caller with access to
+  some of them; refused everywhere is still an error.
 
 ### Changed
 

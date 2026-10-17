@@ -13,6 +13,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -659,5 +660,18 @@ func TestListWorkloadsInEveryNamespace(t *testing.T) {
 	ws, err := NewWorkloads(c).ListWorkloads(context.Background(), "")
 	if err != nil || len(ws) != 2 || ws[0].Namespace != "kube-system" || ws[1].Namespace != "shop" {
 		t.Fatalf("ListWorkloads(all) = %+v, %v", ws, err)
+	}
+}
+
+// A caller the profile acts as may be refused where others are not; tools tell that from
+// a failure (docs/design/0014).
+func TestListWorkloadsWrapsForbidden(t *testing.T) {
+	c := fake.NewClientset()
+	c.PrependReactor("list", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(appsv1.Resource("deployments"), "", errors.New("no"))
+	})
+	_, err := NewWorkloads(c).ListWorkloads(t.Context(), "team-b")
+	if !errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
 	}
 }

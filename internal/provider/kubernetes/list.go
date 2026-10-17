@@ -3,8 +3,10 @@ package kubernetes
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/quyendv/opsward/internal/capability"
@@ -26,6 +28,14 @@ func (w *workloads) ListNamespaces(ctx context.Context) ([]string, error) {
 
 // ListWorkloads implements capability.Workloads.
 func (w *workloads) ListWorkloads(ctx context.Context, namespace string) ([]capability.WorkloadSummary, error) {
+	out, err := w.listWorkloads(ctx, namespace)
+	if apierrors.IsForbidden(err) {
+		return nil, fmt.Errorf("%w: %w", capability.ErrForbidden, err)
+	}
+	return out, err
+}
+
+func (w *workloads) listWorkloads(ctx context.Context, namespace string) ([]capability.WorkloadSummary, error) {
 	apps := w.c.AppsV1()
 	var out []capability.WorkloadSummary
 	deps, err := apps.Deployments(namespace).List(ctx, metav1.ListOptions{})

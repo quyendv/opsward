@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -29,6 +30,7 @@ type fakeSource struct {
 
 	namespaces []string
 	summaries  []capability.WorkloadSummary
+	forbidden  map[string]bool // namespaces the backend refuses to list
 
 	dryRuns  []bool
 	replicas int32
@@ -55,6 +57,9 @@ func (f *fakeSource) ListNamespaces(context.Context) ([]string, error) {
 
 func (f *fakeSource) ListWorkloads(_ context.Context, namespace string) ([]capability.WorkloadSummary, error) {
 	f.calls = append(f.calls, "workloads:"+namespace)
+	if f.forbidden[namespace] {
+		return nil, fmt.Errorf("list %s: %w", namespace, capability.ErrForbidden)
+	}
 	if namespace == "" {
 		return f.summaries, f.err
 	}
