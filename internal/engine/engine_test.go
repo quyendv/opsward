@@ -69,6 +69,7 @@ type fakeTool struct {
 
 	ran         bool
 	resolved    bool
+	resolvedAs  core.Principal
 	ranProfile  string
 	auditBefore int
 	auditor     *recordingAuditor
@@ -97,8 +98,9 @@ func (f *fakeTool) tool() Tool {
 			return &Prepared{
 				Scope: core.Scope{Environment: in.Environment, Namespace: in.Namespace, Kind: "Deployment", Name: in.Name},
 				Args:  args,
-				Resolve: func(context.Context) (map[string]string, error) {
+				Resolve: func(ctx context.Context) (map[string]string, error) {
 					f.resolved = true
+					f.resolvedAs, _ = core.PrincipalFrom(ctx)
 					return f.labels, f.resolveErr
 				},
 				Run: func(_ context.Context, profile string) (any, error) {
@@ -535,5 +537,18 @@ func TestInvokeRunRejectingInputIsInvalid(t *testing.T) {
 	}
 	if got := aud.last().Outcome.Status; got != audit.StatusInvalid {
 		t.Fatalf("status = %s, want invalid", got)
+	}
+}
+
+// A profile that impersonates the caller reads labels as the caller too, so the lookup
+// before authorization must carry the principal (docs/design/0014).
+func TestLabelLookupCarriesTheCaller(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskRead, labels: map[string]string{"app": "api"}}
+	e := newEngine(t, ft, allowAll, &recordingAuditor{})
+	if _, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs)); err != nil {
+		t.Fatal(err)
+	}
+	if !ft.resolved || ft.resolvedAs.Subject != alice.Subject {
+		t.Fatalf("resolved %v as %+v, want as %s", ft.resolved, ft.resolvedAs, alice.Subject)
 	}
 }

@@ -62,3 +62,73 @@ func whole(b *compiled) bool {
 	return b.Effect == core.EffectDeny && len(b.Subjects.Users) == 0 && len(b.Subjects.Groups) == 0 &&
 		b.When == "" && len(s.Namespaces) == 0 && len(s.Workloads) == 0 && len(s.Apps) == 0
 }
+
+// Grantees are the principals a profile acts for.
+type Grantees struct {
+	Users  []string // normalized as subjects are matched
+	Groups []string
+	// Anyone is set when a binding names no subjects: every principal reaches the profile.
+	Anyone bool
+}
+
+// Grantees returns, per environment of cat and per profile, the subjects that allow and
+// approve bindings grant tools to through it. A profile that impersonates its caller may
+// act as exactly these (docs/design/0014).
+func (p *Policy) Grantees(cat Catalog) map[string]map[string]Grantees {
+	out := map[string]map[string]Grantees{}
+	for env := range cat.Environments {
+		for i := range p.bindings {
+			b := &p.bindings[i]
+			if b.Effect == core.EffectDeny || !anyGlob(b.Scope.Environments, env) {
+				continue
+			}
+			for name, t := range cat.Tools {
+				for _, profile := range profilesFor(b.role, name, t, b.Profile) {
+					if out[env] == nil {
+						out[env] = map[string]Grantees{}
+					}
+					g := out[env][profile]
+					g.add(b.Subjects)
+					out[env][profile] = g
+				}
+			}
+		}
+		for profile, g := range out[env] {
+			slices.Sort(g.Users)
+			slices.Sort(g.Groups)
+			out[env][profile] = g
+		}
+	}
+	return out
+}
+
+func (g *Grantees) add(s Subjects) {
+	if len(s.Users) == 0 && len(s.Groups) == 0 {
+		g.Anyone = true
+	}
+	for _, u := range s.Users {
+		if u = core.NormalizeSubject(u); !slices.Contains(g.Users, u) {
+			g.Users = append(g.Users, u)
+		}
+	}
+	for _, grp := range s.Groups {
+		if !slices.Contains(g.Groups, grp) {
+			g.Groups = append(g.Groups, grp)
+		}
+	}
+}
+
+// Merge returns the principals of g and o.
+func (g Grantees) Merge(o Grantees) Grantees {
+	union := func(a, b []string) []string {
+		out := slices.Clone(a)
+		for _, v := range b {
+			if !slices.Contains(out, v) {
+				out = append(out, v)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	return Grantees{Users: union(g.Users, o.Users), Groups: union(g.Groups, o.Groups), Anyone: g.Anyone || o.Anyone}
+}

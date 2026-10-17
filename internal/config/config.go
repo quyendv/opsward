@@ -162,6 +162,37 @@ type Cluster struct {
 type Profile struct {
 	Kubeconfig string `yaml:"kubeconfig"`
 	Context    string `yaml:"context"`
+	// Impersonate, if set, makes the profile act as the caller (docs/design/0014).
+	Impersonate *Impersonate `yaml:"impersonate"`
+}
+
+// Impersonate names how a caller becomes a Kubernetes user and groups. A prefix left out
+// is opsward:, so that principals stay apart from the cluster's own users; an empty one
+// is kept.
+type Impersonate struct {
+	Username *string `yaml:"usernamePrefix"`
+	Group    *string `yaml:"groupPrefix"`
+}
+
+const defaultImpersonationPrefix = "opsward:"
+
+// UserPrefix is put before the principal's subject.
+func (i *Impersonate) UserPrefix() string { return prefixOr(i.Username) }
+
+// GroupPrefix is put before each group.
+func (i *Impersonate) GroupPrefix() string { return prefixOr(i.Group) }
+
+type prefix struct{ field, v string }
+
+func (i *Impersonate) prefixes() []prefix {
+	return []prefix{{"usernamePrefix", i.UserPrefix()}, {"groupPrefix", i.GroupPrefix()}}
+}
+
+func prefixOr(p *string) string {
+	if p == nil {
+		return defaultImpersonationPrefix
+	}
+	return *p
 }
 
 // Environment is a named target.
@@ -301,6 +332,13 @@ func (c *Config) validate() error {
 			case strings.HasPrefix(p.Kubeconfig, "~"):
 				fail("cluster %q profile %q: kubeconfig %q: ~ is not expanded, use an absolute path", name, pn, p.Kubeconfig)
 			}
+			if i := p.Impersonate; i != nil {
+				for _, f := range i.prefixes() {
+					if strings.HasPrefix(f.v, "system:") {
+						fail("cluster %q profile %q: impersonate.%s %q: system: names are the cluster's own", name, pn, f.field, f.v)
+					}
+				}
+			}
 		}
 	}
 
@@ -379,6 +417,13 @@ func (c *Config) Warnings() []string {
 			}
 			if !filepath.IsAbs(p.Kubeconfig) {
 				out = append(out, fmt.Sprintf("cluster %q profile %q: kubeconfig %q is relative", name, pn, p.Kubeconfig))
+			}
+			if i := p.Impersonate; i != nil {
+				for _, f := range i.prefixes() {
+					if f.v == "" {
+						out = append(out, fmt.Sprintf("cluster %q profile %q: impersonate.%s is empty: callers reach the cluster under its own names, such as an existing administrator's", name, pn, f.field))
+					}
+				}
 			}
 			if _, err := os.Stat(p.Kubeconfig); err != nil {
 				out = append(out, fmt.Sprintf("cluster %q profile %q: kubeconfig %q does not exist here; calls with this profile will fail until it does", name, pn, p.Kubeconfig))

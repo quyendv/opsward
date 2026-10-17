@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A Kubernetes profile can impersonate the caller (`impersonate`, with `usernamePrefix` and
+  `groupPrefix`, both `opsward:` by default): each request acts as the principal and the
+  groups policy names for the profile, so the cluster's RBAC decides per person and its audit
+  log names them. A request without a caller, or for a `system:` name, is refused.
+  `opsward rbac render` renders the profile's `impersonate` role, limited to the users and
+  groups that reach it, and leaves the rules the tools need unbound for the operator to grant
+  to people (design note 0014).
+
+### Changed
+
+- The roadmap drops token passthrough, which the MCP authorization specification forbids,
+  and snapshots, which shipped in 0.4 as the previous values a change records.
+
 ## [0.7.0] - 2026-10-16
 
 Agent mode: an alert's diagnosis is followed by a model's analysis, made with Opsward's

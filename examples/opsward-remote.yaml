@@ -46,6 +46,12 @@ providers:
         profiles:
           reader: { kubeconfig: /etc/opsward/cluster-a-reader.kubeconfig }
           operator: { kubeconfig: /etc/opsward/cluster-a-operator.kubeconfig }
+          # A profile can act as the caller instead, so that the cluster's RBAC decides per
+          # person and its audit log names them (docs/design/0014). Its credential then
+          # needs only impersonate; the people need RBAC of their own.
+          # reader:
+          #   kubeconfig: /etc/opsward/cluster-a-impersonator.kubeconfig
+          #   impersonate: { usernamePrefix: "oidc:", groupPrefix: "oidc:" }
   # Where Argo CD keeps its Applications: get_delivery_status reads them, and source
   # resolution finds a workload's files through them. The reader profile needs get on
   # applications.argoproj.io there (opsward rbac render includes it).

@@ -277,6 +277,9 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	if p.Subject == "" {
 		return nil, finish(audit.StatusDenied, ErrUnidentified)
 	}
+	// Backends that act as the caller read it from here, the lookup before
+	// authorization included (docs/design/0014).
+	ctx = core.WithPrincipal(ctx, p)
 	tool, ok := e.tools[name]
 	if !ok {
 		return nil, finish(audit.StatusUnknownTool, fmt.Errorf("%w: %q", ErrUnknownTool, name))
@@ -342,7 +345,6 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 			profile = ProfileReader
 		}
 	}
-	ctx = core.WithPrincipal(ctx, p)
 	switch dec.Effect {
 	case core.EffectAllow:
 	case core.EffectApprove:
