@@ -107,13 +107,10 @@ type CredentialSource interface {
 }
 ```
 
-Only the profile source ships before v1. Two others fit the same interface and can follow
-when a team needs the person's name in the cluster's own audit log:
-
-| Source | Requires |
-|---|---|
-| Impersonation | a profile allowed to `impersonate`, scoped with `resourceNames` to the users and groups it may act as |
-| Token passthrough | an API server that trusts the same issuer as Opsward |
+A profile may also impersonate the caller, when a team needs the person's name in the
+cluster's own audit log: it then needs `impersonate`, scoped with `resourceNames` to the
+users and groups it may act as ([0014](0014-impersonation.md)). Passing the caller's own
+token through to the API server was considered and rejected there.
 
 ### Opsward does not write RBAC
 
@@ -411,8 +408,9 @@ policy:
 
 - v0.1 ships the store and the policy engine, not only an audit file, so that later versions add
   tables and a policy source rather than retrofitting them.
-- The cluster audit log does not name the person until an impersonation or passthrough source
-  exists. Opsward's audit must be retained and correlated for that.
+- The cluster audit log does not name the person unless the profile impersonates the caller
+  ([0014](0014-impersonation.md)). Otherwise Opsward's audit must be retained and correlated
+  for that.
 - Fine-grained scope is enforced by Opsward, not by the cluster. Per-team profiles keep a policy
   mistake inside namespace boundaries.
 - Opsward stays out of the business of managing users and cluster permissions: it neither stores

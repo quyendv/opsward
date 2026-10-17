@@ -72,6 +72,7 @@ func RenderRBAC(cfg *config.Config, opt RBACOptions) (string, error) {
 		return "", err
 	}
 	grants := pol.Grants(catalog(cfg, tools))
+	gs := grantees(cfg, pol, catalog(cfg, tools))
 
 	var b strings.Builder
 	b.WriteString("# Rendered by opsward rbac render. Review it, then apply it with an administrator's\n" +
@@ -89,7 +90,7 @@ func RenderRBAC(cfg *config.Config, opt RBACOptions) (string, error) {
 	}
 	bound := map[string]bool{}
 	for _, cluster := range clusters {
-		objs, err := clusterRBAC(cfg, cluster, grants, needs, pol.NeedsLabels(), opt, bound)
+		objs, err := clusterRBAC(cfg, cluster, grants, gs[cluster], needs, pol.NeedsLabels(), opt, bound)
 		if err != nil {
 			return "", err
 		}
@@ -132,7 +133,7 @@ type object struct {
 }
 
 // clusterRBAC renders one cluster's objects, and records in bound the profiles it binds.
-func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[string][]string, needs map[string][]string, labels bool, opt RBACOptions, bound map[string]bool) ([]object, error) {
+func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[string][]string, reach map[string]policy.Grantees, needs map[string][]string, labels bool, opt RBACOptions, bound map[string]bool) ([]object, error) {
 	declared := cfg.Providers.Kubernetes.Clusters[cluster].Profiles
 	uses := map[string]*profileUse{}
 	use := func(profile string, env config.Environment, ops ...string) {
@@ -197,6 +198,25 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 		u := uses[profile]
 		namespaced, clusterRules := kubernetes.Rules(u.ops)
 		name := rbacPrefix + profile
+		if declared[profile].Impersonate != nil {
+			// The cluster decides per person: whom to grant these rules is the operator's
+			// decision about people, not one Opsward derives (docs/design/0014).
+			slices.Sort(u.namespaces)
+			slices.Sort(u.wide)
+			where := "in namespaces " + strings.Join(u.namespaces, ", ")
+			if len(u.wide) > 0 {
+				where = "cluster-wide, for the namespace patterns of " + strings.Join(u.wide, ", ")
+			}
+			if len(namespaced) > 0 {
+				objs = append(objs, object{obj: clusterRole(name, namespaced), note: fmt.Sprintf(
+					"%s is not bound: profile %s acts as its callers, so bind it to the users and groups that need it, %s.", name, profile, where)})
+			}
+			if len(clusterRules) > 0 {
+				objs = append(objs, object{obj: clusterRole(name+":cluster", clusterRules), note: fmt.Sprintf(
+					"%s:cluster is not bound: bind it cluster-wide to the users and groups profile %s acts as.", name, profile)})
+			}
+			continue
+		}
 		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name}
 		subjects := []rbacv1.Subject{subject(profile)}
 		if len(namespaced) > 0 {
@@ -224,9 +244,27 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 		rules, _ := kubernetes.Rules([]string{capability.OpApplicationsGet})
 		name := rbacPrefix + d.Profile + ":delivery"
 		for _, ns := range append([]string{d.Namespace}, d.ApplicationNamespaces...) {
+			role := &rbacv1.Role{TypeMeta: typeMeta("Role"), ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Rules: rules}
+			if declared[d.Profile].Impersonate != nil {
+				objs = append(objs, object{obj: role, note: fmt.Sprintf(
+					"%s is not bound: profile %s acts as its callers, so bind it to those who use delivery tools.", name, d.Profile)})
+				continue
+			}
 			objs = append(objs,
-				object{obj: &rbacv1.Role{TypeMeta: typeMeta("Role"), ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Rules: rules}},
+				object{obj: role},
 				object{obj: roleBinding(name, ns, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name}, []rbacv1.Subject{subject(d.Profile)})})
+		}
+		if _, ok := uses[d.Profile]; !ok {
+			profiles = append(profiles, d.Profile)
+		}
+	}
+	for _, profile := range profiles {
+		if imp := declared[profile].Impersonate; imp != nil {
+			o, err := impersonationRBAC(profile, imp, reach[profile], subject(profile))
+			if err != nil {
+				return nil, fmt.Errorf("cluster %s: %w", cluster, err)
+			}
+			objs = append(objs, o...)
 		}
 	}
 	return objs, unique(objs)
@@ -272,4 +310,55 @@ func clusterRoleBinding(name string, ref rbacv1.RoleRef, subjects []rbacv1.Subje
 
 func roleBinding(name, ns string, ref rbacv1.RoleRef, subjects []rbacv1.Subject) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{TypeMeta: typeMeta("RoleBinding"), ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, RoleRef: ref, Subjects: subjects}
+}
+
+// impersonationRBAC lets a profile's credential act as the principals that reach the
+// profile, and no one else where they can be listed: users when no group or every
+// principal reaches it, groups always (docs/design/0014).
+func impersonationRBAC(profile string, imp *config.Impersonate, g policy.Grantees, subject rbacv1.Subject) ([]object, error) {
+	name := rbacPrefix + profile + ":impersonate"
+	var rules []rbacv1.PolicyRule
+	var note string
+	users := rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"users"}, Verbs: []string{"impersonate"}}
+	switch {
+	case g.Anyone || len(g.Groups) > 0:
+		rules = append(rules, users)
+		note = fmt.Sprintf("%s may act as any user name, the cluster's own system: users included, though Opsward never sends one: profile %s serves groups or every principal, whose members cannot be listed.", name, profile)
+	case len(g.Users) > 0:
+		for _, u := range g.Users {
+			users.ResourceNames = append(users.ResourceNames, imp.UserPrefix()+u)
+		}
+		if err := noSystemNames(profile, "user", users.ResourceNames); err != nil {
+			return nil, err
+		}
+		rules = append(rules, users)
+	}
+	if len(g.Groups) > 0 {
+		groups := rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"groups"}, Verbs: []string{"impersonate"}}
+		for _, grp := range g.Groups {
+			groups.ResourceNames = append(groups.ResourceNames, imp.GroupPrefix()+grp)
+		}
+		if err := noSystemNames(profile, "group", groups.ResourceNames); err != nil {
+			return nil, err
+		}
+		rules = append(rules, groups)
+	}
+	if len(rules) == 0 {
+		return nil, nil
+	}
+	return []object{
+		{obj: clusterRole(name, rules), note: note},
+		{obj: clusterRoleBinding(name, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name}, []rbacv1.Subject{subject})},
+	}, nil
+}
+
+// noSystemNames refuses to grant impersonation of the cluster's own identities, which
+// Opsward never sends: system:masters is cluster-admin.
+func noSystemNames(profile, kind string, names []string) error {
+	for _, n := range names {
+		if strings.HasPrefix(n, "system:") {
+			return fmt.Errorf("profile %s would impersonate %s %q: system: names are the cluster's own; change the binding or the prefix", profile, kind, n)
+		}
+	}
+	return nil
 }

@@ -10,16 +10,16 @@ import (
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/quyendv/opsward/internal/capability"
-	"github.com/quyendv/opsward/internal/version"
 )
 
 // Profile is one credential: a kubeconfig file and, optionally, a context in it.
 type Profile struct {
 	Kubeconfig string
 	Context    string
+	// Impersonate, if set, makes the profile act as the caller of each request.
+	Impersonate *Impersonation
 }
 
 // ClientFactory builds a client for a profile. Tests replace it.
@@ -82,7 +82,7 @@ func (s *Source) Workloads(environment, profile string) (capability.Workloads, e
 		cc = cachedClient{c: c, sum: fileSum(p.Kubeconfig)}
 		s.clients[key] = cc
 	}
-	return NewWorkloads(cc.c), nil
+	return &workloads{c: cc.c, asCaller: p.Impersonate != nil}, nil
 }
 
 // Update replaces the environment and profile maps, as on a configuration reload. A
@@ -94,7 +94,7 @@ func (s *Source) Update(envCluster map[string]string, profiles map[string]map[st
 	for key, cc := range s.clients {
 		cluster, profile, _ := strings.Cut(key, "/")
 		old, now := s.profiles[cluster][profile], profiles[cluster][profile]
-		if old != now || fileSum(now.Kubeconfig) != cc.sum {
+		if !old.equal(now) || fileSum(now.Kubeconfig) != cc.sum {
 			delete(s.clients, key)
 		}
 	}
@@ -113,24 +113,11 @@ func fileSum(path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// FromKubeconfig builds a client from a kubeconfig file. It never falls back to
-// in-cluster credentials, which client-go's deferred loader does for an empty file:
-// a profile must not silently borrow the pod's own ServiceAccount.
+// FromKubeconfig builds a client from a kubeconfig file (see restConfig).
 func FromKubeconfig(p Profile) (kubernetes.Interface, error) {
-	raw, err := clientcmd.LoadFromFile(p.Kubeconfig)
+	cfg, err := restConfig(p)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw.Contexts) == 0 {
-		return nil, fmt.Errorf("kubeconfig %s: no contexts", p.Kubeconfig)
-	}
-	if p.Context == "" && raw.CurrentContext == "" {
-		return nil, fmt.Errorf("kubeconfig %s: no current-context; set the profile's context field", p.Kubeconfig)
-	}
-	cfg, err := clientcmd.NewNonInteractiveClientConfig(*raw, p.Context, &clientcmd.ConfigOverrides{}, nil).ClientConfig()
-	if err != nil {
-		return nil, fmt.Errorf("kubeconfig %s: %w", p.Kubeconfig, err)
-	}
-	cfg.UserAgent = "opsward/" + version.Version
 	return kubernetes.NewForConfig(cfg)
 }

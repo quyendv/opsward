@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -204,15 +205,26 @@ func listWorkloads(ctx context.Context, w capability.Workloads, env EnvironmentI
 		}
 	}
 	var out []capability.WorkloadSummary
+	var refused error
+	listed := false
 	for _, n := range names {
 		if !inPatterns(env.Namespaces, n) {
 			continue
 		}
 		list, err := w.ListWorkloads(ctx, n)
+		if errors.Is(err, capability.ErrForbidden) {
+			// A profile acting as its caller may read some namespaces and not others.
+			refused = err
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
+		listed = true
 		out = append(out, list...)
+	}
+	if !listed && refused != nil {
+		return nil, refused
 	}
 	return out, nil
 }

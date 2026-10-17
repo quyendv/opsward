@@ -11,6 +11,10 @@ import (
 // ErrNotFound is wrapped by providers when the requested object does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrForbidden is wrapped by providers when the backend refuses the credential, as it
+// does for a caller a profile acts as (docs/design/0014).
+var ErrForbidden = errors.New("forbidden")
+
 // WorkloadKinds are the kinds the Workloads capability understands.
 var WorkloadKinds = []string{"Deployment", "StatefulSet", "DaemonSet"}
 

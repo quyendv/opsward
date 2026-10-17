@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -142,5 +143,34 @@ func TestListWorkloadsInAnUnlimitedEnvironmentListsOnce(t *testing.T) {
 	items, err := prep.RunList(context.Background(), "reader")
 	if err != nil || len(items) != 1 || strings.Join(src.calls, " ") != "workloads:" {
 		t.Fatalf("items %+v, calls %v, %v", items, src.calls, err)
+	}
+}
+
+// A profile that acts as its caller (docs/design/0014) may list some of an environment's
+// namespaces and not others: the listing keeps what the backend lets it read.
+func TestListWorkloadsSkipsNamespacesTheBackendRefuses(t *testing.T) {
+	src := &fakeSource{namespaces: []string{"shared", "team-a-api"}, forbidden: map[string]bool{"team-a-api": true}, summaries: []capability.WorkloadSummary{
+		{Namespace: "shared", Kind: "Deployment", Name: "web", Desired: 2, Ready: 2},
+		{Namespace: "team-a-api", Kind: "Deployment", Name: "api", Desired: 2, Ready: 1},
+	}}
+	tl, _ := ListWorkloads(testEnvs, src)
+	prep, _ := tl.Prepare(json.RawMessage(`{"environment":"staging"}`))
+	items, err := prep.RunList(context.Background(), "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Scope.Name != "web" {
+		t.Fatalf("items = %+v, want shared/web alone", items)
+	}
+	// Refused everywhere is still an error, not an empty environment.
+	src.forbidden["shared"] = true
+	if _, err := prep.RunList(context.Background(), "reader"); !errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+	// A namespace the caller named is not skipped.
+	src.forbidden = map[string]bool{"team-a-api": true}
+	prep, _ = tl.Prepare(json.RawMessage(`{"environment":"staging","namespace":"team-a-api"}`))
+	if _, err := prep.RunList(context.Background(), "reader"); !errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("named namespace: err = %v, want ErrForbidden", err)
 	}
 }

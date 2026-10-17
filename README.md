@@ -51,6 +51,9 @@ claude mcp add --transport http opsward https://opsward.example.com/mcp \
 ```
 
 The client stores that header in its configuration; give each person their own token.
+A profile with `impersonate` acts as the caller in its cluster, so the cluster's RBAC
+decides per person and its audit log names them (design note
+[0014](docs/design/0014-impersonation.md)).
 
 To run it in a cluster, install the Helm chart (`charts/opsward`, design note
 [0011](docs/design/0011-running-in-a-cluster.md)):

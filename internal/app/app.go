@@ -143,10 +143,11 @@ func derive(cfg *config.Config, tools []engine.Tool, log *slog.Logger) (*derived
 			Name: e.Name, Cluster: e.Cluster, Namespaces: e.Namespaces, Metrics: mp != "", Logs: lp != "",
 		})
 	}
+	gs := grantees(cfg, pol, catalog(cfg, tools))
 	for name, cl := range cfg.Providers.Kubernetes.Clusters {
 		d.profiles[name] = map[string]kubernetes.Profile{}
 		for pn, p := range cl.Profiles {
-			d.profiles[name][pn] = kubernetes.Profile{Kubeconfig: p.Kubeconfig, Context: p.Context}
+			d.profiles[name][pn] = kubernetes.Profile{Kubeconfig: p.Kubeconfig, Context: p.Context, Impersonate: impersonation(p.Impersonate, gs[name][pn])}
 		}
 	}
 	return d, nil

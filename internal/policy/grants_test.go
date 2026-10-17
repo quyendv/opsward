@@ -110,3 +110,35 @@ func TestGrantsSubtractWholeDenials(t *testing.T) {
 		t.Errorf("Grants = %v", got)
 	}
 }
+
+// Grantees names who reaches each profile, for a profile that acts as its caller
+// (docs/design/0014).
+func TestGrantees(t *testing.T) {
+	p := mustCompile(t, Config{
+		Roles: map[string]Role{
+			"viewer":    {Risk: []core.Risk{core.RiskRead}},
+			"restarter": {Tools: []string{"restart_workload"}},
+			"scaler":    {Tools: []string{"scale_workload"}},
+		},
+		Bindings: []Binding{
+			{Name: "alice-view", Role: "viewer", Subjects: Subjects{Users: []string{"Alice@Example.com"}}, Scope: ScopeSelector{Environments: []string{"staging"}}},
+			{Name: "team-a-view", Role: "viewer", Subjects: Subjects{Groups: []string{"team-a"}}, Scope: ScopeSelector{Environments: []string{"staging"}}},
+			{Name: "team-a-restart", Role: "restarter", Subjects: Subjects{Groups: []string{"team-a"}, Users: []string{"bob"}}, Profile: "team-a-operator", Scope: ScopeSelector{Environments: []string{"staging"}}},
+			{Name: "prod-scale", Role: "scaler", Effect: core.EffectApprove, Approvers: Subjects{Groups: []string{"platform"}}, Scope: ScopeSelector{Environments: []string{"prod*"}}},
+			// Denials and approvers reach no profile.
+			{Name: "no-carol", Role: "viewer", Effect: core.EffectDeny, Subjects: Subjects{Users: []string{"carol"}}},
+		},
+	})
+	want := map[string]map[string]Grantees{
+		"staging": {
+			"reader":          {Users: []string{"alice@example.com"}, Groups: []string{"team-a"}},
+			"team-a-operator": {Users: []string{"bob"}, Groups: []string{"team-a"}},
+		},
+		"production": {
+			"operator": {Anyone: true},
+		},
+	}
+	if got := p.Grantees(testCatalog); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Grantees = %+v\nwant %+v", got, want)
+	}
+}

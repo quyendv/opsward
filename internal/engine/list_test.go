@@ -39,6 +39,7 @@ type listTool struct {
 	ran       bool
 	profile   string
 	profiles  []string
+	caller    core.Principal
 }
 
 func (l *listTool) tool() Tool {
@@ -49,8 +50,9 @@ func (l *listTool) tool() Tool {
 			return &Prepared{
 				Scope: core.Scope{Environment: "staging"},
 				Args:  map[string]any{},
-				RunList: func(_ context.Context, profile string) ([]Item, error) {
+				RunList: func(ctx context.Context, profile string) ([]Item, error) {
 					l.ran, l.profile = true, profile
+					l.caller, _ = core.PrincipalFrom(ctx)
 					l.profiles = append(l.profiles, profile)
 					if profile == l.failFor {
 						return nil, errors.New("forbidden")
@@ -254,5 +256,19 @@ func TestListFailsWhenEveryProfileFails(t *testing.T) {
 	authz := reachPolicy{decide: allowAll, reach: func(core.Request) bool { return true }}
 	if _, err := listEngine(t, lt, authz, &recordingAuditor{}).Invoke(context.Background(), alice, "list_things", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("no error")
+	}
+}
+
+func TestListCarriesTheCaller(t *testing.T) {
+	lt := &listTool{}
+	authz := reachPolicy{
+		decide: func(core.Request) core.Decision { return core.Decision{Effect: core.EffectAllow, Rule: "all"} },
+		reach:  func(core.Request) bool { return true },
+	}
+	if _, err := listEngine(t, lt, authz, &recordingAuditor{}).Invoke(context.Background(), alice, "list_things", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if lt.caller.Subject != alice.Subject {
+		t.Fatalf("listed as %+v, want as %s", lt.caller, alice.Subject)
 	}
 }

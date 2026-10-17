@@ -9,10 +9,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/quyendv/opsward/internal/source"
-	"github.com/quyendv/opsward/internal/version"
 )
 
 var applicationsGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
@@ -67,23 +65,11 @@ func (s *Source) Applications(cluster, profile string) (func(ctx context.Context
 	}, nil
 }
 
-// DynamicFromKubeconfig builds a dynamic client from a kubeconfig file, with the same
-// refusal to fall back to in-cluster credentials as FromKubeconfig.
+// DynamicFromKubeconfig builds a dynamic client from a kubeconfig file (see restConfig).
 func DynamicFromKubeconfig(p Profile) (dynamic.Interface, error) {
-	raw, err := clientcmd.LoadFromFile(p.Kubeconfig)
+	cfg, err := restConfig(p)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw.Contexts) == 0 {
-		return nil, fmt.Errorf("kubeconfig %s: no contexts", p.Kubeconfig)
-	}
-	if p.Context == "" && raw.CurrentContext == "" {
-		return nil, fmt.Errorf("kubeconfig %s: no current-context; set the profile's context field", p.Kubeconfig)
-	}
-	cfg, err := clientcmd.NewNonInteractiveClientConfig(*raw, p.Context, &clientcmd.ConfigOverrides{}, nil).ClientConfig()
-	if err != nil {
-		return nil, fmt.Errorf("kubeconfig %s: %w", p.Kubeconfig, err)
-	}
-	cfg.UserAgent = "opsward/" + version.Version
 	return dynamic.NewForConfig(cfg)
 }

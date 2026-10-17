@@ -22,7 +22,8 @@ Read the design notes in [docs/design/](docs/design/) before adding a package:
 [0010](docs/design/0010-delivery-status.md) for delivery status,
 [0011](docs/design/0011-running-in-a-cluster.md) for running in a cluster,
 [0012](docs/design/0012-alert-investigation.md) for alert investigation,
-[0013](docs/design/0013-agent-mode.md) for agent mode.
+[0013](docs/design/0013-agent-mode.md) for agent mode,
+[0014](docs/design/0014-impersonation.md) for profiles that act as the caller.
 
 ## Layout
 
