@@ -187,3 +187,34 @@ func TestUpdateRebuildsClientWhenImpersonationChanges(t *testing.T) {
 		t.Fatalf("built %d clients, want a rebuild after the groups changed", built)
 	}
 }
+
+type recordRT struct{ h http.Header }
+
+func (r *recordRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.h = req.Header
+	return &http.Response{StatusCode: http.StatusNotFound, Body: http.NoBody, Request: req}, nil
+}
+
+// Only Opsward decides who a request acts as: impersonation headers set by anything
+// before it are dropped, not merged.
+func TestImpersonationReplacesEarlierHeaders(t *testing.T) {
+	rt := &recordRT{}
+	a := &asCaller{rt: rt, imp: Impersonation{UserPrefix: "opsward:", GroupPrefix: "opsward:", Groups: []string{"team-a"}}}
+	req, err := http.NewRequestWithContext(callerCtx(t, core.Principal{Subject: "alice", Groups: []string{"team-a"}}), http.MethodGet, "https://127.0.0.1/api", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Impersonate-User", "admin")
+	req.Header.Add("Impersonate-Group", "system:masters")
+	req.Header.Set("Impersonate-Uid", "0")
+	req.Header.Set("Impersonate-Extra-Scopes", "all")
+	resp, err := a.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if rt.h.Get("Impersonate-User") != "opsward:alice" || !slices.Equal(rt.h.Values("Impersonate-Group"), []string{"opsward:team-a"}) ||
+		rt.h.Get("Impersonate-Uid") != "" || rt.h.Get("Impersonate-Extra-Scopes") != "" {
+		t.Fatalf("headers sent: %v", rt.h)
+	}
+}

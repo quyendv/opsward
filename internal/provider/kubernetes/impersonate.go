@@ -84,6 +84,12 @@ func (a *asCaller) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	req = utilnet.CloneRequest(req)
+	for h := range req.Header {
+		// Only the caller decides who a request acts as; CloneRequest copied the map.
+		if strings.HasPrefix(h, "Impersonate-") {
+			req.Header.Del(h)
+		}
+	}
 	req.Header.Set(transport.ImpersonateUserHeader, user)
 	for _, g := range groups {
 		req.Header.Add(transport.ImpersonateGroupHeader, g)

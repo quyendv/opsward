@@ -304,6 +304,9 @@ func (a *App) Reload(next *config.Config) error {
 	if err != nil {
 		return err
 	}
+	// The providers go first: until the policy follows, a profile acting as its caller
+	// already sends the groups of the new policy, so a member of a group just removed may
+	// be refused by the cluster for that moment, or one just added by Opsward.
 	a.apply(d)
 	// Policy and membership are swapped one after the other, not together: a request in
 	// between is decided by the new policy with the groups its token was resolved with,
