@@ -24,6 +24,8 @@ import (
 
 type workloads struct {
 	c kubernetes.Interface
+	// asCaller is set when c impersonates the caller of each request (docs/design/0014).
+	asCaller bool
 }
 
 // NewWorkloads returns capability.Workloads backed by c.

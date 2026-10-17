@@ -82,7 +82,7 @@ func (s *Source) Workloads(environment, profile string) (capability.Workloads, e
 		cc = cachedClient{c: c, sum: fileSum(p.Kubeconfig)}
 		s.clients[key] = cc
 	}
-	return NewWorkloads(cc.c), nil
+	return &workloads{c: cc.c, asCaller: p.Impersonate != nil}, nil
 }
 
 // Update replaces the environment and profile maps, as on a configuration reload. A

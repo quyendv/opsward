@@ -664,14 +664,35 @@ func TestListWorkloadsInEveryNamespace(t *testing.T) {
 }
 
 // A caller the profile acts as may be refused where others are not; tools tell that from
-// a failure (docs/design/0014).
-func TestListWorkloadsWrapsForbidden(t *testing.T) {
-	c := fake.NewClientset()
-	c.PrependReactor("list", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(appsv1.Resource("deployments"), "", errors.New("no"))
-	})
-	_, err := NewWorkloads(c).ListWorkloads(t.Context(), "team-b")
-	if !errors.Is(err, capability.ErrForbidden) {
-		t.Fatalf("err = %v, want ErrForbidden", err)
+// a failure (docs/design/0014). What it may list is kept, kind by kind.
+func TestListWorkloadsAsCallerWrapsForbidden(t *testing.T) {
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "team-b"}}
+	c := fake.NewClientset(sts)
+	forbid := func(resource string) {
+		c.PrependReactor("list", resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(appsv1.Resource(resource), "", errors.New("no"))
+		})
+	}
+	forbid("deployments")
+	src := NewSource(map[string]string{"prod": "a"},
+		map[string]map[string]Profile{"a": {"reader": {Kubeconfig: "/k", Impersonate: &Impersonation{}}, "plain": {Kubeconfig: "/k"}}},
+		func(Profile) (kubernetes.Interface, error) { return c, nil })
+	asCaller, err := src.Workloads("prod", "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := asCaller.ListWorkloads(t.Context(), "team-b")
+	if err != nil || len(list) != 1 || list[0].Name != "db" {
+		t.Fatalf("list = %+v, err = %v; want the StatefulSet the caller may list", list, err)
+	}
+	// A profile acting as itself is misconfigured when refused: that fails loudly.
+	plain, _ := src.Workloads("prod", "plain")
+	if _, err := plain.ListWorkloads(t.Context(), "team-b"); err == nil || errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("plain profile: err = %v, want a failure that is not ErrForbidden", err)
+	}
+	forbid("statefulsets")
+	forbid("daemonsets")
+	if _, err := asCaller.ListWorkloads(t.Context(), "team-b"); !errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("refused every kind: err = %v, want ErrForbidden", err)
 	}
 }

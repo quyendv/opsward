@@ -128,3 +128,38 @@ func TestRenderRBACForImpersonatingProfiles(t *testing.T) {
 		t.Errorf("no note on binding the reader's rules to people:\n%s", got)
 	}
 }
+
+// Opsward never sends a system: name, so the credential must not be granted one either:
+// impersonating system:masters is cluster-admin.
+func TestRenderRBACRefusesSystemNames(t *testing.T) {
+	for name, edit := range map[string][2]string{
+		"group across the prefix": {"impersonate: {} }", `impersonate: { groupPrefix: "sys" } }`},
+		"unprefixed group":        {"impersonate: {} }", `impersonate: { groupPrefix: "" } }`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc := strings.Replace(impersonationConfig, edit[0], edit[1], 1)
+			group := "system:masters"
+			if edit[1] == `impersonate: { groupPrefix: "sys" } }` {
+				group = "tem:masters"
+			}
+			doc = strings.Replace(doc, "groups: [team-a] }, role: viewer", "groups: [team-a, "+group+"] }, role: viewer", 1)
+			cfg, err := config.Parse([]byte(doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = RenderRBAC(cfg, RBACOptions{Cluster: "cluster-a"})
+			if err == nil || !strings.Contains(err.Error(), `"system:masters"`) {
+				t.Fatalf("err = %v, want system:masters refused", err)
+			}
+		})
+	}
+	doc := strings.Replace(impersonationConfig, `usernamePrefix: "oidc:", groupPrefix: "oidc:"`, `usernamePrefix: ""`, 1)
+	doc = strings.Replace(doc, "users: [Bob@Example.com]", "users: [system:kube-controller-manager]", 1)
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RenderRBAC(cfg, RBACOptions{Cluster: "cluster-a"}); err == nil || !strings.Contains(err.Error(), "system:kube-controller-manager") {
+		t.Fatalf("err = %v, want the system: user refused", err)
+	}
+}

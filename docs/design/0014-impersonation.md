@@ -31,12 +31,18 @@ providers:
 - **The user** is `usernamePrefix` followed by the principal's subject, normalized as policy
   matches it (an address in lower case). The default prefix keeps Opsward's principals apart
   from the cluster's users: a principal called `admin` does not become the cluster's
-  `admin`. Setting the prefixes the API server's OIDC configuration uses (`oidc:`, say) makes
-  a person reach the same RBAC through Opsward as with `kubectl`.
+  `admin`. With the username prefix the API server's OIDC configuration uses (`oidc:`, say),
+  a person reaches the RBAC bound to their own user name, provided Opsward's subject claim
+  is the API server's username claim, and the name is not an address whose case matters.
 - **The groups** are the principal's groups that a binding granting tools through this
   profile names, each after `groupPrefix`. Other groups are not sent: the credential may
   impersonate only the groups listed for it, and one group it may not impersonate fails the
-  whole request. The API server adds `system:authenticated` itself.
+  whole request. The API server adds `system:authenticated` itself. Groups are Opsward's:
+  internal groups, a token's groups, and the identity provider's groups after
+  `identity.oidc.groupsPrefix`; `groupPrefix` comes on top of that one. The cluster takes
+  them as Opsward asserts them, as from any proxy it lets impersonate, so whoever edits
+  Opsward's groups changes what people may do in the cluster. Keeping the default
+  `opsward:` keeps those groups apart from the cluster's own.
 - A name that would start with `system:`, the cluster's own identities, is refused, and so is
   a request that carries no principal: an impersonating profile never falls back to acting as
   itself. Calls nobody waits on (alert investigations, agent mode) act as their principal,
@@ -45,7 +51,10 @@ providers:
   profile: two sources would decide who a request acts as.
 
 The reader's label lookup before authorization (0006) runs as the caller too, so a person
-the cluster does not let read a workload is decided by policy as for unknown labels.
+the cluster does not let read a workload is decided by policy as for unknown labels. A
+listing across an environment keeps the kinds and namespaces the cluster lets the caller
+list, and is refused only when it lets them list none; a profile acting as itself still
+fails when refused, since that is a misconfiguration.
 
 ## What the credential needs
 
@@ -55,7 +64,8 @@ profile name. A binding granted to groups, or to every principal, names no users
 users rule then has no `resourceNames`: the credential can act as any user name, the
 cluster's own `system:` users included. Opsward never sends one, but whoever holds the
 credential could, so it deserves the care of an administrator's. Groups stay limited to
-those listed. The people need their own RBAC for what the tools do.
+those listed, and `rbac render` refuses to grant a `system:` user or group. The people need
+their own RBAC for what the tools do.
 
 `opsward rbac render` renders, for an impersonating profile, the ClusterRole
 `opsward:<profile>:impersonate` and its ClusterRoleBinding to the profile's subject, and the
