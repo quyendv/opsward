@@ -231,6 +231,26 @@ func (s *Store) ListAudit(ctx context.Context, writer string, afterSeq uint64, l
 	return out, nil
 }
 
+// RecentAudit implements store.Store.
+func (s *Store) RecentAudit(ctx context.Context, q store.AuditQuery) ([]store.AuditRow, error) {
+	query := `SELECT ` + auditColumns + ` FROM audit WHERE time_ns >= $1 AND time_ns < $2`
+	args := []any{q.Since.UnixNano(), q.Until.UnixNano()}
+	if b := q.Before; b != nil {
+		query += ` AND (time_ns, writer, seq) < ($3, $4, $5)`
+		args = append(args, b.Time.UnixNano(), b.Writer, int64(b.Seq)) //nolint:gosec // G115: see AppendAudit
+	}
+	query += fmt.Sprintf(` ORDER BY time_ns DESC, writer DESC, seq DESC LIMIT $%d`, len(args)+1)
+	rows, err := s.pool.Query(ctx, query, append(args, q.Limit)...)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: recent audit: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (store.AuditRow, error) { return scanAudit(r) })
+	if err != nil {
+		return nil, fmt.Errorf("postgres: recent audit: %w", err)
+	}
+	return out, nil
+}
+
 // AuditWriters implements store.Store.
 func (s *Store) AuditWriters(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT DISTINCT writer FROM audit ORDER BY writer`)

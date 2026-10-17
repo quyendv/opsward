@@ -37,6 +37,10 @@ func TestConformance(t *testing.T) {
 		s, _ := opener(t)
 		return s
 	})
+	storetest.Sessions(t, func(t *testing.T) store.Store {
+		s, _ := opener(t)
+		return s
+	})
 }
 
 // Replicas starting together must apply each migration once.

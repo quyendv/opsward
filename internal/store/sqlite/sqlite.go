@@ -231,6 +231,33 @@ func (s *Store) ListAudit(ctx context.Context, writer string, afterSeq uint64, l
 	return out, nil
 }
 
+// RecentAudit implements store.Store.
+func (s *Store) RecentAudit(ctx context.Context, q store.AuditQuery) ([]store.AuditRow, error) {
+	query := `SELECT ` + auditColumns + ` FROM audit WHERE time_ns >= ? AND time_ns < ?`
+	args := []any{q.Since.UnixNano(), q.Until.UnixNano()}
+	if b := q.Before; b != nil {
+		query += ` AND (time_ns, writer, seq) < (?, ?, ?)`
+		args = append(args, b.Time.UnixNano(), b.Writer, int64(b.Seq)) //nolint:gosec // G115: see AppendAudit
+	}
+	rows, err := s.db.QueryContext(ctx, query+` ORDER BY time_ns DESC, writer DESC, seq DESC LIMIT ?`, append(args, q.Limit)...)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: recent audit: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []store.AuditRow
+	for rows.Next() {
+		r, err := scan(rows)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: recent audit: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: recent audit: %w", err)
+	}
+	return out, nil
+}
+
 // AuditWriters implements store.Store.
 func (s *Store) AuditWriters(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT writer FROM audit ORDER BY writer`)
