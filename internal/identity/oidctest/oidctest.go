@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,8 @@ type Issuer struct {
 	KeysDown atomic.Bool
 	// KeyFetches counts requests for the key set.
 	KeyFetches atomic.Int64
+	// Token answers the token endpoint with a status and a JSON body; unset, it fails.
+	Token func(form url.Values) (int, map[string]any)
 
 	t   *testing.T
 	mu  sync.Mutex
@@ -63,6 +66,16 @@ func New(t *testing.T) *Issuer {
 		set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &is.key.PublicKey, KeyID: is.kid, Algorithm: "RS256", Use: "sig"}}}
 		is.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(set)
+	})
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil || is.Token == nil {
+			http.Error(w, "no token endpoint", http.StatusBadRequest)
+			return
+		}
+		status, body := is.Token(r.PostForm)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(body)
 	})
 	srv := httptest.NewServer(mux)
 	is.URL = srv.URL

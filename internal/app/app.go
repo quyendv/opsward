@@ -78,6 +78,8 @@ type App struct {
 	envs       environments
 	alertEnvs  alertEnvironments
 	tools      []engine.Tool
+	// policy is the policy in force, for what the console shows a person about it.
+	policy atomic.Pointer[policy.Policy]
 }
 
 // derived is everything a configuration determines that a reload replaces. It is built
@@ -255,6 +257,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 		return nil, err
 	}
 	a.apply(d)
+	a.policy.Store(d.policy)
 	a.Warnings = d.warnings
 
 	a.Engine, err = engine.New(engine.Options{
@@ -312,6 +315,7 @@ func (a *App) Reload(next *config.Config) error {
 	// between is decided by the new policy with the groups its token was resolved with,
 	// which a request authenticated just before the reload sees anyway.
 	a.Engine.Update(d.envs, d.policy, a.lib)
+	a.policy.Store(d.policy)
 	if a.changes != nil {
 		a.changes.update(next)
 	}
@@ -471,7 +475,8 @@ func orDefault(w, def io.Writer) io.Writer {
 // approvalKeep is how long approval requests stay in the store after they expire.
 const approvalKeep = 7 * 24 * time.Hour
 
-// RunRetention prunes audit records and expired approval requests now and then daily,
+// RunRetention prunes audit records, expired approval requests and console sessions now
+// and then daily,
 // until ctx is done.
 func (a *App) RunRetention(ctx context.Context) {
 	t := time.NewTicker(24 * time.Hour)
@@ -488,6 +493,11 @@ func (a *App) RunRetention(ctx context.Context) {
 			a.log.Error("pruning approval requests failed", "error", err)
 		} else if n > 0 {
 			a.log.Info("pruned expired approval requests", "count", n)
+		}
+		if n, err := a.Store.PruneSessions(ctx, time.Now()); err != nil {
+			a.log.Error("pruning console sessions failed", "error", err)
+		} else if n > 0 {
+			a.log.Info("pruned expired console sessions", "count", n)
 		}
 		select {
 		case <-ctx.Done():

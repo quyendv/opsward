@@ -1,0 +1,37 @@
+{{define "binding"}}
+<article class="card">
+  <header><strong>{{.Name}}</strong> <span class="status">{{if .Effect}}{{.Effect}}{{else}}allow{{end}}</span></header>
+  <dl>
+    <dt>Role</dt><dd>{{.Role}}{{with .Risk}} · risk {{range $i, $r := .}}{{if $i}}, {{end}}{{$r}}{{end}}{{end}}{{with .Tools}} · tools {{range $i, $t := .}}{{if $i}}, {{end}}{{$t}}{{end}}{{end}}</dd>
+    <dt>Environments</dt><dd>{{with .Scope.Environments}}{{range $i, $e := .}}{{if $i}}, {{end}}{{$e}}{{end}}{{else}}all{{end}}</dd>
+    <dt>Namespaces</dt><dd>{{with .Scope.Namespaces}}{{range $i, $e := .}}{{if $i}}, {{end}}{{$e}}{{end}}{{else}}all{{end}}</dd>
+    {{with .Scope.Workloads}}<dt>Workloads</dt><dd>{{range $i, $e := .}}{{if $i}}, {{end}}{{$e}}{{end}}</dd>{{end}}
+    {{with .Scope.Apps}}<dt>Apps</dt><dd>{{range $i, $e := .}}{{if $i}}, {{end}}{{$e}}{{end}}</dd>{{end}}
+    {{with .When}}<dt>When</dt><dd><code>{{.}}</code></dd>{{end}}
+    {{if or .Approvers.Users .Approvers.Groups}}<dt>Approvers</dt><dd>{{range .Approvers.Users}}{{.}} {{end}}{{range .Approvers.Groups}}group {{.}} {{end}}</dd>{{end}}
+  </dl>
+</article>
+{{end}}
+
+{{define "content"}}
+<section class="card">
+  <dl>
+    <dt>Principal</dt><dd>{{.Principal.Subject}}</dd>
+    <dt>Groups</dt><dd>{{range $i, $g := .Principal.Groups}}{{if $i}}, {{end}}{{$g}}{{else}}none{{end}}</dd>
+    <dt>Signed in with</dt><dd>{{if eq .Principal.Credential "oidc"}}the identity provider{{else}}API token {{.Principal.Credential}}{{end}}</dd>
+    {{with .Session}}<dt>Session ends</dt><dd>{{time .ExpiresAt}}</dd>{{end}}
+  </dl>
+</section>
+{{with .Data}}
+<section>
+  <h2>What policy grants you</h2>
+  {{range .Grants}}{{template "binding" .}}{{else}}<p class="muted">No binding names you: every call is denied.</p>{{end}}
+</section>
+{{if .Approves}}
+<section>
+  <h2>What you approve</h2>
+  {{range .Approves}}{{template "binding" .}}{{end}}
+</section>
+{{end}}
+{{end}}
+{{end}}

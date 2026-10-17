@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -152,6 +153,10 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		log.Info("serving MCP over stdio", "version", version.Version, "tools", len(a.Engine.Tools()))
 		return mcpadapter.ServeStdio(ctx, a.Engine, a.Principal)
 	}
+	consoleHandler, err := a.Console()
+	if err != nil {
+		return err
+	}
 	h := cfg.Server.HTTP
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", h.Address)
 	if err != nil {
@@ -164,6 +169,10 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	if o := cfg.Identity.OIDC; o != nil {
 		opt.Resource = &mcpadapter.Resource{URL: cfg.ResourceURL(), AuthorizationServers: []string{o.Issuer}, Scopes: o.Scopes}
 		go a.Identity.Discover(ctx)
+	}
+	if consoleHandler != nil {
+		opt.Handlers = map[string]http.Handler{"/console/": consoleHandler}
+		log.Info("serving the web console", "path", "/console/")
 	}
 	alertsDone := make(chan struct{})
 	if a.Alerts != nil {

@@ -62,6 +62,9 @@ type HTTPOptions struct {
 	// Routes are other endpoints, such as the alert webhook (docs/design/0012), served
 	// for the principal of the request's bearer token like /mcp.
 	Routes map[string]PrincipalHandler
+	// Handlers are endpoints that authenticate requests themselves, such as the console
+	// (docs/design/0015), served as they are.
+	Handlers map[string]http.Handler
 	// Resource, when set, is advertised as RFC 9728 protected resource metadata and in
 	// every 401 challenge, so that OAuth clients can find the authorization server.
 	Resource *Resource
@@ -140,6 +143,9 @@ func newHTTPHandler(e *engine.Engine, opt HTTPOptions, stop context.Context) htt
 			a, _ := r.Context().Value(principalKey{}).(authenticated)
 			h(w, r, a.p)
 		})))
+	}
+	for pattern, h := range opt.Handlers {
+		mux.Handle(pattern, h)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
