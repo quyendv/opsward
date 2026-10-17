@@ -190,7 +190,7 @@ func checkTools(cfg *config.Config) ([]engine.Tool, error) {
 	if f := featuresOf(cfg); f.proposals || f.delivery {
 		changes = &changeRoutes{}
 	}
-	return buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals, changes, featuresOf(cfg))
+	return buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals, nil, changes, featuresOf(cfg))
 }
 
 // Open builds the App: store, audit writer, providers, tools, policy, knowledge and engine.
@@ -245,7 +245,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	if a.changes != nil {
 		changes = a.changes
 	}
-	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs, approvalTools, changes, featuresOf(cfg)); err != nil {
+	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs, approvalTools, st, changes, featuresOf(cfg)); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
@@ -531,7 +531,7 @@ func featuresOf(cfg *config.Config) features {
 	return features{proposals: len(cfg.Providers.Forges) > 0, delivery: cfg.Providers.Delivery != nil}
 }
 
-func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments, approvals tool.ApprovalStore, changes tool.ChangeConfig, f features) ([]engine.Tool, error) {
+func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments, approvals tool.ApprovalStore, audit tool.AuditReader, changes tool.ChangeConfig, f features) ([]engine.Tool, error) {
 	builders := []func() (engine.Tool, error){
 		func() (engine.Tool, error) { return tool.RestartWorkload(src) },
 		func() (engine.Tool, error) { return tool.ScaleWorkload(src) },
@@ -544,6 +544,7 @@ func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capabi
 		func() (engine.Tool, error) { return tool.DiagnoseWorkload(src, ms) },
 		func() (engine.Tool, error) { return tool.SearchKnowledge(lib) },
 		func() (engine.Tool, error) { return tool.GetKnowledge(lib) },
+		func() (engine.Tool, error) { return tool.SearchAudit(audit) },
 	}
 	if ms != nil {
 		builders = append(builders,

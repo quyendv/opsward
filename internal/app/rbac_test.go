@@ -127,7 +127,7 @@ func TestEveryToolDeclaresNeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	noCluster := []string{"list_environments", "search_knowledge", "get_knowledge", "query_metrics", "query_logs", "list_approvals", "decide_approval"}
+	noCluster := []string{"list_environments", "search_knowledge", "get_knowledge", "query_metrics", "query_logs", "list_approvals", "decide_approval", "search_audit"}
 	var names []string
 	for _, tl := range tools {
 		names = append(names, tl.Name)
