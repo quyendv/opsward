@@ -27,6 +27,8 @@ type Config struct {
 type Role struct {
 	Risk  []core.Risk `yaml:"risk"`
 	Tools []string    `yaml:"tools"`
+	// byName are the catalog's tools a risk class does not grant.
+	byName map[string]bool
 }
 
 // Subjects selects principals. Empty means every authenticated principal.
@@ -72,6 +74,9 @@ type ToolInfo struct {
 	Args  []string
 	// Global tools are not bound to an environment and use no backend profile.
 	Global bool
+	// ByName tools are granted only by a role that names them, never by its risk
+	// classes (docs/design/0015).
+	ByName bool
 }
 
 // Policy is a compiled, validated policy. It is safe for concurrent use.
@@ -197,6 +202,9 @@ func (r Role) contains(tool string, risk core.Risk) bool {
 		if t == tool {
 			return true
 		}
+	}
+	if r.byName[tool] {
+		return false
 	}
 	for _, rr := range r.Risk {
 		if rr == risk {

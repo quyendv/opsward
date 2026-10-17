@@ -43,6 +43,13 @@ type Tool struct {
 	// must be reachable before anything is read, and each item is kept only when policy
 	// allows the tool on the item's scope. They implement RunList, not Run.
 	List bool
+	// Exact list tools decide each item as a call at the item's scope, rather than by
+	// reachability: an item without a namespace needs a grant covering its whole
+	// environment, and one without an environment a grant limited to none, such as
+	// audit records (docs/design/0015).
+	Exact bool
+	// ByName tools are granted only by roles that name them, never by a risk class.
+	ByName bool
 	// NeverApproved tools cannot wait for an approval, such as deciding approvals: a
 	// binding that would require one denies them instead.
 	NeverApproved bool
@@ -85,6 +92,8 @@ type Prepared struct {
 
 // Item is one element of a listing, with the scope policy decides it on.
 type Item struct {
+	// Key tells items apart when several share a scope; empty, the scope does.
+	Key   string
 	Scope core.Scope
 	Data  any
 }
@@ -468,7 +477,10 @@ func (e *Engine) list(ctx context.Context, st *state, tool Tool, prep *Prepared,
 		listed = true
 		read += len(items)
 		for _, it := range items {
-			key := it.Scope.Environment + "/" + it.Scope.Namespace + "/" + it.Scope.Kind + "/" + it.Scope.Name
+			key := it.Key
+			if key == "" {
+				key = it.Scope.Environment + "/" + it.Scope.Namespace + "/" + it.Scope.Kind + "/" + it.Scope.Name
+			}
 			// Defence in depth: the tool filters by the environment, and so does the engine.
 			if seen[key] || (!tool.Global && st.validateScope(it.Scope) != nil) {
 				continue
@@ -477,6 +489,8 @@ func (e *Engine) list(ctx context.Context, st *state, tool Tool, prep *Prepared,
 			ireq.Scope = it.Scope
 			var allowed bool
 			switch {
+			case tool.Exact:
+				allowed = st.authz.Decide(ireq).Effect == core.EffectAllow
 			case tool.Global:
 				allowed = len(reacher.ReachableProfiles(ireq)) > 0
 			case it.Scope.Name != "":
