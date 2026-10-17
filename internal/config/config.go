@@ -48,6 +48,8 @@ type Config struct {
 	Alerts *Alerts `yaml:"alerts"`
 	// Agent, when set, configures the model agent mode uses (docs/design/0013).
 	Agent *Agent `yaml:"agent"`
+	// Console, when set, serves the web console (docs/design/0015).
+	Console *Console `yaml:"console"`
 }
 
 // Approvals configures approval requests (docs/design/0007).
@@ -241,6 +243,7 @@ func (c *Config) applyDefaults() {
 		c.Identity.Mode = ModeLocal
 	}
 	c.oidcDefaults()
+	c.consoleDefaults()
 	if c.Approvals.TTL == nil {
 		d := Duration(time.Hour)
 		c.Approvals.TTL = &d
@@ -389,6 +392,7 @@ func (c *Config) validate() error {
 	c.validateChange(seen, fail)
 	c.validateAlerts(fail)
 	c.validateAgent(fail)
+	c.validateConsole(fail)
 	return errors.Join(errs...)
 }
 
@@ -472,6 +476,7 @@ func (c *Config) Warnings() []string {
 	out = append(out, c.remoteWarnings()...)
 	out = append(out, c.alertWarnings()...)
 	out = append(out, c.agentWarnings()...)
+	out = append(out, c.consoleWarnings()...)
 	sort.Strings(out)
 	return out
 }
@@ -497,6 +502,9 @@ func (c *Config) RestartRequired(next *Config) []string {
 	}
 	if !reflect.DeepEqual(c.Agent, next.Agent) {
 		out = append(out, "agent")
+	}
+	if !reflect.DeepEqual(c.Console, next.Console) {
+		out = append(out, "console")
 	}
 	if !reflect.DeepEqual(c.Audit, next.Audit) {
 		out = append(out, "audit")
