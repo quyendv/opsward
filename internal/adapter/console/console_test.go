@@ -313,6 +313,14 @@ func TestCrossSiteRequestsAreRefused(t *testing.T) {
 	if len(e.eng.calls) != 0 {
 		t.Fatalf("a cross-site decision reached the engine: %+v", e.eng.calls)
 	}
+	// Signing someone in, or out, from another site is refused too.
+	tok, _ := e.token("mallory@example.com")
+	if resp := e.do("POST", "/console/login/token", url.Values{"token": {tok}}, "Sec-Fetch-Site", "cross-site"); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a cross-site sign-in: %d", resp.StatusCode)
+	}
+	if resp := e.do("POST", "/console/logout", url.Values{}, "Sec-Fetch-Site", "cross-site"); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a cross-site sign-out: %d", resp.StatusCode)
+	}
 }
 
 func TestDecideCallsTheTool(t *testing.T) {
@@ -467,5 +475,42 @@ func TestCallbackRefusals(t *testing.T) {
 	}
 	if len(e.eng.calls) != 0 {
 		t.Fatal("the console called a tool while signing in")
+	}
+}
+
+// A session started with a way of signing in that is no longer enabled ends.
+func TestSessionsOfADisabledSignInEnd(t *testing.T) {
+	e := newEnv(t, Options{})
+	_, rec := e.token("alice@example.com")
+	u, _ := url.Parse(e.srv.URL)
+	for _, credential := range []string{"token:" + rec.ID, "oidc"} {
+		value := "v-" + credential
+		sum := sha256.Sum256([]byte(value))
+		if err := e.st.CreateSession(context.Background(), store.Session{
+			IDHash: sum[:], Subject: "alice@example.com", Credential: credential, CreatedAt: e.now, ExpiresAt: e.now.Add(time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		e.client.Jar.SetCookies(u, []*http.Cookie{{Name: "__Host-opsward-session", Value: value, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode}})
+		if resp := e.do("GET", "/console/approvals", nil); resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("%s: %d", credential, resp.StatusCode)
+		}
+	}
+	if len(e.eng.calls) != 0 {
+		t.Fatalf("calls: %+v", e.eng.calls)
+	}
+}
+
+// A store that fails for a moment does not sign people out.
+func TestATransientFailureKeepsTheSession(t *testing.T) {
+	e := newEnv(t, Options{APITokens: true})
+	e.signInWithToken("alice@example.com")
+	u, _ := url.Parse(e.srv.URL)
+	_ = e.st.Close() // every read fails now
+	if resp := e.do("GET", "/console/approvals", nil); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("with the store down: %d", resp.StatusCode)
+	}
+	if got := e.client.Jar.Cookies(u); len(got) != 1 || got[0].Value == "" {
+		t.Fatalf("the cookie was cleared: %v", got)
 	}
 }

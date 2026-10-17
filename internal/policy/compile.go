@@ -92,7 +92,11 @@ func Compile(cfg Config, cat Catalog, log *slog.Logger) (*Policy, []string, erro
 			fail("%s: unknown effect %q", where, b.Effect)
 		}
 		role, ok := cfg.Roles[b.Role]
-		role.byName = byName
+		// Naming a tool is needed to grant it, never to take it away: a deny by risk
+		// class covers it too.
+		if b.Effect != core.EffectDeny {
+			role.byName = byName
+		}
 		if !ok {
 			fail("%s: unknown role %q", where, b.Role)
 		}

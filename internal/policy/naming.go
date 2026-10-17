@@ -26,3 +26,15 @@ func (p *Policy) Naming(pr core.Principal) (grants, approves []BindingView) {
 	}
 	return grants, approves
 }
+
+// MayAllow reports whether an allow binding names p and grants it the tool, whatever its
+// scope: a caller it does not is denied an Exact listing outright (docs/design/0015).
+func (p *Policy) MayAllow(req core.Request) bool {
+	for i := range p.bindings {
+		b := &p.bindings[i]
+		if b.Effect == core.EffectAllow && b.Subjects.match(req.Principal) && b.role.contains(req.Tool, req.Risk) {
+			return true
+		}
+	}
+	return false
+}

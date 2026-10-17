@@ -64,6 +64,11 @@ func outcome(at time.Duration, subject, tool, status string, scope core.Scope) a
 
 func searchAudit(t *testing.T, f *fakeAudit, args string) ([]engine.Item, AuditSearch) {
 	t.Helper()
+	return searchAuditKeeping(t, f, args, func(engine.Item) bool { return true })
+}
+
+func searchAuditKeeping(t *testing.T, f *fakeAudit, args string, keep func(engine.Item) bool) ([]engine.Item, AuditSearch) {
+	t.Helper()
 	tl, err := SearchAudit(f)
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +77,7 @@ func searchAudit(t *testing.T, f *fakeAudit, args string) ([]engine.Item, AuditS
 	if err != nil {
 		t.Fatalf("Prepare(%s): %v", args, err)
 	}
-	items, err := prep.RunList(context.Background(), "")
+	items, _, err := prep.RunExact(context.Background(), keep)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,5 +191,28 @@ func TestSearchAuditRejectsBadArguments(t *testing.T) {
 		if _, err := tl.Prepare(json.RawMessage(args)); err == nil {
 			t.Errorf("%s was accepted", args)
 		}
+	}
+}
+
+// The limit counts what the caller may see, so a page of others' records does not read
+// as "more match", and the cursor marks the caller's own last record.
+func TestSearchAuditCountsOnlyWhatPolicyKeeps(t *testing.T) {
+	f := &fakeAudit{}
+	for i := range 300 {
+		ns := "team-b"
+		if i%3 == 0 {
+			ns = "team-a"
+		}
+		f.add(t, outcome(time.Duration(i)*time.Second, "alice", "get_workload_status", audit.StatusOK, core.Scope{Environment: "staging", Namespace: ns}))
+	}
+	window := `"since":"2026-10-17T08:00:00Z","until":"2026-10-17T09:00:00Z"`
+	teamA := func(it engine.Item) bool { return it.Scope.Namespace == "team-a" }
+	items, res := searchAuditKeeping(t, f, `{`+window+`}`, teamA)
+	if len(items) != 100 || res.Next != "" {
+		t.Fatalf("%d items, next %q: all 100 of team-a's records fit one page", len(items), res.Next)
+	}
+	items, res = searchAuditKeeping(t, f, `{`+window+`}`, func(engine.Item) bool { return false })
+	if len(items) != 0 || res.Next != "" || res.Note != "" {
+		t.Fatalf("a caller who may see nothing: %d items, next %q, note %q", len(items), res.Next, res.Note)
 	}
 }

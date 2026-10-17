@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/quyendv/opsward/internal/core"
@@ -188,6 +189,12 @@ type signedInHandler func(w http.ResponseWriter, r *http.Request, s *store.Sessi
 func (c *console) signedIn(h signedInHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s, p, err := c.session(r)
+		if err != nil && !errors.Is(err, errNoSession) && !errors.Is(err, identity.ErrUnauthenticated) {
+			// The store or the issuer failed for a moment: the session stays.
+			c.opt.Logger.Error("console: reading the session failed", "error", err)
+			http.Error(w, "Opsward cannot check your session right now; try again in a moment.", http.StatusServiceUnavailable)
+			return
+		}
 		if err != nil {
 			if !errors.Is(err, errNoSession) {
 				c.opt.Logger.Warn("console: session refused", "error", err)
@@ -219,10 +226,20 @@ func (c *console) session(r *http.Request) (*store.Session, core.Principal, erro
 	if !ok || !c.opt.Now().Before(s.ExpiresAt) {
 		return nil, core.Principal{}, errNoSession
 	}
-	p, err := c.opt.Identity.Principal(r.Context(), identity.Identity{Subject: s.Subject, Groups: s.Groups, Credential: s.Credential})
-	if err != nil {
-		// A revoked or expired API token ends the session.
+	end := func(err error) (*store.Session, core.Principal, error) {
 		_ = c.opt.Sessions.DeleteSession(context.WithoutCancel(r.Context()), hash)
+		return nil, core.Principal{}, err
+	}
+	// A way of signing in that is no longer enabled ends the sessions it started.
+	if (s.Credential == "oidc" && c.opt.OIDC == nil) || (strings.HasPrefix(s.Credential, "token:") && !c.opt.APITokens) {
+		return end(fmt.Errorf("%w: sign-in with %s is no longer enabled", identity.ErrUnauthenticated, s.Credential))
+	}
+	p, err := c.opt.Identity.Principal(r.Context(), identity.Identity{Subject: s.Subject, Groups: s.Groups, Credential: s.Credential})
+	if errors.Is(err, identity.ErrUnauthenticated) {
+		// A revoked or expired API token ends the session.
+		return end(err)
+	}
+	if err != nil {
 		return nil, core.Principal{}, err
 	}
 	p.Adapter = Adapter

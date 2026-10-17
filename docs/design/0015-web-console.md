@@ -8,9 +8,9 @@
 
 A browser console for the people around the agents: approvers decide requests with the
 diff in front of them, and auditors search what was done. It is an adapter like MCP. Every
-page that reads or decides calls a tool through the engine as the signed-in principal
-(`principal.adapter == "console"`), so policy, approvals and audit apply exactly as they do
-for an agent. The console holds no data and no authority of its own.
+page that reads Opsward's state or decides calls a tool through the engine as the
+signed-in principal (`principal.adapter == "console"`), so policy, approvals and audit apply
+exactly as they do for an agent. The console holds no data and no authority of its own.
 
 ```yaml
 server:
@@ -39,8 +39,9 @@ It is restart-only, like the rest of `server`.
   (`search_audit`, below), newest first, and one record with its decision, outcome and
   change.
 - **You**: the signed-in principal, its groups, how it signed in and when the session ends,
-  and the bindings that name it. What policy says about a person is shown to that person;
-  other people's bindings are not.
+  and the bindings that name it. What policy says about a person is shown to that person,
+  read from the policy in force rather than through a tool; other people's bindings are
+  not.
 
 Policy is not edited in the console. The configuration file is its source of truth and is
 changed through review like any other declarative source; a console that wrote policy
@@ -58,13 +59,17 @@ records are left out: `opsward audit verify` is for the chain.
 Records describe other people's work, which is not the same as reading a workload, so:
 
 - **A role grants `search_audit` only by naming it.** `risk: [read]` does not include it;
-  a viewer does not become an auditor.
+  a viewer does not become an auditor. Naming is needed to grant, not to take away: a
+  binding that denies `risk: [read]` covers it too.
+- **A caller no binding grants it to is denied** before anything is read.
 - **Each record is decided as a call at its own scope.** It is kept only when policy allows
   `search_audit` there: a record in a namespace needs a grant covering the namespace, one
   for a whole environment a grant covering every namespace of it, and one with no
   environment (approval tools, knowledge search, unknown tools) a grant limited to no
   environment. A team's auditors see their namespaces and nothing wider. Records do not
-  keep the target's labels, so a grant narrowed to `apps` shows none.
+  keep the target's labels, so a grant narrowed to `apps` shows none. The limit of 100
+  counts the records kept, and a search offers to continue only when one more kept record
+  exists or it stopped reading.
 - Records are already redacted when written (0002). Searching the audit is itself audited.
 
 ## Signing in
@@ -89,7 +94,8 @@ carries a random identifier; the store keeps its hash. A session lasts `sessionT
 never past the API token's expiry. Groups from the issuer are fixed for the session, so a
 person removed from a group there keeps it until the session ends; internal groups are
 looked up on every request, and policy is the current one, so editing either takes effect
-at once. Sign-ins are logged; the calls a person makes are audited as any other.
+at once. A session ends when the way it signed in is no longer enabled. Sign-ins are
+logged; the calls a person makes are audited as any other.
 
 ## Browser protections
 

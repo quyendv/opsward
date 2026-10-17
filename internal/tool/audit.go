@@ -121,16 +121,16 @@ func SearchAudit(r AuditReader) (engine.Tool, error) {
 			var next, note string
 			return &engine.Prepared{
 				Args: obj,
-				RunList: func(ctx context.Context, _ string) ([]engine.Item, error) {
-					items, last, stopped, err := scanAudit(ctx, r, q, v)
+				RunExact: func(ctx context.Context, keep func(engine.Item) bool) ([]engine.Item, int, error) {
+					items, read, last, stopped, err := scanAudit(ctx, r, q, v, keep)
 					if err != nil {
-						return nil, err
+						return nil, read, err
 					}
 					if stopped != "" {
 						next = encodeCursor(last)
 						note = stopped
 					}
-					return items, nil
+					return items, read, nil
 				},
 				Wrap: func(kept []any) any { return AuditSearch{Records: kept, Next: next, Note: note} },
 			}, nil
@@ -138,37 +138,41 @@ func SearchAudit(r AuditReader) (engine.Tool, error) {
 	}, nil
 }
 
-// scanAudit reads newest first until it has auditSearchLimit matches, has read
-// auditSearchScan records, or runs out. When it stops early it returns the last record
-// it read and why.
-func scanAudit(ctx context.Context, r AuditReader, q store.AuditQuery, v auditInput) ([]engine.Item, store.AuditPosition, string, error) {
+// scanAudit reads newest first until it has found more than auditSearchLimit records
+// that match the filters and that policy lets the caller see, has read auditSearchScan
+// records, or runs out. When it stops early it returns the last record it read and why.
+func scanAudit(ctx context.Context, r AuditReader, q store.AuditQuery, v auditInput, keep func(engine.Item) bool) ([]engine.Item, int, store.AuditPosition, string, error) {
 	var items []engine.Item
-	var last store.AuditPosition
+	var last, shown store.AuditPosition
 	subject := core.NormalizeSubject(v.Subject)
-	for scanned := 0; ; {
+	scanned := 0
+	for {
 		rows, err := r.RecentAudit(ctx, q)
 		if err != nil {
-			return nil, last, "", err
+			return nil, scanned, last, "", err
 		}
 		for _, row := range rows {
 			scanned++
 			last = store.AuditPosition{Time: row.Time, Writer: row.Writer, Seq: row.Seq}
 			var rec audit.Record
 			if err := json.Unmarshal(row.Body, &rec); err != nil {
-				return nil, last, "", fmt.Errorf("audit record %s: %w", row.ID, err)
+				return nil, scanned, last, "", fmt.Errorf("audit record %s: %w", row.ID, err)
 			}
-			if matches(rec, v, subject) {
-				items = append(items, engine.Item{Key: rec.ID, Scope: rec.Scope, Data: rec})
+			if it := (engine.Item{Key: rec.ID, Scope: rec.Scope, Data: rec}); matches(rec, v, subject) && keep(it) {
+				// One more than the limit tells that there are more; the next page starts
+				// after the last one shown.
 				if len(items) == auditSearchLimit {
-					return items, last, "more records match; continue with next", nil
+					return items, scanned, shown, "more records match; continue with next", nil
 				}
+				items = append(items, it)
+				shown = last
 			}
 			if scanned == auditSearchScan {
-				return items, last, fmt.Sprintf("read %d records without finishing; continue with next, or narrow the time range", auditSearchScan), nil
+				return items, scanned, last, fmt.Sprintf("read %d records without finishing; continue with next, or narrow the time range", auditSearchScan), nil
 			}
 		}
 		if len(rows) < q.Limit {
-			return items, last, "", nil
+			return items, scanned, last, "", nil
 		}
 		q.Before = &last
 	}

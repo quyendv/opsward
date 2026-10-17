@@ -60,9 +60,10 @@ func TestSearchAuditKeepsRecordsPolicyGrants(t *testing.T) {
 	_ = f.call("get_workload_status", `{"environment":"staging","namespace":"other","kind":"Deployment","name":"api"}`)
 	_ = f.call("list_environments", `{}`)
 
-	// A viewer's risk class does not grant search_audit.
-	if got := f.searchAudit(); len(got) != 0 {
-		t.Fatalf("a viewer found %v", got)
+	// A viewer's risk class does not grant search_audit, and a caller without a grant is
+	// denied before anything is read.
+	if _, err := f.app.Engine.Invoke(context.Background(), f.app.Principal, "search_audit", json.RawMessage(`{}`)); !denied(err) {
+		t.Fatalf("a viewer: err = %v", err)
 	}
 
 	f.reopenWith("    - name: audit-shop\n      subjects: { groups: [team-a] }\n      role: auditor\n      scope: { namespaces: [shop] }\n")
