@@ -247,7 +247,7 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 			role := &rbacv1.Role{TypeMeta: typeMeta("Role"), ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Rules: rules}
 			if declared[d.Profile].Impersonate != nil {
 				objs = append(objs, object{obj: role, note: fmt.Sprintf(
-					"%s is not bound: profile %s acts as its callers, so bind it to those who use delivery tools.", name, d.Profile)})
+					"%s is not bound: profile %s acts as its callers, so bind it to those who use get_delivery_status, resolve_source or propose_change.", name, d.Profile)})
 				continue
 			}
 			objs = append(objs,
@@ -260,7 +260,7 @@ func clusterRBAC(cfg *config.Config, cluster string, grants map[string]map[strin
 	}
 	for _, profile := range profiles {
 		if imp := declared[profile].Impersonate; imp != nil {
-			o, err := impersonationRBAC(profile, imp, reach[profile], subject(profile))
+			o, err := impersonationRBAC(profile, imp, reach[profile], func() rbacv1.Subject { return subject(profile) })
 			if err != nil {
 				return nil, fmt.Errorf("cluster %s: %w", cluster, err)
 			}
@@ -314,8 +314,9 @@ func roleBinding(name, ns string, ref rbacv1.RoleRef, subjects []rbacv1.Subject)
 
 // impersonationRBAC lets a profile's credential act as the principals that reach the
 // profile, and no one else where they can be listed: users when no group or every
-// principal reaches it, groups always (docs/design/0014).
-func impersonationRBAC(profile string, imp *config.Impersonate, g policy.Grantees, subject rbacv1.Subject) ([]object, error) {
+// principal reaches it, groups always (docs/design/0014). subject is called only when an
+// object binds it, so that --subject is checked against what is bound.
+func impersonationRBAC(profile string, imp *config.Impersonate, g policy.Grantees, subject func() rbacv1.Subject) ([]object, error) {
 	name := rbacPrefix + profile + ":impersonate"
 	var rules []rbacv1.PolicyRule
 	var note string
@@ -348,7 +349,7 @@ func impersonationRBAC(profile string, imp *config.Impersonate, g policy.Grantee
 	}
 	return []object{
 		{obj: clusterRole(name, rules), note: note},
-		{obj: clusterRoleBinding(name, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name}, []rbacv1.Subject{subject})},
+		{obj: clusterRoleBinding(name, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name}, []rbacv1.Subject{subject()})},
 	}, nil
 }
 

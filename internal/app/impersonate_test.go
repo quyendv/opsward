@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	rbacv1 "k8s.io/api/rbac/v1"
+
 	"github.com/quyendv/opsward/internal/config"
 )
 
@@ -161,5 +163,28 @@ func TestRenderRBACRefusesSystemNames(t *testing.T) {
 	}
 	if _, err := RenderRBAC(cfg, RBACOptions{Cluster: "cluster-a"}); err == nil || !strings.Contains(err.Error(), "system:kube-controller-manager") {
 		t.Fatalf("err = %v, want the system: user refused", err)
+	}
+}
+
+// A --subject for a profile no rendered object binds is a mistake, impersonating or not.
+func TestRenderRBACSubjectForAnImpersonatingProfileThatBindsNothing(t *testing.T) {
+	doc := strings.Replace(impersonationConfig, "  delivery: { type: argocd, cluster: cluster-a }",
+		"  delivery: { type: argocd, cluster: cluster-a, profile: operator }", 1)
+	// Nobody reaches the operator, so it renders no impersonation and binds nothing.
+	doc = strings.Replace(doc, "    - { name: restart-staging, subjects: { users: [Bob@Example.com] }, role: restarter, scope: { environments: [staging] } }\n", "", 1)
+	doc = strings.Replace(doc, "    - { name: view, subjects: { groups: [team-a] }, role: viewer }\n", "", 1)
+	doc = strings.Replace(doc, "    - { name: ops-view, subjects: { groups: [ops] }, role: viewer, scope: { environments: [production] } }\n", "", 1)
+	doc = strings.Replace(doc, "  bindings:\n", "  bindings: []\n", 1)
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, subject, err := ParseRBACSubject("operator=User:someone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RenderRBAC(cfg, RBACOptions{Cluster: "cluster-a", Subjects: map[string]rbacv1.Subject{p: subject}})
+	if err == nil || !strings.Contains(err.Error(), `--subject names profile "operator"`) {
+		t.Fatalf("err = %v, want the unused --subject refused", err)
 	}
 }

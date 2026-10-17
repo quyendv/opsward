@@ -35,7 +35,11 @@ providers:
   a person reaches the RBAC bound to their own user name, provided Opsward's subject claim
   is the API server's username claim, and the name is not an address whose case matters.
 - **The groups** are the principal's groups that a binding granting tools through this
-  profile names, each after `groupPrefix`. Other groups are not sent: the credential may
+  profile names, each after `groupPrefix`. The reader also serves every call's label lookup
+  when policy reads labels, and the delivery profile reads Applications for every caller of
+  `get_delivery_status`, `resolve_source` and `propose_change`, so they send the groups of
+  every principal policy grants tools to: in the reader's cluster, or anywhere for the
+  delivery profile. Other groups are not sent: the credential may
   impersonate only the groups listed for it, and one group it may not impersonate fails the
   whole request. The API server adds `system:authenticated` itself. Groups are Opsward's:
   internal groups, a token's groups, and the identity provider's groups after
@@ -54,7 +58,12 @@ The reader's label lookup before authorization (0006) runs as the caller too, so
 the cluster does not let read a workload is decided by policy as for unknown labels. A
 listing across an environment keeps the kinds and namespaces the cluster lets the caller
 list, and is refused only when it lets them list none; a profile acting as itself still
-fails when refused, since that is a misconfiguration.
+fails when refused, since that is a misconfiguration. An environment with namespace
+patterns lists the cluster's namespaces first, so its callers need `list` on namespaces.
+
+Approvals do not lend the approver's permissions: the dry run, the approved retry and the
+change all act as the requester, so the cluster must let the requester make the change.
+An approval is a second gate, not a grant.
 
 ## What the credential needs
 
@@ -64,7 +73,9 @@ profile name. A binding granted to groups, or to every principal, names no users
 users rule then has no `resourceNames`: the credential can act as any user name, the
 cluster's own `system:` users included. Opsward never sends one, but whoever holds the
 credential could, so it deserves the care of an administrator's. Groups stay limited to
-those listed, and `rbac render` refuses to grant a `system:` user or group. The people need
+those listed, and `rbac render` refuses to grant a `system:` user or group. A binding that
+denies a role in a whole environment does not narrow these lists: they name a few more
+people than can reach the profile, never fewer. The people need
 their own RBAC for what the tools do.
 
 `opsward rbac render` renders, for an impersonating profile, the ClusterRole
