@@ -65,7 +65,8 @@ type Outcome struct {
 	Listed *Listed `json:"listed,omitempty"`
 }
 
-// Listed counts a listing's items: read from the backend, and kept by policy.
+// Listed counts a listing's items: read from the backend, and kept by policy. For an
+// exact listing such as search_audit, Read counts the records read, before its filters.
 type Listed struct {
 	Read int `json:"read"`
 	Kept int `json:"kept"`

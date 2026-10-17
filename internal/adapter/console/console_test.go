@@ -514,3 +514,84 @@ func TestATransientFailureKeepsTheSession(t *testing.T) {
 		t.Fatalf("the cookie was cleared: %v", got)
 	}
 }
+
+// The notice after a decision says only what a decision can say.
+func TestApprovalsNoticeIsNotFreeText(t *testing.T) {
+	e := newEnv(t, Options{APITokens: true})
+	e.signInWithToken("bob@example.com")
+	body := e.do("GET", "/console/approvals?decided=01a1493c-0eb2-719c-90e0-f27ca912225c&as=approved", nil).Body
+	if !strings.Contains(body, "Request 01a1493c-0eb2-719c-90e0-f27ca912225c: approved.") {
+		t.Fatalf("no notice for a real decision:\n%s", body)
+	}
+	for _, q := range []string{"decided=x&as=moved+to+attacker.test", "decided=Call+attacker.test+now&as=approved"} {
+		if body := e.do("GET", "/console/approvals?"+q, nil).Body; strings.Contains(body, "attacker.test") {
+			t.Fatalf("%s: the page repeats the query", q)
+		}
+	}
+}
+
+// blockingEngine waits for the call's context to end.
+type blockingEngine struct{}
+
+func (b *blockingEngine) Invoke(ctx context.Context, _ core.Principal, _ string, _ json.RawMessage) (*engine.Result, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestCallsHaveATimeout(t *testing.T) {
+	e := newEnv(t, Options{APITokens: true})
+	e.signInWithToken("alice@example.com")
+	h, err := New(Options{Engine: &blockingEngine{}, Identity: e.auth, Sessions: e.st, APITokens: true, SessionTTL: time.Hour, CallTimeout: 50 * time.Millisecond, Now: func() time.Time { return e.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewTLSServer(h)
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(e.srv.URL)
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/console/audit", nil)
+	req.AddCookie(e.client.Jar.Cookies(u)[0])
+	done := make(chan *http.Response, 1)
+	go func() {
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Error(err)
+			done <- nil
+			return
+		}
+		_ = resp.Body.Close()
+		done <- resp
+	}()
+	select {
+	case resp := <-done:
+		if resp != nil && resp.StatusCode != http.StatusBadGateway {
+			t.Fatalf("a call that timed out: %d", resp.StatusCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call did not time out")
+	}
+}
+
+func TestAuditPageStatusOnFailure(t *testing.T) {
+	e := newEnv(t, Options{APITokens: true})
+	e.signInWithToken("alice@example.com")
+	e.eng.errs["search_audit"] = &engine.DeniedError{Decision: core.Decision{Effect: core.EffectDeny, Rule: core.DefaultDenyRule}}
+	if resp := e.do("GET", "/console/audit", nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a denied search: %d", resp.StatusCode)
+	}
+	e.eng.errs["search_audit"] = errors.New("store down")
+	if resp := e.do("GET", "/console/audit", nil); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("a failed search: %d", resp.StatusCode)
+	}
+}
+
+// Signing in again replaces the browser's session rather than leaving the old one stored.
+func TestSigningInAgainEndsThePreviousSession(t *testing.T) {
+	e := newEnv(t, Options{APITokens: true})
+	e.signInWithToken("alice@example.com")
+	u, _ := url.Parse(e.srv.URL)
+	first := sha256.Sum256([]byte(e.client.Jar.Cookies(u)[0].Value))
+	e.signInWithToken("alice@example.com")
+	if _, ok, _ := e.st.Session(context.Background(), first[:]); ok {
+		t.Fatal("the previous session is still stored")
+	}
+}

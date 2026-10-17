@@ -42,6 +42,11 @@ func (a *Authenticator) Principal(ctx context.Context, id Identity) (core.Princi
 		case core.NormalizeSubject(t.Subject) != subject:
 			return core.Principal{}, unauthenticated("token " + tid + " names another subject")
 		}
+		if now := a.now(); now.Sub(t.LastUsedAt) >= touchInterval {
+			if err := a.store.TouchAPIToken(ctx, tid, now); err != nil {
+				a.log.Warn("recording API token use failed", "token", tid, "error", err)
+			}
+		}
 		groups = t.Groups
 	}
 	return core.Principal{Subject: subject, Groups: a.groups(subject, groups), Credential: id.Credential}, nil

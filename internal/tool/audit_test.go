@@ -216,3 +216,28 @@ func TestSearchAuditCountsOnlyWhatPolicyKeeps(t *testing.T) {
 		t.Fatalf("a caller who may see nothing: %d items, next %q, note %q", len(items), res.Next, res.Note)
 	}
 }
+
+// A search that names no window keeps its first page's window on later pages.
+func TestSearchAuditPagesKeepTheirWindow(t *testing.T) {
+	start := time.Date(2026, 10, 18, 8, 0, 0, 0, time.UTC)
+	f := &fakeAudit{}
+	// 50 records in the window's first hour, then 100 later ones.
+	for i := range 150 {
+		at := start.Add(-24*time.Hour + time.Duration(i)*time.Minute)
+		if i >= 50 {
+			at = start.Add(-time.Duration(150-i) * time.Minute)
+		}
+		f.add(t, audit.Record{Time: at, Phase: audit.PhaseOutcome, Principal: core.Principal{Subject: "alice"}, Tool: "get_workload_status", Outcome: &audit.Outcome{Status: audit.StatusOK}})
+	}
+	now := start
+	auditNow = func() time.Time { return now }
+	t.Cleanup(func() { auditNow = time.Now })
+	items, res := searchAudit(t, f, `{}`)
+	if len(items) != 100 || res.Next == "" {
+		t.Fatalf("first page: %d items, next %q", len(items), res.Next)
+	}
+	now = start.Add(2 * time.Hour)
+	if items, _ = searchAudit(t, f, `{"before":"`+res.Next+`"}`); len(items) != 50 {
+		t.Fatalf("second page, two hours later: %d items, want the window's other 50", len(items))
+	}
+}

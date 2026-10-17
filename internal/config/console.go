@@ -75,14 +75,21 @@ func (c *Config) validateConsole(fail func(string, ...any)) {
 }
 
 func (c *Config) consoleWarnings() []string {
-	if c.Console == nil || c.Server.HTTP == nil {
+	h := c.Server.HTTP
+	if c.Console == nil || h == nil {
 		return nil
 	}
-	u, err := url.Parse(c.Server.HTTP.PublicURL)
-	if err != nil || u.Scheme != "http" {
-		return nil
+	loopback := func(host string) bool { return host == "localhost" || net.ParseIP(host).IsLoopback() }
+	if h.PublicURL == "" {
+		// Where people reach it is unknown: judge by where it listens.
+		host, _, err := net.SplitHostPort(h.Address)
+		if err != nil || h.TLS != nil || loopback(host) {
+			return nil
+		}
+		return []string{"console: browsers keep the session cookie only over HTTPS or on localhost, and server.http serves plain HTTP; terminate TLS in front of it"}
 	}
-	if host := u.Hostname(); host == "localhost" || net.ParseIP(host).IsLoopback() {
+	u, err := url.Parse(h.PublicURL)
+	if err != nil || u.Scheme != "http" || loopback(u.Hostname()) {
 		return nil
 	}
 	return []string{"console: browsers keep the session cookie only over HTTPS or on localhost, and server.http.publicURL is plain HTTP"}

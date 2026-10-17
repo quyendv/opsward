@@ -68,7 +68,7 @@ func TestConsoleThroughTheApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	get := func(path string) string {
+	get := func(path string, want int) string {
 		t.Helper()
 		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
 		resp, err := client.Do(req)
@@ -77,17 +77,18 @@ func TestConsoleThroughTheApp(t *testing.T) {
 		}
 		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != want {
 			t.Fatalf("%s: %d\n%s", path, resp.StatusCode, b)
 		}
 		return string(b)
 	}
-	if body := get("/console/you"); !strings.Contains(body, "platform-audits") {
+	if body := get("/console/you", http.StatusOK); !strings.Contains(body, "platform-audits") {
 		t.Fatalf("you:\n%s", body)
 	}
-	_ = get("/console/approvals")
+	// Alice is granted no approval tools: the page says so, and the call is audited.
+	_ = get("/console/approvals", http.StatusForbidden)
 	// The audit shows the console's own calls, made as the person through the console.
-	if body := get("/console/audit"); !strings.Contains(body, "list_approvals") || !strings.Contains(body, "console") {
+	if body := get("/console/audit", http.StatusOK); !strings.Contains(body, "list_approvals") || !strings.Contains(body, "console") {
 		t.Fatalf("audit:\n%s", body)
 	}
 }

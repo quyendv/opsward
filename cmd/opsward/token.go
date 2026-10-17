@@ -91,10 +91,15 @@ func token(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "list":
 		return listTokens(ctx, adm, stdout)
 	case "revoke":
-		if err := adm.RevokeToken(ctx, actor(), fs.Arg(0)); err != nil {
+		// The argument may be the whole token; only its ID is printed.
+		id, err := identity.TokenID(fs.Arg(0))
+		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stderr, "revoked token %s\n", fs.Arg(0))
+		if err := adm.RevokeToken(ctx, actor(), id); err != nil {
+			return err
+		}
+		fmt.Fprintf(stderr, "revoked token %s\n", id)
 	}
 	return nil
 }

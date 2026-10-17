@@ -34,9 +34,10 @@ const (
 	maxAnswerBytes  = 2000
 )
 
-// excluded are read tools an agent is not offered: approvals hold other people's
-// changes and decisions, not evidence about a workload.
-var excluded = map[string]bool{"list_approvals": true}
+// excluded are read tools an agent is not offered: approvals and the audit hold other
+// people's changes, decisions and calls, not evidence about a workload, and would reach
+// the model provider.
+var excluded = map[string]bool{"list_approvals": true, "search_audit": true}
 
 const system = `You investigate an alert on a Kubernetes workload for an on-call engineer, using read-only tools.
 Start from the alert and the diagnosis you are given. Call tools only to check a cause the evidence points to; stop as soon as you know.

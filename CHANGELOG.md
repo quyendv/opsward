@@ -17,7 +17,13 @@ All notable changes to this project are documented here. The format follows
   the server without script (design note 0015).
 - `search_audit`: audit records newest first, filtered by time, principal, tool, status,
   environment and namespace. A role grants it only by naming it, and each record is kept
-  only where policy grants the tool at the record's own scope.
+  only where policy grants the tool at the record's own scope. Agent mode does not offer
+  it.
+
+### Fixed
+
+- `opsward token revoke` given the whole token printed it, secret included; it prints the
+  token's ID.
 
 ## [0.8.0] - 2026-10-17
 
