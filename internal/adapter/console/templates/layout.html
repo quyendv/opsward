@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Opsward</title>
+<link rel="stylesheet" href="/console/static/console.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/console/approvals">Opsward</a>
+  {{if .Principal}}
+  <nav>
+    <a href="/console/approvals"{{if eq .Nav "approvals"}} aria-current="page"{{end}}>Approvals</a>
+    <a href="/console/audit"{{if eq .Nav "audit"}} aria-current="page"{{end}}>Audit</a>
+    <a href="/console/you"{{if eq .Nav "you"}} aria-current="page"{{end}}>You</a>
+  </nav>
+  <form class="signout" method="post" action="/console/logout">
+    <span class="who">{{.Principal.Subject}}</span>
+    <button type="submit">Sign out</button>
+  </form>
+  {{end}}
+</header>
+<main>
+  <h1>{{.Title}}</h1>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+  {{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
+  {{template "content" .}}
+</main>
+</body>
+</html>

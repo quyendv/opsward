@@ -43,6 +43,14 @@ type Tool struct {
 	// must be reachable before anything is read, and each item is kept only when policy
 	// allows the tool on the item's scope. They implement RunList, not Run.
 	List bool
+	// Exact list tools decide each item as a call at the item's scope, rather than by
+	// reachability: an item without a namespace needs a grant covering its whole
+	// environment, and one without an environment a grant limited to none, such as
+	// audit records (docs/design/0015). A caller no binding grants the tool to is denied
+	// before anything is read. They implement RunExact.
+	Exact bool
+	// ByName tools are granted only by roles that name them, never by a risk class.
+	ByName bool
 	// NeverApproved tools cannot wait for an approval, such as deciding approvals: a
 	// binding that would require one denies them instead.
 	NeverApproved bool
@@ -78,6 +86,10 @@ type Prepared struct {
 	Preview func(ctx context.Context, profile string) (*core.Change, error)
 	// RunList performs a List tool's call with the named profile.
 	RunList func(ctx context.Context, profile string) ([]Item, error)
+	// RunExact performs an Exact tool's call. keep reports whether policy lets the caller
+	// see an item, so that the tool's limits count what the caller is shown; it returns
+	// the items it kept and how many it read.
+	RunExact func(ctx context.Context, keep func(Item) bool) ([]Item, int, error)
 	// Wrap, if set, shapes a List tool's kept items into its result; by default the
 	// result is the list of their data.
 	Wrap func(kept []any) any
@@ -85,6 +97,8 @@ type Prepared struct {
 
 // Item is one element of a listing, with the scope policy decides it on.
 type Item struct {
+	// Key tells items apart when several share a scope; empty, the scope does.
+	Key   string
 	Scope core.Scope
 	Data  any
 }
@@ -94,6 +108,12 @@ type Item struct {
 // (policy.Policy.ReachableProfiles). Listings need it; without it they are denied.
 type Reacher interface {
 	ReachableProfiles(core.Request) []string
+}
+
+// Granter is implemented by an Authorizer that can tell whether any binding could allow
+// a principal a tool, wherever: an Exact listing is denied outright otherwise.
+type Granter interface {
+	MayAllow(req core.Request) bool
 }
 
 // Authorizer decides calls. policy.Policy implements it.
@@ -435,6 +455,9 @@ func (e *Engine) list(ctx context.Context, st *state, tool Tool, prep *Prepared,
 		rec.Decision = &dec
 		return nil, finish(audit.StatusDenied, &DeniedError{Decision: dec})
 	}
+	if tool.Exact {
+		return e.exact(ctx, st, tool, prep, rec, finish, req, deny)
+	}
 	reacher, ok := st.authz.(Reacher)
 	if !ok {
 		return deny()
@@ -468,7 +491,10 @@ func (e *Engine) list(ctx context.Context, st *state, tool Tool, prep *Prepared,
 		listed = true
 		read += len(items)
 		for _, it := range items {
-			key := it.Scope.Environment + "/" + it.Scope.Namespace + "/" + it.Scope.Kind + "/" + it.Scope.Name
+			key := it.Key
+			if key == "" {
+				key = it.Scope.Environment + "/" + it.Scope.Namespace + "/" + it.Scope.Kind + "/" + it.Scope.Name
+			}
 			// Defence in depth: the tool filters by the environment, and so does the engine.
 			if seen[key] || (!tool.Global && st.validateScope(it.Scope) != nil) {
 				continue
@@ -503,6 +529,51 @@ func (e *Engine) list(ctx context.Context, st *state, tool Tool, prep *Prepared,
 	}
 	rec.Outcome = &audit.Outcome{Listed: &audit.Listed{Read: read, Kept: len(kept)}}
 	// Listings carry no knowledge notes: notes describe a target, and a listing has none.
+	var out any = kept
+	if prep.Wrap != nil {
+		out = prep.Wrap(kept)
+	}
+	data, err := normalize(out)
+	if err != nil {
+		return nil, finish(audit.StatusError, err)
+	}
+	if err := finish(audit.StatusOK, nil); err != nil {
+		return nil, err
+	}
+	return &Result{Data: data}, nil
+}
+
+// exact runs an Exact listing: denied unless some binding grants the tool to the caller,
+// and each item kept only where policy allows the tool at its scope.
+func (e *Engine) exact(ctx context.Context, st *state, tool Tool, prep *Prepared, rec *audit.Record, finish func(string, error) error, req core.Request, deny func() (*Result, error)) (*Result, error) {
+	g, ok := st.authz.(Granter)
+	if !ok || !g.MayAllow(req) {
+		return deny()
+	}
+	rec.Decision = &core.Decision{Effect: core.EffectAllow, Rule: core.PerItemRule}
+	if prep.RunExact == nil {
+		return nil, finish(audit.StatusError, fmt.Errorf("tool %s lists exactly but has no RunExact", tool.Name))
+	}
+	keep := func(it Item) bool {
+		ireq := req
+		ireq.Scope = it.Scope
+		return st.authz.Decide(ireq).Effect == core.EffectAllow
+	}
+	items, read, err := prep.RunExact(ctx, keep)
+	if errors.Is(err, core.ErrInvalidInput) {
+		return nil, finish(audit.StatusInvalid, err)
+	}
+	if err != nil {
+		return nil, finish(audit.StatusError, err)
+	}
+	kept := []any{}
+	for _, it := range items {
+		// Defence in depth: the tool keeps by the same function.
+		if keep(it) {
+			kept = append(kept, it.Data)
+		}
+	}
+	rec.Outcome = &audit.Outcome{Listed: &audit.Listed{Read: read, Kept: len(kept)}}
 	var out any = kept
 	if prep.Wrap != nil {
 		out = prep.Wrap(kept)

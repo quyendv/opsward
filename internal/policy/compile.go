@@ -65,6 +65,13 @@ func Compile(cfg Config, cat Catalog, log *slog.Logger) (*Policy, []string, erro
 		warnings = append(warnings, "policy has no bindings: every call will be denied")
 	}
 
+	byName := map[string]bool{}
+	for name, t := range cat.Tools {
+		if t.ByName {
+			byName[name] = true
+		}
+	}
+
 	p := &Policy{appLabel: appLabel, log: log}
 	seen := map[string]bool{}
 	for i, b := range cfg.Bindings {
@@ -85,6 +92,11 @@ func Compile(cfg Config, cat Catalog, log *slog.Logger) (*Policy, []string, erro
 			fail("%s: unknown effect %q", where, b.Effect)
 		}
 		role, ok := cfg.Roles[b.Role]
+		// Naming a tool is needed to grant it, never to take it away: a deny by risk
+		// class covers it too.
+		if b.Effect != core.EffectDeny {
+			role.byName = byName
+		}
 		if !ok {
 			fail("%s: unknown role %q", where, b.Role)
 		}

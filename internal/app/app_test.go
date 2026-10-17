@@ -142,7 +142,7 @@ func TestOpenRegistersM2Tools(t *testing.T) {
 	for _, tl := range f.app.Engine.Tools() {
 		names = append(names, tl.Name)
 	}
-	if got := strings.Join(names, ","); got != "diagnose_workload,get_knowledge,get_workload_status,list_environments,list_namespaces,list_workload_events,list_workload_logs,list_workloads,restart_workload,scale_workload,search_knowledge" {
+	if got := strings.Join(names, ","); got != "diagnose_workload,get_knowledge,get_workload_status,list_environments,list_namespaces,list_workload_events,list_workload_logs,list_workloads,restart_workload,scale_workload,search_audit,search_knowledge" {
 		t.Fatalf("tools = %s", got)
 	}
 	if err := f.call("search_knowledge", `{"query":"crash"}`); err != nil {

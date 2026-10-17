@@ -1,0 +1,15 @@
+{{define "content"}}
+<section class="card narrow">
+  {{if .Data.OIDC}}
+  <p><a class="button primary" href="/console/login/oidc">Sign in with your identity provider</a></p>
+  {{end}}
+  {{if .Data.APITokens}}
+  {{if .Data.OIDC}}<p class="muted">or</p>{{end}}
+  <form method="post" action="/console/login/token">
+    <label for="token">API token</label>
+    <input id="token" name="token" type="password" autocomplete="off" required placeholder="opw_…">
+    <button type="submit">Sign in with the token</button>
+  </form>
+  {{end}}
+</section>
+{{end}}

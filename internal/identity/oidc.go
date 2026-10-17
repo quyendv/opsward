@@ -40,6 +40,16 @@ const (
 type oidcState struct {
 	opt      OIDCOptions
 	verifier atomic.Pointer[oidc.IDTokenVerifier]
+	// issued are what verifying an ID token for another client needs, and where the
+	// console signs people in (docs/design/0015). Set with verifier.
+	issued atomic.Pointer[issued]
+}
+
+type issued struct {
+	keys     *keySet
+	algs     []string
+	authURL  string
+	tokenURL string
 }
 
 func (a *Authenticator) oidcReady() bool { return a.oidc != nil && a.oidc.verifier.Load() != nil }
@@ -68,7 +78,11 @@ func (a *Authenticator) Discover(ctx context.Context) {
 				err = errors.New("discovery document has no jwks_uri")
 			}
 			if err == nil {
-				o.verifier.Store(o.newVerifier(client, meta.JWKSURI, meta.Algs, a.now))
+				v, is := o.newVerifier(client, meta.JWKSURI, meta.Algs, a.now)
+				ep := p.Endpoint()
+				is.authURL, is.tokenURL = ep.AuthURL, ep.TokenURL
+				o.issued.Store(is)
+				o.verifier.Store(v)
 				a.log.Info("OIDC issuer discovered", "issuer", o.opt.Issuer)
 				return
 			}
@@ -90,7 +104,7 @@ func (a *Authenticator) Discover(ctx context.Context) {
 	}
 }
 
-func (o *oidcState) newVerifier(client *http.Client, jwksURI string, algNames []string, now func() time.Time) *oidc.IDTokenVerifier {
+func (o *oidcState) newVerifier(client *http.Client, jwksURI string, algNames []string, now func() time.Time) (*oidc.IDTokenVerifier, *issued) {
 	if len(algNames) == 0 {
 		algNames = []string{oidc.RS256}
 	}
@@ -109,7 +123,8 @@ func (o *oidcState) newVerifier(client *http.Client, jwksURI string, algNames []
 	for i, a := range algs {
 		names[i] = string(a)
 	}
-	return oidc.NewVerifier(o.opt.Issuer, ks, &oidc.Config{ClientID: o.opt.Audience, Now: now, SupportedSigningAlgs: names})
+	return oidc.NewVerifier(o.opt.Issuer, ks, &oidc.Config{ClientID: o.opt.Audience, Now: now, SupportedSigningAlgs: names}),
+		&issued{keys: ks, algs: names}
 }
 
 func (a *Authenticator) authenticateOIDC(ctx context.Context, raw string) (core.Principal, time.Time, error) {
@@ -144,20 +159,28 @@ func (a *Authenticator) authenticateOIDC(ctx context.Context, raw string) (core.
 	if typ, ok := claims["typ"].(string); ok && !strings.EqualFold(typ, "Bearer") && !accessTokenType(typ) {
 		return core.Principal{}, time.Time{}, unauthenticated(fmt.Sprintf("OIDC token typ claim %q is not an access token", typ))
 	}
-	opt := a.oidc.opt
-	subject, _ := claims[opt.SubjectClaim].(string)
-	subject = core.NormalizeSubject(subject)
-	if subject == "" {
-		return core.Principal{}, time.Time{}, unauthenticated(fmt.Sprintf("OIDC token has no %q claim", opt.SubjectClaim))
-	}
-	if opt.SubjectClaim == "email" && !verified(claims["email_verified"]) {
-		return core.Principal{}, time.Time{}, unauthenticated("OIDC token email_verified is not true")
-	}
-	groups := claimStrings(claims[opt.GroupsClaim])
-	for i, g := range groups {
-		groups[i] = opt.GroupsPrefix + g
+	subject, groups, err := a.oidc.names(claims)
+	if err != nil {
+		return core.Principal{}, time.Time{}, err
 	}
 	return core.Principal{Subject: subject, Groups: a.groups(subject, groups), Credential: "oidc"}, tok.Expiry, nil
+}
+
+// names maps a token's claims to a subject and the issuer's groups, prefixed.
+func (o *oidcState) names(claims map[string]any) (string, []string, error) {
+	subject, _ := claims[o.opt.SubjectClaim].(string)
+	subject = core.NormalizeSubject(subject)
+	if subject == "" {
+		return "", nil, unauthenticated(fmt.Sprintf("OIDC token has no %q claim", o.opt.SubjectClaim))
+	}
+	if o.opt.SubjectClaim == "email" && !verified(claims["email_verified"]) {
+		return "", nil, unauthenticated("OIDC token email_verified is not true")
+	}
+	groups := claimStrings(claims[o.opt.GroupsClaim])
+	for i, g := range groups {
+		groups[i] = o.opt.GroupsPrefix + g
+	}
+	return subject, groups, nil
 }
 
 // headerType returns the typ of a JWT's header, or "" when it has none or cannot be read.

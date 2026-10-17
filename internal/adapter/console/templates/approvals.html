@@ -1,0 +1,57 @@
+{{define "approval"}}
+<article class="card">
+  <header>
+    <strong>{{.Tool}}</strong>
+    <span class="scope">{{.Scope.Environment}}{{with .Scope.Namespace}} / {{.}}{{end}}{{with .Scope.Kind}} / {{.}}{{end}}{{with .Scope.Name}} {{.}}{{end}}</span>
+    <span class="status status-{{.Status}}">{{.Status}}</span>
+  </header>
+  <dl>
+    <dt>Request</dt><dd><code>{{.ID}}</code></dd>
+    <dt>Requested by</dt><dd>{{.Requester}}</dd>
+    <dt>Expires</dt><dd>{{time .ExpiresAt}}</dd>
+    {{with .DecidedBy}}<dt>Decided by</dt><dd>{{.}}</dd>{{end}}
+    {{with .Reason}}<dt>Reason</dt><dd>{{.}}</dd>{{end}}
+  </dl>
+  <pre class="diff">{{.Diff}}</pre>
+</article>
+{{end}}
+
+{{define "content"}}
+{{with .Data}}
+<section>
+  <h2>Waiting for you</h2>
+  {{range .Pending}}
+    {{template "approval" .}}
+    <form class="decide" method="post" action="/console/approvals/decide">
+      <input type="hidden" name="id" value="{{.ID}}">
+      <label for="reason-{{.ID}}">Reason</label>
+      <input id="reason-{{.ID}}" name="reason" type="text" maxlength="500">
+      <button type="submit" name="decision" value="approve" class="primary">Approve</button>
+      <button type="submit" name="decision" value="deny">Deny</button>
+    </form>
+  {{else}}
+    <p class="muted">Nothing waits for your decision.</p>
+  {{end}}
+</section>
+<section>
+  <h2>Your requests</h2>
+  {{range .Mine}}{{template "approval" .}}{{else}}<p class="muted">You have made no requests in the last day.</p>{{end}}
+</section>
+{{if .Others}}
+<section>
+  <h2>Decided</h2>
+  {{range .Others}}
+    {{template "approval" .}}
+    {{if eq .Status "approved"}}
+    <form class="decide" method="post" action="/console/approvals/decide">
+      <input type="hidden" name="id" value="{{.ID}}">
+      <label for="reason-{{.ID}}">Reason</label>
+      <input id="reason-{{.ID}}" name="reason" type="text" maxlength="500">
+      <button type="submit" name="decision" value="withdraw">Withdraw the approval</button>
+    </form>
+    {{end}}
+  {{end}}
+</section>
+{{end}}
+{{end}}
+{{end}}

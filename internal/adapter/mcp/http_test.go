@@ -396,3 +396,23 @@ func TestHTTPRoutesAuthenticate(t *testing.T) {
 		t.Fatalf("with a token: %d, %+v", resp.StatusCode, got)
 	}
 }
+
+// Handlers that authenticate themselves, such as the console, are served as they are.
+func TestHTTPHandlersAreServedAsTheyAre(t *testing.T) {
+	srv := httptest.NewServer(NewHTTPHandler(httpEngine(t, &nopAuditor{}), HTTPOptions{
+		Authenticate: tokens(map[string]string{}),
+		Handlers: map[string]http.Handler{"/console/": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTeapot)
+		})},
+	}))
+	defer srv.Close()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/console/login", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusTeapot {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}

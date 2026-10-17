@@ -174,6 +174,47 @@ func Audit(t *testing.T, open Opener) {
 		}
 	})
 
+	t.Run("recent audit across writers", func(t *testing.T) {
+		s, _ := open(t)
+		// w1: 1h, 2h, 3h; w2: 2h (the same time as w1-2), 4h.
+		for i := uint64(1); i <= 3; i++ {
+			if err := s.AppendAudit(ctx, row("w1", i, t0.Add(time.Duration(i)*time.Hour))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i, h := range []time.Duration{2, 4} {
+			if err := s.AppendAudit(ctx, row("w2", uint64(i+1), t0.Add(h*time.Hour))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ids := func(rows []store.AuditRow) string {
+			var out []string
+			for _, r := range rows {
+				out = append(out, r.ID)
+			}
+			return strings.Join(out, ",")
+		}
+		q := store.AuditQuery{Since: t0.Add(2 * time.Hour), Until: t0.Add(4 * time.Hour), Limit: 10}
+		rows, err := s.RecentAudit(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Newest first; since is included and until is not; a tie in time goes by writer.
+		if got := ids(rows); got != "w1-3,w2-1,w1-2" {
+			t.Fatalf("RecentAudit = %s", got)
+		}
+		q.Limit = 2
+		page, _ := s.RecentAudit(ctx, q)
+		if got := ids(page); got != "w1-3,w2-1" {
+			t.Fatalf("first page = %s", got)
+		}
+		last := page[len(page)-1]
+		q.Before = &store.AuditPosition{Time: last.Time, Writer: last.Writer, Seq: last.Seq}
+		if got, _ := s.RecentAudit(ctx, q); ids(got) != "w1-2" {
+			t.Fatalf("next page = %s", ids(got))
+		}
+	})
+
 	t.Run("ping", func(t *testing.T) {
 		s, _ := open(t)
 		if err := s.Ping(ctx); err != nil {

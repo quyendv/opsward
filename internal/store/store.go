@@ -33,6 +33,9 @@ type Store interface {
 	LastAuditBefore(ctx context.Context, writer string, t time.Time) (AuditRow, bool, error)
 	// ListAudit returns up to limit rows for writer with Seq > afterSeq, by Seq.
 	ListAudit(ctx context.Context, writer string, afterSeq uint64, limit int) ([]AuditRow, error)
+	// RecentAudit returns up to limit rows of every writer, newest first: by time, then
+	// writer, then sequence, all descending. docs/design/0015.
+	RecentAudit(ctx context.Context, q AuditQuery) ([]AuditRow, error)
 	// AuditWriters returns every writer that has rows, sorted.
 	AuditWriters(ctx context.Context) ([]string, error)
 	// PruneAudit deletes the rows for writer with Seq <= throughSeq.
@@ -73,9 +76,45 @@ type Store interface {
 	// it did: a request runs at most once, and not after its expiry.
 	UseApproval(ctx context.Context, id string, at time.Time) (bool, error)
 
+	// CreateSession stores a console session. An existing IDHash is an error.
+	// docs/design/0015.
+	CreateSession(ctx context.Context, s Session) error
+	// Session returns the session whose identifier hashes to idHash, expired or not.
+	Session(ctx context.Context, idHash []byte) (Session, bool, error)
+	// DeleteSession deletes a session; a missing one is not an error.
+	DeleteSession(ctx context.Context, idHash []byte) error
+	// PruneSessions deletes sessions that expired before before.
+	PruneSessions(ctx context.Context, before time.Time) (int64, error)
+
 	// Ping reports whether the store answers queries.
 	Ping(ctx context.Context) error
 	Close() error
+}
+
+// AuditQuery selects audit rows by time: Since <= Time < Until.
+type AuditQuery struct {
+	Since, Until time.Time
+	// Before, when set, continues a listing after the row it names.
+	Before *AuditPosition
+	Limit  int
+}
+
+// AuditPosition names a row in the newest-first order of RecentAudit.
+type AuditPosition struct {
+	Time   time.Time
+	Writer string
+	Seq    uint64
+}
+
+// Session is a console session as stored: the hash of its identifier, never the
+// identifier. Groups are those of the credential; internal groups are not kept.
+type Session struct {
+	IDHash     []byte
+	Subject    string
+	Groups     []string
+	Credential string // as core.Principal.Credential
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
 }
 
 // APIToken is an API token as stored: the hash of its secret, never the secret.

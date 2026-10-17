@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A web console at `/console/` in remote mode (`console`): approvers decide requests with
+  the diff in front of them, auditors search the audit, and everyone sees what policy says
+  about them. Every page calls tools through the engine as the signed-in person, so policy
+  and audit apply as for an agent. Sign-in with the identity provider (authorization code
+  with PKCE, as a client of `identity.oidc`'s issuer) or with an API token; sessions are
+  kept in the store, end on sign-out, and end with a revoked token. Pages are rendered on
+  the server without script (design note 0015).
+- `search_audit`: audit records newest first, filtered by time, principal, tool, status,
+  environment and namespace. A role grants it only by naming it, and each record is kept
+  only where policy grants the tool at the record's own scope.
+
 ## [0.8.0] - 2026-10-17
 
 Impersonation: a Kubernetes profile can act as the person calling Opsward, so the

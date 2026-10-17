@@ -1,0 +1,42 @@
+{{define "content"}}
+{{with .Data}}
+<form class="filters" method="get" action="/console/audit">
+  <label>Since (UTC)<input name="since" type="datetime-local" value="{{.Filters.Since}}"></label>
+  <label>Until (UTC)<input name="until" type="datetime-local" value="{{.Filters.Until}}"></label>
+  <label>Principal<input name="subject" type="text" value="{{.Filters.Subject}}"></label>
+  <label>Tool<input name="tool" type="text" value="{{.Filters.Tool}}"></label>
+  <label>Status<select name="status">
+    <option value="">any</option>
+    {{$s := .Filters.Status}}{{range .Statuses}}<option{{if eq . $s}} selected{{end}}>{{.}}</option>{{end}}
+  </select></label>
+  <label>Environment<input name="environment" type="text" value="{{.Filters.Environment}}"></label>
+  <label>Namespace<input name="namespace" type="text" value="{{.Filters.Namespace}}"></label>
+  <button type="submit">Search</button>
+</form>
+{{with .Note}}<p class="notice">{{.}}</p>{{end}}
+<table class="records">
+  <thead><tr><th>Time</th><th>Principal</th><th>Tool</th><th>Scope</th><th>Decision</th><th>Status</th></tr></thead>
+  <tbody>
+  {{range .Records}}
+  <tr>
+    <td>{{time .Time}}</td>
+    <td>{{.Principal.Subject}}<br><span class="muted">{{.Principal.Adapter}}</span></td>
+    <td>{{.Tool}}{{if eq .Phase "intent"}} <span class="muted">(intent)</span>{{end}}</td>
+    <td>{{.Scope.Environment}}{{with .Scope.Namespace}} / {{.}}{{end}}{{with .Scope.Name}} / {{.}}{{end}}</td>
+    <td>{{with .Decision}}{{.Effect}} <span class="muted">{{.Rule}}</span>{{end}}</td>
+    <td>{{with .Outcome}}<span class="status status-{{.Status}}">{{.Status}}</span>{{end}}</td>
+  </tr>
+  <tr class="detail"><td colspan="6"><details><summary>Record {{.ID}}</summary>
+    {{with .Args}}<h3>Arguments</h3><pre>{{json .}}</pre>{{end}}
+    {{with .Outcome}}{{with .Error}}<h3>Error</h3><pre>{{.}}</pre>{{end}}{{end}}
+    {{with .Change}}<h3>Change</h3><pre>{{json .}}</pre>{{end}}
+    {{with .Decision}}<h3>Decision</h3><pre>{{json .}}</pre>{{end}}
+  </details></td></tr>
+  {{else}}
+  <tr><td colspan="6" class="muted">No records you may see match.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{with .Next}}<p><a class="button" href="{{.}}">Older records</a></p>{{end}}
+{{end}}
+{{end}}

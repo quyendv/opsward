@@ -1,4 +1,7 @@
 Opsward serves MCP at http://{{ include "opsward.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/mcp
+{{- if .Values.config.console }}
+and the web console at /console/ of the same address.
+{{- end }}
 {{- if .Values.localProfiles }}
 
 The profiles {{ join ", " .Values.localProfiles }} have ServiceAccounts but no permissions until

@@ -78,6 +78,8 @@ type App struct {
 	envs       environments
 	alertEnvs  alertEnvironments
 	tools      []engine.Tool
+	// policy is the policy in force, for what the console shows a person about it.
+	policy atomic.Pointer[policy.Policy]
 }
 
 // derived is everything a configuration determines that a reload replaces. It is built
@@ -190,7 +192,7 @@ func checkTools(cfg *config.Config) ([]engine.Tool, error) {
 	if f := featuresOf(cfg); f.proposals || f.delivery {
 		changes = &changeRoutes{}
 	}
-	return buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals, changes, featuresOf(cfg))
+	return buildTools(kubernetes.NewSource(nil, nil, nil), knowledge.NewLibrary(nil), ms, ls, &environments{}, approvals, nil, changes, featuresOf(cfg))
 }
 
 // Open builds the App: store, audit writer, providers, tools, policy, knowledge and engine.
@@ -245,7 +247,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 	if a.changes != nil {
 		changes = a.changes
 	}
-	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs, approvalTools, changes, featuresOf(cfg)); err != nil {
+	if a.tools, err = buildTools(a.source, a.lib, ms, ls, &a.envs, approvalTools, st, changes, featuresOf(cfg)); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
@@ -255,6 +257,7 @@ func Open(ctx context.Context, cfg *config.Config, opt Options) (*App, error) {
 		return nil, err
 	}
 	a.apply(d)
+	a.policy.Store(d.policy)
 	a.Warnings = d.warnings
 
 	a.Engine, err = engine.New(engine.Options{
@@ -312,6 +315,7 @@ func (a *App) Reload(next *config.Config) error {
 	// between is decided by the new policy with the groups its token was resolved with,
 	// which a request authenticated just before the reload sees anyway.
 	a.Engine.Update(d.envs, d.policy, a.lib)
+	a.policy.Store(d.policy)
 	if a.changes != nil {
 		a.changes.update(next)
 	}
@@ -471,7 +475,8 @@ func orDefault(w, def io.Writer) io.Writer {
 // approvalKeep is how long approval requests stay in the store after they expire.
 const approvalKeep = 7 * 24 * time.Hour
 
-// RunRetention prunes audit records and expired approval requests now and then daily,
+// RunRetention prunes audit records, expired approval requests and console sessions now
+// and then daily,
 // until ctx is done.
 func (a *App) RunRetention(ctx context.Context) {
 	t := time.NewTicker(24 * time.Hour)
@@ -488,6 +493,11 @@ func (a *App) RunRetention(ctx context.Context) {
 			a.log.Error("pruning approval requests failed", "error", err)
 		} else if n > 0 {
 			a.log.Info("pruned expired approval requests", "count", n)
+		}
+		if n, err := a.Store.PruneSessions(ctx, time.Now()); err != nil {
+			a.log.Error("pruning console sessions failed", "error", err)
+		} else if n > 0 {
+			a.log.Info("pruned expired console sessions", "count", n)
 		}
 		select {
 		case <-ctx.Done():
@@ -531,7 +541,7 @@ func featuresOf(cfg *config.Config) features {
 	return features{proposals: len(cfg.Providers.Forges) > 0, delivery: cfg.Providers.Delivery != nil}
 }
 
-func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments, approvals tool.ApprovalStore, changes tool.ChangeConfig, f features) ([]engine.Tool, error) {
+func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capability.MetricsSource, ls capability.LogsSource, envs tool.Environments, approvals tool.ApprovalStore, audit tool.AuditReader, changes tool.ChangeConfig, f features) ([]engine.Tool, error) {
 	builders := []func() (engine.Tool, error){
 		func() (engine.Tool, error) { return tool.RestartWorkload(src) },
 		func() (engine.Tool, error) { return tool.ScaleWorkload(src) },
@@ -544,6 +554,7 @@ func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capabi
 		func() (engine.Tool, error) { return tool.DiagnoseWorkload(src, ms) },
 		func() (engine.Tool, error) { return tool.SearchKnowledge(lib) },
 		func() (engine.Tool, error) { return tool.GetKnowledge(lib) },
+		func() (engine.Tool, error) { return tool.SearchAudit(audit) },
 	}
 	if ms != nil {
 		builders = append(builders,
@@ -583,7 +594,7 @@ func buildTools(src capability.WorkloadSource, lib *knowledge.Library, ms capabi
 func catalog(cfg *config.Config, tools []engine.Tool) policy.Catalog {
 	cat := policy.Catalog{Tools: map[string]policy.ToolInfo{}, Environments: map[string][]string{}}
 	for _, t := range tools {
-		cat.Tools[t.Name] = policy.ToolInfo{Risk: t.Risk, Risks: t.Risks, Args: t.Args, Global: t.Global}
+		cat.Tools[t.Name] = policy.ToolInfo{Risk: t.Risk, Risks: t.Risks, Args: t.Args, Global: t.Global, ByName: t.ByName}
 	}
 	for _, e := range cfg.Environments {
 		cat.Environments[e.Name] = cfg.Profiles(e)

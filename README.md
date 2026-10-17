@@ -2,7 +2,7 @@
 
 **A guarded gateway that lets AI agents operate your infrastructure, within the permissions you grant.**
 
-> Status: pre-alpha. Workload, metrics and logs tools, knowledge packs, narrow changes with approvals, pull requests against a GitOps source and alert investigation work over MCP stdio, or over HTTP for a team; nothing is stable.
+> Status: pre-alpha. Workload, metrics and logs tools, knowledge packs, narrow changes with approvals, pull requests against a GitOps source and alert investigation work over MCP stdio, or over HTTP for a team with a web console for approvals and audit; nothing is stable.
 
 ## Why
 
@@ -54,6 +54,11 @@ The client stores that header in its configuration; give each person their own t
 A profile with `impersonate` acts as the caller in its cluster, so the cluster's RBAC
 decides per person and its audit log names them (design note
 [0014](docs/design/0014-impersonation.md)).
+With a `console` section, approvers decide requests and auditors search the audit in a
+browser at `/console/`, signed in through the identity provider or with an API token. The
+console calls the same tools as the agents, under the same policy and audit
+(`search_audit` is granted only to roles that name it; design note
+[0015](docs/design/0015-web-console.md)).
 
 To run it in a cluster, install the Helm chart (`charts/opsward`, design note
 [0011](docs/design/0011-running-in-a-cluster.md)):
@@ -70,7 +75,7 @@ Tools: `list_environments`, `list_namespaces`, `list_workloads` (each showing on
 caller may work on), `get_workload_status`, `list_workload_events`, `list_workload_logs`,
 `diagnose_workload`, `search_knowledge`, `get_knowledge`, `restart_workload` and
 `scale_workload` (previewed, and approved by someone else where policy says so; approvers
-use `list_approvals` and `decide_approval`); with a forge configured, `resolve_source`
+use `list_approvals` and `decide_approval`, or the web console), `search_audit`; with a forge configured, `resolve_source`
 and `propose_change`, which turn a change into a diff or a pull request against the
 workload's GitOps source; with Argo CD configured, `get_delivery_status`; with a
 Prometheus-compatible
