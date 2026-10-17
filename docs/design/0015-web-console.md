@@ -53,7 +53,9 @@ would be a second path to escalate (0001, threat model).
 restarted this yesterday". Its arguments are filters: `since` and `until` (the last day by
 default), `subject`, `tool`, `status`, `environment`, `namespace`, and a `before` cursor.
 It returns at most 100 records, newest first, and reads at most 5,000 from the store per
-call; when it stops early it says so and returns the cursor to continue. Checkpoint
+call; when it stops early it says so and returns the cursor to continue, which keeps the
+search's time window. Agent mode does not offer it: records would reach the model
+provider. Checkpoint
 records are left out: `opsward audit verify` is for the chain.
 
 Records describe other people's work, which is not the same as reading a workload, so:

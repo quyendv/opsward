@@ -115,3 +115,17 @@ func TestVerifyIDTokenBeforeDiscovery(t *testing.T) {
 		t.Fatal("endpoints without OIDC")
 	}
 }
+
+// Using the console with an API token counts as using the token.
+func TestPrincipalForATokenSessionRecordsUse(t *testing.T) {
+	a, st, c := newAuth(t, nil)
+	ctx := context.Background()
+	_, rec := create(t, a, "ci@example.com", nil)
+	c.now = t0.Add(10 * time.Minute)
+	if _, err := a.Principal(ctx, Identity{Subject: "ci@example.com", Credential: "token:" + rec.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := st.APIToken(ctx, rec.ID); !got.LastUsedAt.Equal(c.now) {
+		t.Fatalf("last used %v, want %v", got.LastUsedAt, c.now)
+	}
+}

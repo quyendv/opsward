@@ -47,28 +47,35 @@ type AuditSearch struct {
 	Note string `json:"note,omitempty"`
 }
 
+// auditNow is the clock of the default window; tests replace it.
+var auditNow = time.Now
+
 // cursor is an AuditPosition as search_audit hands it out.
+// It carries the search's window, so that later pages of a search that named none keep
+// the first page's.
 type cursor struct {
-	T int64  `json:"t"`
-	W string `json:"w"`
-	S uint64 `json:"s"`
+	T     int64  `json:"t"`
+	W     string `json:"w"`
+	S     uint64 `json:"s"`
+	Since int64  `json:"since"`
+	Until int64  `json:"until"`
 }
 
-func encodeCursor(p store.AuditPosition) string {
-	b, _ := json.Marshal(cursor{T: p.Time.UnixNano(), W: p.Writer, S: p.Seq})
+func encodeCursor(p store.AuditPosition, q store.AuditQuery) string {
+	b, _ := json.Marshal(cursor{T: p.Time.UnixNano(), W: p.Writer, S: p.Seq, Since: q.Since.UnixNano(), Until: q.Until.UnixNano()})
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-func decodeCursor(s string) (*store.AuditPosition, error) {
+func decodeCursor(s string) (cursor, error) {
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return nil, errors.New("before: not a value from a previous result")
+		return cursor{}, errors.New("before: not a value from a previous result")
 	}
 	var c cursor
 	if err := json.Unmarshal(b, &c); err != nil || c.W == "" {
-		return nil, errors.New("before: not a value from a previous result")
+		return cursor{}, errors.New("before: not a value from a previous result")
 	}
-	return &store.AuditPosition{Time: time.Unix(0, c.T).UTC(), Writer: c.W, Seq: c.S}, nil
+	return c, nil
 }
 
 func parseTime(name, v string, def time.Time) (time.Time, error) {
@@ -101,23 +108,31 @@ func SearchAudit(r AuditReader) (engine.Tool, error) {
 			if err != nil {
 				return nil, err
 			}
-			until, err := parseTime("until", v.Until, time.Now())
+			defUntil, defSince := auditNow(), time.Time{}
+			var before *store.AuditPosition
+			if v.Before != "" {
+				c, err := decodeCursor(v.Before)
+				if err != nil {
+					return nil, err
+				}
+				before = &store.AuditPosition{Time: time.Unix(0, c.T).UTC(), Writer: c.W, Seq: c.S}
+				defUntil, defSince = time.Unix(0, c.Until).UTC(), time.Unix(0, c.Since).UTC()
+			}
+			until, err := parseTime("until", v.Until, defUntil)
 			if err != nil {
 				return nil, err
 			}
-			since, err := parseTime("since", v.Since, until.Add(-auditSearchWindow))
+			if defSince.IsZero() {
+				defSince = until.Add(-auditSearchWindow)
+			}
+			since, err := parseTime("since", v.Since, defSince)
 			if err != nil {
 				return nil, err
 			}
 			if !since.Before(until) {
 				return nil, errors.New("since must be before until")
 			}
-			q := store.AuditQuery{Since: since, Until: until, Limit: auditSearchPage}
-			if v.Before != "" {
-				if q.Before, err = decodeCursor(v.Before); err != nil {
-					return nil, err
-				}
-			}
+			q := store.AuditQuery{Since: since, Until: until, Before: before, Limit: auditSearchPage}
 			var next, note string
 			return &engine.Prepared{
 				Args: obj,
@@ -127,7 +142,7 @@ func SearchAudit(r AuditReader) (engine.Tool, error) {
 						return nil, read, err
 					}
 					if stopped != "" {
-						next = encodeCursor(last)
+						next = encodeCursor(last, q)
 						note = stopped
 					}
 					return items, read, nil

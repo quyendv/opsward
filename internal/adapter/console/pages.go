@@ -3,6 +3,7 @@ package console
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,11 +24,17 @@ func (c *console) approvals(w http.ResponseWriter, r *http.Request, s *store.Ses
 	c.renderApprovals(w, r, s, p, http.StatusOK, "", noticeFor(r.URL.Query()))
 }
 
+// requestID is the shape of an approval request's ID.
+var requestID = regexp.MustCompile(`^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$`)
+
+// noticeFor reports the decision a redirect names. Anything else in the query is not
+// repeated: a link must not make the console say something.
 func noticeFor(q url.Values) string {
-	if id := q.Get("decided"); id != "" {
-		return "Request " + id + ": " + q.Get("as") + "."
+	id, as := q.Get("decided"), q.Get("as")
+	if !requestID.MatchString(id) || (as != "approved" && as != "denied" && as != "withdrawn") {
+		return ""
 	}
-	return ""
+	return "Request " + id + ": " + as + "."
 }
 
 func (c *console) renderApprovals(w http.ResponseWriter, r *http.Request, s *store.Session, p core.Principal, status int, msg, notice string) {
@@ -36,6 +43,7 @@ func (c *console) renderApprovals(w http.ResponseWriter, r *http.Request, s *sto
 	if err := c.call(r, p, "list_approvals", map[string]any{}, &list); err != nil {
 		if pg.Error == "" {
 			pg.Error = c.message("list_approvals", err)
+			status = failure(err)
 		}
 		c.render(w, status, "approvals", pg)
 		return
@@ -120,7 +128,7 @@ func (c *console) audit(w http.ResponseWriter, r *http.Request, s *store.Session
 	}
 	if err := c.call(r, p, "search_audit", args, &out); err != nil {
 		pg.Error = c.message("search_audit", err)
-		c.render(w, http.StatusOK, "audit", pg)
+		c.render(w, failure(err), "audit", pg)
 		return
 	}
 	d.Records, d.Note = out.Records, out.Note

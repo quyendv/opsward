@@ -88,3 +88,21 @@ func TestConsoleIsRestartOnly(t *testing.T) {
 		t.Fatalf("RestartRequired = %v", got)
 	}
 }
+
+// Without a public URL, plain HTTP beyond this host is warned about for the console too.
+func TestConsoleWarnsAboutPlainHTTPWithoutAPublicURL(t *testing.T) {
+	c, err := Parse([]byte(strings.Replace(remote, "127.0.0.1:8080", "0.0.0.0:8080", 1) + "console:\n  apiTokens: true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range c.Warnings() {
+		found = found || strings.Contains(w, "console: browsers keep the session cookie only over HTTPS")
+	}
+	if !found {
+		t.Fatalf("warnings = %q", c.Warnings())
+	}
+	if c, _ := Parse([]byte(remote + "console:\n  apiTokens: true\n")); len(c.consoleWarnings()) != 0 {
+		t.Fatalf("on loopback: %q", c.consoleWarnings())
+	}
+}

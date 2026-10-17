@@ -129,3 +129,22 @@ func freeAddr(t *testing.T) string {
 	defer func() { _ = ln.Close() }()
 	return ln.Addr().String()
 }
+
+// Revoking by the whole token never prints its secret.
+func TestTokenRevokeByTheWholeTokenHidesTheSecret(t *testing.T) {
+	cfg := remoteConfig(t)
+	code, out, errOut := runCLI("token", "create", "--config", cfg, "--subject", "ci@example.com", "--ttl", "1d")
+	if code != 0 {
+		t.Fatalf("create: code %d, stderr %q", code, errOut)
+	}
+	token := strings.TrimSpace(out)
+	id := strings.SplitN(strings.TrimPrefix(token, "opw_"), "_", 2)[0]
+	secret := strings.TrimPrefix(token, "opw_"+id+"_")
+	code, out, errOut = runCLI("token", "revoke", "--config", cfg, token)
+	if code != 0 {
+		t.Fatalf("revoke: code %d, stderr %q", code, errOut)
+	}
+	if strings.Contains(out+errOut, secret) || !strings.Contains(errOut, id) {
+		t.Fatalf("stdout %q, stderr %q: want the ID, never the secret", out, errOut)
+	}
+}

@@ -122,6 +122,7 @@ var tools = []engine.Tool{
 	{Name: "get_workload_status", Description: "status", Risk: core.RiskRead, InputSchema: scoped()},
 	{Name: "search_knowledge", Description: "knowledge", Risk: core.RiskRead, Global: true, InputSchema: &jsonschema.Schema{Type: "object"}},
 	{Name: "list_approvals", Description: "approvals", Risk: core.RiskRead, Global: true, InputSchema: &jsonschema.Schema{Type: "object"}},
+	{Name: "search_audit", Description: "audit", Risk: core.RiskRead, Global: true, List: true, Exact: true, ByName: true, InputSchema: &jsonschema.Schema{Type: "object"}},
 	{Name: "restart_workload", Description: "restart", Risk: core.RiskWrite, InputSchema: &jsonschema.Schema{Type: "object"}},
 	{Name: "propose_change", Description: "propose", Risk: core.RiskWrite, Risks: []core.Risk{core.RiskRead}, InputSchema: &jsonschema.Schema{Type: "object"}},
 }

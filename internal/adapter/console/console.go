@@ -35,6 +35,8 @@ const (
 	loginTTL      = 10 * time.Minute
 	maxFormBytes  = 64 << 10
 	issuerTimeout = 10 * time.Second
+	// defaultCallTimeout is that of MCP calls, a little under the write timeout.
+	defaultCallTimeout = 2 * time.Minute
 )
 
 // Invoker runs a tool call through the engine.
@@ -78,8 +80,10 @@ type Options struct {
 	OIDC       *OIDC // nil: no sign-in with the issuer
 	APITokens  bool  // sign in with an API token
 	SessionTTL time.Duration
-	Now        func() time.Time
-	Logger     *slog.Logger
+	// CallTimeout bounds each tool call; default two minutes.
+	CallTimeout time.Duration
+	Now         func() time.Time
+	Logger      *slog.Logger
 }
 
 //go:embed templates/*.html
@@ -100,6 +104,9 @@ func New(opt Options) (http.Handler, error) {
 	}
 	if opt.Logger == nil {
 		opt.Logger = slog.New(slog.DiscardHandler)
+	}
+	if opt.CallTimeout <= 0 {
+		opt.CallTimeout = defaultCallTimeout
 	}
 	if o := opt.OIDC; o != nil && o.HTTPClient == nil {
 		o.HTTPClient = &http.Client{Timeout: issuerTimeout}
@@ -262,6 +269,11 @@ func (c *console) startSession(w http.ResponseWriter, r *http.Request, id identi
 	if err := c.opt.Sessions.CreateSession(r.Context(), s); err != nil {
 		return err
 	}
+	if ck, err := r.Cookie(sessionCookie); err == nil && ck.Value != "" {
+		if err := c.opt.Sessions.DeleteSession(r.Context(), hashID(ck.Value)); err != nil {
+			c.opt.Logger.Warn("console: ending the previous session failed", "error", err)
+		}
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: value, Path: "/", Expires: expires,
 		Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
@@ -297,7 +309,9 @@ func (c *console) call(r *http.Request, p core.Principal, tool string, args any,
 	if err != nil {
 		return err
 	}
-	res, err := c.opt.Engine.Invoke(r.Context(), p, tool, raw)
+	ctx, cancel := context.WithTimeout(r.Context(), c.opt.CallTimeout)
+	defer cancel()
+	res, err := c.opt.Engine.Invoke(ctx, p, tool, raw)
 	if err != nil {
 		return err
 	}
@@ -317,6 +331,19 @@ func (c *console) message(tool string, err error) string {
 	}
 	c.opt.Logger.Error("console: call failed", "tool", tool, "error", err)
 	return "The call failed; the error is in Opsward's log."
+}
+
+// failure is the status of a page whose call failed: refused by policy, invalid, or a
+// failure behind Opsward.
+func failure(err error) int {
+	var denied *engine.DeniedError
+	switch {
+	case errors.As(err, &denied):
+		return http.StatusForbidden
+	case errors.Is(err, engine.ErrInvalidArguments), errors.Is(err, core.ErrInvalidInput):
+		return http.StatusBadRequest
+	}
+	return http.StatusBadGateway
 }
 
 func prettyJSON(v any) string {
