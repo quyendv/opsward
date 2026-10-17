@@ -53,7 +53,7 @@ Which backends exist, and how a change reaches a cluster, are configuration.
 
 ```
  clients     agent CLIs, desktop and web chat apps, IDEs, chat bots, web console, alert webhooks
-                 │ MCP              │ REST              │ webhook
+                 │ MCP              │ HTML forms        │ webhook
  ┌───────────────▼──────────────────▼───────────────────▼──────────────────────┐
  │ adapter/      the only layer that knows a protocol                           │
  ├──────────────────────────────────────────────────────────────────────────────┤
@@ -364,7 +364,9 @@ in force. See [0002](0002-identity-policy-storage.md#loading-the-file).
 - **MCP**, using the official Go SDK, over stdio (local) and streamable HTTP (remote). Tools map
   to MCP tools; knowledge reaches agents through tools (`search_knowledge`, `get_knowledge`)
   and as notes attached to results.
-- **REST** (v0.3) for the web console: approvals, audit queries, policy.
+- **Web console** (v0.9): approvals, audit search and what policy says about the signed-in
+  person, rendered on the server; every page calls tools through the engine
+  ([0015](0015-web-console.md)).
 - **Webhook ingress** (v0.4) for alert-driven investigation.
 
 ## Threat model
@@ -393,7 +395,7 @@ in force. See [0002](0002-identity-policy-storage.md#loading-the-file).
 | v0.6 | Helm chart ([0011](0011-running-in-a-cluster.md)), alert investigation ([0012](0012-alert-investigation.md)) |
 | v0.7 | agent mode for alerts ([0013](0013-agent-mode.md)) |
 | v0.8 | profiles that impersonate the caller ([0014](0014-impersonation.md)) |
-| later | web console (audit, approvals, policy) |
+| v0.9 | web console: approvals, audit search ([0015](0015-web-console.md)) |
 
 ## Alternatives considered
 

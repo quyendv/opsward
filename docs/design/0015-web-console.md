@@ -21,12 +21,13 @@ console:
   sessionTTL: 8h                 # the default; at most 24h
   oidc:                          # sign in with identity.oidc's issuer
     clientID: opsward-console
-    clientSecretFile: /etc/opsward/console/client-secret   # omit for a public client
-    scopes: [groups]             # requested besides openid
+    clientSecret: { file: /etc/opsward/console/client-secret }   # omit for a public client
+    scopes: [email, groups]      # requested besides openid
   apiTokens: false               # true: also sign in with an API token
 ```
 
 The console is served under `/console/` by the remote listener, and only in remote mode.
+It is restart-only, like the rest of `server`.
 
 ## Pages
 
@@ -62,7 +63,8 @@ Records describe other people's work, which is not the same as reading a workloa
   `search_audit` there: a record in a namespace needs a grant covering the namespace, one
   for a whole environment a grant covering every namespace of it, and one with no
   environment (approval tools, knowledge search, unknown tools) a grant limited to no
-  environment. A team's auditors see their namespaces and nothing wider.
+  environment. A team's auditors see their namespaces and nothing wider. Records do not
+  keep the target's labels, so a grant narrowed to `apps` shows none.
 - Records are already redacted when written (0002). Searching the audit is itself audited.
 
 ## Signing in
@@ -74,7 +76,8 @@ same `subjectClaim`, `groupsClaim`, `groupsPrefix` and verified-email rule as ac
 tokens, so a person is the same principal in the console as through their agent. Approvals
 compare subjects (0007): the subject claim must be the same in both tokens. `sub` is not,
 for issuers that issue pairwise subjects per client; use a claim that is, such as `email`
-or an object ID. Groups come from the ID token, so the issuer must put them there.
+or an object ID. The subject and groups come from the ID token, so `scopes` must ask for
+what puts them there (`email` and `groups` with many issuers).
 
 **API tokens**, when `apiTokens` is set: a form takes the token, which is checked as for
 MCP. The session remembers the token's ID and checks on every request that the token is
@@ -86,7 +89,7 @@ carries a random identifier; the store keeps its hash. A session lasts `sessionT
 never past the API token's expiry. Groups from the issuer are fixed for the session, so a
 person removed from a group there keeps it until the session ends; internal groups are
 looked up on every request, and policy is the current one, so editing either takes effect
-at once.
+at once. Sign-ins are logged; the calls a person makes are audited as any other.
 
 ## Browser protections
 

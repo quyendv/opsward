@@ -105,6 +105,17 @@ alerts:
 #   model: claude-sonnet-5-5
 #   apiKey: { file: /etc/opsward/anthropic-key }
 
+# The web console (docs/design/0015) at <publicURL>/console/, for approvers and auditors.
+# Register opsward-console at the issuer with redirect URL <publicURL>/console/callback,
+# and request the scopes that put identity.oidc's subject and groups claims in the ID
+# token.
+# console:
+#   oidc:
+#     clientID: opsward-console
+#     clientSecret: { file: /etc/opsward/console/client-secret }
+#     scopes: [email, groups]
+#   apiTokens: true                # also sign in with an API token
+
 policy:
   roles:
     viewer: { risk: [read] }
@@ -113,6 +124,7 @@ policy:
     approver: { tools: [list_approvals, decide_approval] }
     requester: { tools: [list_approvals] } # to follow one's own requests
     investigator: { tools: [diagnose_workload] }
+    auditor: { tools: [search_audit] } # risk classes never grant it
   bindings:
     - name: platform-view-everything
       subjects: { groups: [platform] }
@@ -145,3 +157,7 @@ policy:
     - name: team-a-follows-requests
       subjects: { groups: [team-a] }
       role: requester
+    # Audit records of a namespace are for those granted search_audit there.
+    - name: platform-audits
+      subjects: { groups: [platform] }
+      role: auditor
