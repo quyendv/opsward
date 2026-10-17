@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-17
+
+Impersonation: a Kubernetes profile can act as the person calling Opsward, so the
+cluster's RBAC decides per person and its audit log names them.
+
 ### Added
 
 - A Kubernetes profile can impersonate the caller (`impersonate`, with `usernamePrefix` and
@@ -15,9 +20,9 @@ All notable changes to this project are documented here. The format follows
   `opsward rbac render` renders the profile's `impersonate` role, limited to the users and
   groups that reach it, and leaves the rules the tools need unbound for the operator to grant
   to people (design note 0014).
-- `list_workloads` across an environment keeps the namespaces the backend lets the caller
-  list and leaves out those it refuses, as for a profile acting as a caller with access to
-  some of them; refused everywhere is still an error.
+- With such a profile, `list_workloads` across an environment keeps the kinds and
+  namespaces the cluster lets the caller list and leaves out those it refuses; refused
+  everywhere is still an error. A profile acting as itself still fails when refused.
 
 ### Changed
 
@@ -224,7 +229,8 @@ First release: a single-user, read-only gateway over MCP stdio.
   and cluster before they are sent.
 - `diagnose_workload`: status, events, failing containers' logs and resource use in one call.
 
-[Unreleased]: https://github.com/quyendv/opsward/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/quyendv/opsward/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/quyendv/opsward/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/quyendv/opsward/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/quyendv/opsward/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/quyendv/opsward/compare/v0.4.0...v0.5.0
