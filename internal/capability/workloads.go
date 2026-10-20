@@ -139,6 +139,9 @@ type Workloads interface {
 	// ListWorkloads returns a namespace's Deployments, StatefulSets and DaemonSets, or
 	// every namespace's for "", sorted by namespace, kind, then name.
 	ListWorkloads(ctx context.Context, namespace string) ([]WorkloadSummary, error)
+	// WorkloadRestarts returns the workloads of a namespace, or of every namespace for "",
+	// whose current pods' containers have restarted, sorted by namespace, kind, then name.
+	WorkloadRestarts(ctx context.Context, namespace string) ([]WorkloadRestarts, error)
 	// RestartWorkload restarts a workload's pods through its rollout, as kubectl rollout
 	// restart does. With dryRun the change is previewed by the API server, not made.
 	RestartWorkload(ctx context.Context, ref WorkloadRef, dryRun bool) (*WorkloadChange, error)
@@ -169,8 +172,21 @@ type WorkloadSummary struct {
 	Name      string `json:"name"`
 	Desired   int32  `json:"desired"`
 	Ready     int32  `json:"ready"`
+	// Restarts and LastRestart are set when the listing asks for restarts.
+	Restarts    int32      `json:"restarts,omitempty"`
+	LastRestart *time.Time `json:"lastRestart,omitempty"`
 	// Labels are for policy (apps scope) and are not returned.
 	Labels map[string]string `json:"-"`
+}
+
+// WorkloadRestarts counts the container restarts of a workload's current pods, init
+// containers included, and says when the last restarted container ended, if known.
+type WorkloadRestarts struct {
+	Namespace   string
+	Kind        string
+	Name        string
+	Restarts    int32
+	LastRestart *time.Time
 }
 
 // WorkloadSource hands out Workloads for an environment and profile.

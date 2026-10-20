@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -129,6 +130,7 @@ type listWorkloadsInput struct {
 	Environment string `json:"environment" jsonschema:"name of a configured environment"`
 	Namespace   string `json:"namespace,omitempty" jsonschema:"namespace to list; omit for every namespace of the environment you can work in"`
 	Unhealthy   bool   `json:"unhealthy,omitempty" jsonschema:"only workloads with fewer ready replicas than desired"`
+	Restarting  bool   `json:"restarting,omitempty" jsonschema:"only workloads whose containers have restarted, most restarts first, with the count and when the last one ended"`
 }
 
 // ListWorkloads is list_workloads: the workloads the caller can work on, in a namespace
@@ -145,9 +147,10 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 		Name: "list_workloads",
 		Description: "List the Deployments, StatefulSets and DaemonSets you can work on, with desired and ready " +
 			"replicas: in one namespace, or across the environment without one. unhealthy keeps only those with " +
-			"fewer ready replicas than desired, the quickest way to find what is broken.",
+			"fewer ready replicas than desired, the quickest way to find what is broken; restarting keeps those whose " +
+			"containers restarted, most first, which finds a workload that crashes and recovers.",
 		Risk: core.RiskRead, InputSchema: in.schema, Args: in.names, List: true,
-		Needs: []string{capability.OpWorkloadsList, capability.OpNamespacesList},
+		Needs: []string{capability.OpWorkloadsList, capability.OpNamespacesList, capability.OpWorkloadsPods},
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
 			v, obj, err := in.decode(raw)
 			if err != nil {
@@ -168,6 +171,11 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 					if err != nil {
 						return nil, err
 					}
+					if v.Restarting {
+						if list, err = withRestarts(ctx, w, env, v.Namespace, list); err != nil {
+							return nil, err
+						}
+					}
 					items := make([]engine.Item, 0, len(list))
 					for _, s := range list {
 						// A named namespace was checked against the environment before the call ran.
@@ -187,6 +195,50 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 			}, nil
 		},
 	}, nil
+}
+
+// withRestarts keeps the listed workloads that restarted, most restarts first, reading
+// restarts where listWorkloads listed: a namespace the caller may not list pods in is left
+// out, as one it may not list workloads in is.
+func withRestarts(ctx context.Context, w capability.Workloads, env EnvironmentInfo, namespace string, list []capability.WorkloadSummary) ([]capability.WorkloadSummary, error) {
+	namespaces := []string{namespace}
+	if namespace == "" && !slices.Contains(env.Namespaces, "*") {
+		namespaces = nil
+		for _, s := range list {
+			if !slices.Contains(namespaces, s.Namespace) {
+				namespaces = append(namespaces, s.Namespace)
+			}
+		}
+	}
+	restarts := map[capability.WorkloadRef]capability.WorkloadRestarts{}
+	var refused error
+	read := false
+	for _, n := range namespaces {
+		rs, err := w.WorkloadRestarts(ctx, n)
+		if errors.Is(err, capability.ErrForbidden) && namespace == "" {
+			refused = err
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		read = true
+		for _, r := range rs {
+			restarts[capability.WorkloadRef{Namespace: r.Namespace, Kind: r.Kind, Name: r.Name}] = r
+		}
+	}
+	if !read && refused != nil {
+		return nil, refused
+	}
+	var out []capability.WorkloadSummary
+	for _, s := range list {
+		if r, ok := restarts[capability.WorkloadRef{Namespace: s.Namespace, Kind: s.Kind, Name: s.Name}]; ok {
+			s.Restarts, s.LastRestart = r.Restarts, r.LastRestart
+			out = append(out, s)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b capability.WorkloadSummary) int { return cmp.Compare(b.Restarts, a.Restarts) })
+	return out, nil
 }
 
 // listWorkloads lists one namespace, or the environment: an environment spanning every

@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `list_workloads` takes `restarting`: only the workloads whose containers restarted, most
+  first, with the count and when the last one ended, so an agent finds a workload that
+  crashes and recovers in one call. `list_workloads` now needs `list` on pods and
+  ReplicaSets, which `opsward rbac render` includes.
+
 ### Fixed
 
 - `search_audit` returned up to 100 records whatever their size, some 65 KB, past what an

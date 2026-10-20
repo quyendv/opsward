@@ -85,6 +85,13 @@ func TestOperationRulesCoverTheRequests(t *testing.T) {
 			_, err := w.ListWorkloads(ctx, "shop")
 			return err
 		}},
+		{"WorkloadRestarts", func(w capability.Workloads, _ capability.WorkloadRef) error {
+			if _, err := w.WorkloadRestarts(ctx, ""); err != nil {
+				return err
+			}
+			_, err := w.WorkloadRestarts(ctx, "shop")
+			return err
+		}},
 		{"RestartWorkload", func(w capability.Workloads, r capability.WorkloadRef) error {
 			_, err := w.RestartWorkload(ctx, r, true)
 			return err

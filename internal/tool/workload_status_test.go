@@ -28,9 +28,11 @@ type fakeSource struct {
 	eventLimit int
 	logsErr    error
 
-	namespaces []string
-	summaries  []capability.WorkloadSummary
-	forbidden  map[string]bool // namespaces the backend refuses to list
+	namespaces  []string
+	summaries   []capability.WorkloadSummary
+	forbidden   map[string]bool // namespaces the backend refuses to list
+	restarts    []capability.WorkloadRestarts
+	restartsErr error // returned by WorkloadRestarts, as a refusal to list pods
 
 	dryRuns  []bool
 	replicas int32
@@ -67,6 +69,23 @@ func (f *fakeSource) ListWorkloads(_ context.Context, namespace string) ([]capab
 	for _, s := range f.summaries {
 		if s.Namespace == namespace || s.Namespace == "" {
 			out = append(out, s)
+		}
+	}
+	return out, f.err
+}
+
+func (f *fakeSource) WorkloadRestarts(_ context.Context, namespace string) ([]capability.WorkloadRestarts, error) {
+	f.calls = append(f.calls, "restarts:"+namespace)
+	if f.restartsErr != nil {
+		return nil, f.restartsErr
+	}
+	if f.forbidden[namespace] {
+		return nil, fmt.Errorf("list %s: %w", namespace, capability.ErrForbidden)
+	}
+	var out []capability.WorkloadRestarts
+	for _, r := range f.restarts {
+		if namespace == "" || r.Namespace == namespace {
+			out = append(out, r)
 		}
 	}
 	return out, f.err

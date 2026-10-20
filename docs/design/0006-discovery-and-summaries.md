@@ -24,7 +24,7 @@ range query returned every point of every series, when the agent needed an overv
 |---|---|---|
 | `list_environments` | none | name, cluster, namespace patterns, whether metrics and logs are available |
 | `list_namespaces` | `environment` | namespaces of the cluster that match the environment's patterns |
-| `list_workloads` | `environment`, optional `namespace`, `unhealthy` | Deployments, StatefulSets and DaemonSets: namespace, kind, name, desired and ready replicas; without a namespace, across the environment's namespaces; with `unhealthy`, only those with fewer ready replicas than desired |
+| `list_workloads` | `environment`, optional `namespace`, `unhealthy`, `restarting` | Deployments, StatefulSets and DaemonSets: namespace, kind, name, desired and ready replicas; without a namespace, across the environment's namespaces; with `unhealthy`, only those with fewer ready replicas than desired; with `restarting`, only those whose containers restarted, most first, with the count and when the last one ended |
 
 A listing cannot be authorized as one call: whether a scoped principal may see
 namespace `team-a-api` or workload `api` depends on the item. Listing tools are therefore
@@ -68,7 +68,13 @@ cluster-wide; in one limited to some namespaces it lists namespace by namespace,
 RoleBinding in each namespace allows.
 
 Asked "is anything unhealthy", an agent otherwise lists every namespace one call at a time;
-`list_workloads` with `unhealthy` and no namespace answers in one call.
+`list_workloads` with `unhealthy` and no namespace answers in one call. A workload that
+crashes and recovers is ready again, so `unhealthy` misses it; without a metrics backend an
+agent asked "what restarts the most" then reads every workload's status. `restarting`
+answers that in one call: the restarts of each workload's current pods' containers, init
+containers included, and when the last restarted container ended, so an old crash reads as
+old. It lists pods and ReplicaSets, which only a call that asks for it does, and which
+`list_workloads` therefore needs in rendered RBAC.
 
 ## Summaries
 

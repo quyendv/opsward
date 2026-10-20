@@ -26,6 +26,7 @@ var WorkloadsOps = map[string][]string{
 	"PodNamePattern":   {OpWorkloadsGet, OpWorkloadsPods},
 	"ListNamespaces":   {OpNamespacesList},
 	"ListWorkloads":    {OpWorkloadsList},
+	"WorkloadRestarts": {OpWorkloadsPods},
 	"RestartWorkload":  {OpWorkloadsGet, OpWorkloadsRestart},
 	"ScaleWorkload":    {OpWorkloadsGet, OpWorkloadsScale},
 }
