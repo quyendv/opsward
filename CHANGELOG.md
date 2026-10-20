@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-20
+
+The web console: approvers decide requests and auditors search the audit in a browser,
+through the same tools, policy and audit as agents.
+
 ### Added
 
 - A web console at `/console/` in remote mode (`console`): approvers decide requests with
@@ -248,7 +253,8 @@ First release: a single-user, read-only gateway over MCP stdio.
   and cluster before they are sent.
 - `diagnose_workload`: status, events, failing containers' logs and resource use in one call.
 
-[Unreleased]: https://github.com/quyendv/opsward/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/quyendv/opsward/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/quyendv/opsward/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/quyendv/opsward/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/quyendv/opsward/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/quyendv/opsward/compare/v0.5.0...v0.6.0
