@@ -26,6 +26,9 @@ flags:
 `
 
 func rbac(args []string, stdout io.Writer) error {
+	if len(args) > 0 && isHelp(args[0]) {
+		return helpError(rbacUsage)
+	}
 	if len(args) == 0 || args[0] != "render" {
 		return usageError(rbacUsage)
 	}
@@ -36,7 +39,7 @@ func rbac(args []string, stdout io.Writer) error {
 	cluster := fs.String("cluster", "", "")
 	var subjects stringList
 	fs.Var(&subjects, "subject", "")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := parseFlags(fs, args[1:], rbacUsage); err != nil {
 		return err
 	}
 	if *path == "" {

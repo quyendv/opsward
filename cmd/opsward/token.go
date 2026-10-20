@@ -37,6 +37,9 @@ func token(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return usageError(tokenUsage)
 	}
+	if isHelp(args[0]) {
+		return helpError(tokenUsage)
+	}
 	action := args[0]
 	fs := flag.NewFlagSet("token "+action, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -46,7 +49,7 @@ func token(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	ttl := fs.String("ttl", "90d", "")
 	var groups stringList
 	fs.Var(&groups, "group", "")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := parseFlags(fs, args[1:], tokenUsage); err != nil {
 		return err
 	}
 	switch action {

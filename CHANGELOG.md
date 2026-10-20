@@ -13,6 +13,8 @@ All notable changes to this project are documented here. The format follows
   also names the window it searched.
 - `search_audit` showed a record's credential as `token:[REDACTED]`; it shows the token's
   ID, which is not a secret.
+- `-h` on a command printed `flag: help requested`; it prints the command's usage, as does
+  a flag the command does not have.
 
 ## [0.9.0] - 2026-10-20
 
