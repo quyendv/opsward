@@ -75,6 +75,11 @@ type Principal struct {
 // invalid rather than as failures of the system.
 var ErrInvalidInput = errors.New("invalid input")
 
+// ErrForbidden matches a backend's refusal of a call policy allowed, as a cluster refuses
+// the caller a profile acts as (docs/design/0014). They are audited as forbidden: the
+// backend's decision, not Opsward's policy and not a failure of the system.
+var ErrForbidden = errors.New("forbidden")
+
 type invalidInputError struct{ err error }
 
 func (e *invalidInputError) Error() string   { return e.err.Error() }

@@ -35,7 +35,7 @@ code { font-family: var(--mono); }
 .status { font-size: .8rem; padding: .1rem .5rem; border-radius: 999px; border: 1px solid var(--line); }
 .status-ok, .status-approved, .status-used { color: var(--ok); }
 .status-pending { color: var(--warn); }
-.status-denied, .status-error, .status-invalid, .status-unknown_tool { color: var(--bad); }
+.status-denied, .status-forbidden, .status-error, .status-invalid, .status-unknown_tool { color: var(--bad); }
 .error { color: var(--bad); border: 1px solid var(--bad); border-radius: 6px; padding: .5rem .75rem; }
 .notice { border: 1px solid var(--line); border-radius: 6px; padding: .5rem .75rem; background: var(--card); }
 form.decide { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: -.25rem 0 1.5rem; }

@@ -65,6 +65,10 @@ the one request across the cluster, the listing lists the namespaces and goes na
 by namespace. Refused the namespaces too, the caller is told to name one; the cluster
 offers no way to ask which namespaces a person may read.
 
+A call policy allows and the cluster refuses is audited with the status `forbidden`: the
+cluster's decision about the person, apart from `denied`, which is Opsward's policy, and
+from `error`, a failure such as a timeout. Auditors search for it on its own.
+
 Approvals do not lend the approver's permissions: the dry run, the approved retry and the
 change all act as the requester, so the cluster must let the requester make the change.
 An approval is a second gate, not a grant.

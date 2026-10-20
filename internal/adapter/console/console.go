@@ -338,7 +338,7 @@ func (c *console) message(tool string, err error) string {
 func failure(err error) int {
 	var denied *engine.DeniedError
 	switch {
-	case errors.As(err, &denied):
+	case errors.As(err, &denied), errors.Is(err, core.ErrForbidden):
 		return http.StatusForbidden
 	case errors.Is(err, engine.ErrInvalidArguments), errors.Is(err, core.ErrInvalidInput):
 		return http.StatusBadRequest

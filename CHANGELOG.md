@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- An audit status `forbidden`: policy allowed the call and the backend refused it, as a
+  cluster refuses the caller a profile acts as. Such calls were recorded as `error`, with
+  timeouts and outages; every request of such a profile now tells a refusal apart, not
+  only listings. The console answers them with 403.
 - `list_workloads` takes `restarting`: only the workloads whose containers restarted, most
   first, with the count and when the last one ended, so an agent finds a workload that
   crashes and recovers in one call. `list_workloads` now needs `list` on pods and

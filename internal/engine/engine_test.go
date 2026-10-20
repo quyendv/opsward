@@ -552,3 +552,18 @@ func TestLabelLookupCarriesTheCaller(t *testing.T) {
 		t.Fatalf("resolved %v as %+v, want as %s", ft.resolved, ft.resolvedAs, alice.Subject)
 	}
 }
+
+// A call policy allowed and the backend refused, as a cluster refuses a caller a profile
+// acts as (docs/design/0014), is audited as forbidden: neither denied by policy nor a
+// failure of the system.
+func TestInvokeBackendRefusalIsForbidden(t *testing.T) {
+	ft := &fakeTool{risk: core.RiskRead, runErr: fmt.Errorf("get Deployment: %w", core.ErrForbidden)}
+	aud := &recordingAuditor{}
+	e := newEngine(t, ft, allowAll, aud)
+	if _, err := e.Invoke(context.Background(), alice, "do_thing", json.RawMessage(goodArgs)); !errors.Is(err, core.ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+	if got := aud.last().Outcome.Status; got != audit.StatusForbidden {
+		t.Fatalf("status = %s, want forbidden", got)
+	}
+}

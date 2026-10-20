@@ -100,7 +100,7 @@ func (c *console) audit(w http.ResponseWriter, r *http.Request, s *store.Session
 		Status: q.Get("status"), Environment: q.Get("environment"), Namespace: q.Get("namespace"),
 	}
 	d := auditData{Filters: f, Statuses: []string{
-		audit.StatusOK, audit.StatusDenied, audit.StatusInvalid, audit.StatusError, audit.StatusUnknownTool, audit.StatusPending,
+		audit.StatusOK, audit.StatusDenied, audit.StatusForbidden, audit.StatusInvalid, audit.StatusError, audit.StatusUnknownTool, audit.StatusPending,
 	}}
 	pg := page{Title: "Audit", Nav: "audit", Principal: &p, Session: s, Data: &d}
 	args := map[string]any{}
