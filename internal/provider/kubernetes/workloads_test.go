@@ -755,3 +755,21 @@ func TestWorkloadRestartsAsCallerWrapsForbidden(t *testing.T) {
 		t.Fatalf("plain profile: err = %v, want a failure that is not ErrForbidden", err)
 	}
 }
+
+func TestListNamespacesAsCallerWrapsForbidden(t *testing.T) {
+	c := fake.NewClientset()
+	c.PrependReactor("list", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(corev1.Resource("namespaces"), "", errors.New("no"))
+	})
+	src := NewSource(map[string]string{"prod": "a"},
+		map[string]map[string]Profile{"a": {"reader": {Kubeconfig: "/k", Impersonate: &Impersonation{}}, "plain": {Kubeconfig: "/k"}}},
+		func(Profile) (kubernetes.Interface, error) { return c, nil })
+	asCaller, _ := src.Workloads("prod", "reader")
+	if _, err := asCaller.ListNamespaces(t.Context()); !errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+	plain, _ := src.Workloads("prod", "plain")
+	if _, err := plain.ListNamespaces(t.Context()); err == nil || errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("plain profile: err = %v, want a failure that is not ErrForbidden", err)
+	}
+}

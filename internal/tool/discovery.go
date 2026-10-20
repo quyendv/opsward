@@ -167,12 +167,12 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 					if err != nil {
 						return nil, err
 					}
-					list, err := listWorkloads(ctx, w, env, v.Namespace)
+					list, listed, err := listWorkloads(ctx, w, env, v.Namespace)
 					if err != nil {
 						return nil, err
 					}
 					if v.Restarting {
-						if list, err = withRestarts(ctx, w, env, v.Namespace, list); err != nil {
+						if list, err = withRestarts(ctx, w, listed, list); err != nil {
 							return nil, err
 						}
 					}
@@ -198,24 +198,16 @@ func ListWorkloads(envs Environments, ws capability.WorkloadSource) (engine.Tool
 }
 
 // withRestarts keeps the listed workloads that restarted, most restarts first, reading
-// restarts where listWorkloads listed: a namespace the caller may not list pods in is left
-// out, as one it may not list workloads in is.
-func withRestarts(ctx context.Context, w capability.Workloads, env EnvironmentInfo, namespace string, list []capability.WorkloadSummary) ([]capability.WorkloadSummary, error) {
-	namespaces := []string{namespace}
-	if namespace == "" && !slices.Contains(env.Namespaces, "*") {
-		namespaces = nil
-		for _, s := range list {
-			if !slices.Contains(namespaces, s.Namespace) {
-				namespaces = append(namespaces, s.Namespace)
-			}
-		}
-	}
+// restarts in the namespaces listWorkloads listed: a namespace the caller may not list
+// pods in is left out, as one it may not list workloads in is.
+func withRestarts(ctx context.Context, w capability.Workloads, namespaces []string, list []capability.WorkloadSummary) ([]capability.WorkloadSummary, error) {
+	across := len(namespaces) > 1
 	restarts := map[capability.WorkloadRef]capability.WorkloadRestarts{}
 	var refused error
 	read := false
 	for _, n := range namespaces {
 		rs, err := w.WorkloadRestarts(ctx, n)
-		if errors.Is(err, capability.ErrForbidden) && namespace == "" {
+		if errors.Is(err, capability.ErrForbidden) && across {
 			refused = err
 			continue
 		}
@@ -244,21 +236,36 @@ func withRestarts(ctx context.Context, w capability.Workloads, env EnvironmentIn
 // listWorkloads lists one namespace, or the environment: an environment spanning every
 // namespace in one request, otherwise namespace by namespace, so that a reader bound only
 // in the environment's namespaces can list it. Only patterns need the cluster's
-// namespaces listed; literal names are listed as they are (docs/design/0009).
-func listWorkloads(ctx context.Context, w capability.Workloads, env EnvironmentInfo, namespace string) ([]capability.WorkloadSummary, error) {
-	if namespace != "" || slices.Contains(env.Namespaces, "*") {
-		return w.ListWorkloads(ctx, namespace)
+// namespaces listed; literal names are listed as they are (docs/design/0009). A caller
+// the cluster refuses the one request is listed namespace by namespace too, keeping the
+// namespaces it allows (docs/design/0014). It returns the namespaces it listed: one, ""
+// for every namespace in one request, or each it was allowed.
+func listWorkloads(ctx context.Context, w capability.Workloads, env EnvironmentInfo, namespace string) ([]capability.WorkloadSummary, []string, error) {
+	if namespace != "" {
+		list, err := w.ListWorkloads(ctx, namespace)
+		return list, []string{namespace}, err
 	}
 	names := env.Namespaces
-	if slices.ContainsFunc(names, func(n string) bool { return strings.ContainsAny(n, "*?[") }) {
+	switch {
+	case slices.Contains(names, "*"):
+		list, err := w.ListWorkloads(ctx, "")
+		if !errors.Is(err, capability.ErrForbidden) {
+			return list, []string{""}, err
+		}
+		if names, err = w.ListNamespaces(ctx); errors.Is(err, capability.ErrForbidden) {
+			return nil, nil, fmt.Errorf("the cluster lets you list neither across environment %s nor its namespaces; name a namespace: %w", env.Name, err)
+		} else if err != nil {
+			return nil, nil, err
+		}
+	case slices.ContainsFunc(names, func(n string) bool { return strings.ContainsAny(n, "*?[") }):
 		var err error
 		if names, err = w.ListNamespaces(ctx); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	var out []capability.WorkloadSummary
+	var listed []string
 	var refused error
-	listed := false
 	for _, n := range names {
 		if !inPatterns(env.Namespaces, n) {
 			continue
@@ -270,13 +277,13 @@ func listWorkloads(ctx context.Context, w capability.Workloads, env EnvironmentI
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		listed = true
+		listed = append(listed, n)
 		out = append(out, list...)
 	}
-	if !listed && refused != nil {
-		return nil, refused
+	if listed == nil && refused != nil {
+		return nil, nil, refused
 	}
-	return out, nil
+	return out, listed, nil
 }

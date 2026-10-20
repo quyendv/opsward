@@ -227,3 +227,33 @@ func TestListWorkloadsRestarting(t *testing.T) {
 		t.Fatalf("%d items, calls %v", len(items), src.calls)
 	}
 }
+
+// A caller the cluster lets read only some namespaces is refused a listing across an
+// unlimited environment; the listing then goes namespace by namespace and keeps those the
+// cluster allows (docs/design/0014), restarts included.
+func TestListWorkloadsInAnUnlimitedEnvironmentFallsBackPerNamespace(t *testing.T) {
+	last := time.Date(2026, 10, 19, 8, 0, 0, 0, time.UTC)
+	src := &fakeSource{
+		namespaces: []string{"a", "b"}, forbidden: map[string]bool{"": true, "b": true},
+		summaries: []capability.WorkloadSummary{
+			{Namespace: "a", Kind: "Deployment", Name: "x", Desired: 1, Ready: 1},
+			{Namespace: "b", Kind: "Deployment", Name: "y", Desired: 1, Ready: 1},
+		},
+		restarts: []capability.WorkloadRestarts{{Namespace: "a", Kind: "Deployment", Name: "x", Restarts: 1, LastRestart: &last}},
+	}
+	tl, _ := ListWorkloads(testEnvs, src)
+	prep, _ := tl.Prepare(json.RawMessage(`{"environment":"production","restarting":true}`))
+	items, err := prep.RunList(context.Background(), "reader")
+	if err != nil || len(items) != 1 || items[0].Scope.Name != "x" {
+		t.Fatalf("items %+v, %v; want a/x", items, err)
+	}
+	if strings.Join(src.calls, " ") != "workloads: namespaces workloads:a workloads:b restarts:a" {
+		t.Fatalf("calls = %v", src.calls)
+	}
+	// Refused the namespaces too, the caller is told to name one.
+	src.namespacesErr = fmt.Errorf("list namespaces: %w", capability.ErrForbidden)
+	_, err = prep.RunList(context.Background(), "reader")
+	if !errors.Is(err, capability.ErrForbidden) || !strings.Contains(err.Error(), "name a namespace") {
+		t.Fatalf("err = %v", err)
+	}
+}
