@@ -51,6 +51,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	var err error
 	switch args[0] {
+	case "-h", "-help", "--help", "help":
+		fmt.Fprint(stdout, usage)
+		return 0
 	case "version", "-version", "--version":
 		fmt.Fprintln(stdout, version.String())
 		return 0
@@ -73,7 +76,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	var u usageError
+	var h helpError
 	switch {
+	case errors.As(err, &h):
+		fmt.Fprint(stdout, h)
+		return 0
 	case errors.As(err, &u):
 		fmt.Fprint(stderr, u)
 		return 2
@@ -82,6 +89,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// helpError prints usage on stdout and exits 0.
+type helpError string
+
+func (h helpError) Error() string { return string(h) }
+
+func isHelp(arg string) bool {
+	return arg == "-h" || arg == "-help" || arg == "--help"
+}
+
+// parseFlags parses a command's flags; for -h, or a flag the command does not have, it
+// returns an error that prints the command's usage.
+func parseFlags(fs *flag.FlagSet, args []string, usage string) error {
+	err := fs.Parse(args)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		return helpError(usage)
+	case err != nil:
+		return usageError(fmt.Sprintf("opsward: %v\n%s", err, usage))
+	}
+	return nil
 }
 
 func loadConfig(name string, args []string) (*config.Config, error) {
@@ -95,7 +124,7 @@ func loadConfigFile(name string, args []string) (*config.Config, string, string,
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "configuration file")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args, usage); err != nil {
 		return nil, "", "", err
 	}
 	if *path == "" {

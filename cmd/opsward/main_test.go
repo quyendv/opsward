@@ -163,3 +163,29 @@ func TestRBACRender(t *testing.T) {
 		t.Errorf("rbac without an action: code %d, stderr %q", code, errOut)
 	}
 }
+
+// -h prints the command's usage, which names its flags, and succeeds; a flag the command
+// does not have prints the usage too.
+func TestSubcommandHelp(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"serve", "-h"}, "serve --config FILE"},
+		{[]string{"validate", "--help"}, "validate --config FILE"},
+		{[]string{"audit", "verify", "-h"}, "audit verify --config FILE"},
+		{[]string{"rbac", "render", "-h"}, "--service-account-namespace"},
+		{[]string{"token", "create", "-h"}, "--subject S"},
+		{[]string{"rbac", "-h"}, "--service-account-namespace"},
+		{[]string{"-h"}, "commands:"},
+	} {
+		code, out, errOut := runCLI(tc.args...)
+		if code != 0 || !strings.Contains(out, tc.want) || errOut != "" {
+			t.Errorf("%v: code %d, stdout %q, stderr %q; want usage naming %q on stdout", tc.args, code, out, errOut, tc.want)
+		}
+	}
+	code, _, errOut := runCLI("rbac", "render", "--namespace", "x")
+	if code != 2 || !strings.Contains(errOut, "-namespace") || !strings.Contains(errOut, "--service-account-namespace") {
+		t.Errorf("unknown flag: code %d, stderr %q; want the error and the usage", code, errOut)
+	}
+}
