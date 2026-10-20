@@ -277,6 +277,9 @@ func (e *Engine) Invoke(ctx context.Context, p core.Principal, name string, args
 	actx := context.WithoutCancel(ctx)
 	rec := audit.Record{Phase: audit.PhaseOutcome, Principal: p, Tool: name}
 	finish := func(status string, cause error) error {
+		if status == audit.StatusError && errors.Is(cause, core.ErrForbidden) {
+			status = audit.StatusForbidden
+		}
 		outcome := &audit.Outcome{Status: status, DurationMs: e.now().Sub(start).Milliseconds()}
 		if rec.Outcome != nil {
 			outcome.Listed = rec.Outcome.Listed

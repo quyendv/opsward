@@ -26,10 +26,13 @@ const (
 
 // Status values for Outcome.Status.
 const (
-	StatusOK          = "ok"
-	StatusDenied      = "denied"
-	StatusInvalid     = "invalid"
-	StatusError       = "error"
+	StatusOK      = "ok"
+	StatusDenied  = "denied"
+	StatusInvalid = "invalid"
+	StatusError   = "error"
+	// StatusForbidden: policy allowed the call and the backend refused it, as a cluster
+	// refuses the caller a profile acts as.
+	StatusForbidden   = "forbidden"
 	StatusUnknownTool = "unknown_tool"
 	// StatusPending: the call needs approval and became an approval request.
 	StatusPending = "pending"

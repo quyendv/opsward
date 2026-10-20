@@ -773,3 +773,47 @@ func TestListNamespacesAsCallerWrapsForbidden(t *testing.T) {
 		t.Fatalf("plain profile: err = %v, want a failure that is not ErrForbidden", err)
 	}
 }
+
+// Every request of a profile acting as its caller tells a refusal from a failure, not
+// only listings: tools and the audit record it as the cluster's decision.
+func TestCallerRefusalsWrapForbiddenForEveryMethod(t *testing.T) {
+	c := fake.NewClientset(deployment())
+	c.PrependReactor("*", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(appsv1.Resource(a.GetResource().Resource), "", errors.New("no"))
+	})
+	src := NewSource(map[string]string{"prod": "a"},
+		map[string]map[string]Profile{"a": {"reader": {Kubeconfig: "/k", Impersonate: &Impersonation{}}, "plain": {Kubeconfig: "/k"}}},
+		func(Profile) (kubernetes.Interface, error) { return c, nil })
+	asCaller, _ := src.Workloads("prod", "reader")
+	plain, _ := src.Workloads("prod", "plain")
+	ref := capability.WorkloadRef{Namespace: "shop", Kind: "Deployment", Name: "api"}
+	calls := map[string]func(capability.Workloads) error{
+		"GetWorkload":      func(w capability.Workloads) error { _, err := w.GetWorkload(t.Context(), ref); return err },
+		"WorkloadLabels":   func(w capability.Workloads) error { _, err := w.WorkloadLabels(t.Context(), ref); return err },
+		"WorkloadMetadata": func(w capability.Workloads) error { _, err := w.WorkloadMetadata(t.Context(), ref); return err },
+		"WorkloadEvents":   func(w capability.Workloads) error { _, err := w.WorkloadEvents(t.Context(), ref, 10); return err },
+		"WorkloadLogs": func(w capability.Workloads) error {
+			_, err := w.WorkloadLogs(t.Context(), ref, capability.LogOptions{TailLines: 10, MaxPods: 1, MaxBytes: 100, TotalBytes: 100})
+			return err
+		},
+		"PodNamePattern":   func(w capability.Workloads) error { _, err := w.PodNamePattern(t.Context(), ref); return err },
+		"ListNamespaces":   func(w capability.Workloads) error { _, err := w.ListNamespaces(t.Context()); return err },
+		"ListWorkloads":    func(w capability.Workloads) error { _, err := w.ListWorkloads(t.Context(), "shop"); return err },
+		"WorkloadRestarts": func(w capability.Workloads) error { _, err := w.WorkloadRestarts(t.Context(), "shop"); return err },
+		"RestartWorkload":  func(w capability.Workloads) error { _, err := w.RestartWorkload(t.Context(), ref, true); return err },
+		"ScaleWorkload":    func(w capability.Workloads) error { _, err := w.ScaleWorkload(t.Context(), ref, 2, true); return err },
+	}
+	for method := range capability.WorkloadsOps {
+		call, ok := calls[method]
+		if !ok {
+			t.Errorf("%s is not exercised", method)
+			continue
+		}
+		if err := call(asCaller); !errors.Is(err, capability.ErrForbidden) || !apierrors.IsForbidden(err) {
+			t.Errorf("%s as caller: err = %v, want ErrForbidden wrapping the API error", method, err)
+		}
+		if err := call(plain); err == nil || errors.Is(err, capability.ErrForbidden) {
+			t.Errorf("%s as itself: err = %v, want a failure that is not ErrForbidden", method, err)
+		}
+	}
+}

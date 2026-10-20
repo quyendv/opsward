@@ -38,7 +38,7 @@ type auditInput struct {
 	Until       string `json:"until,omitempty" jsonschema:"RFC 3339 time; records before it. Default: now"`
 	Subject     string `json:"subject,omitempty" jsonschema:"only calls by this principal"`
 	Tool        string `json:"tool,omitempty" jsonschema:"only calls to this tool"`
-	Status      string `json:"status,omitempty" jsonschema:"only calls that ended so: ok, denied, invalid, error, unknown_tool or pending"`
+	Status      string `json:"status,omitempty" jsonschema:"only calls that ended so: ok, denied (by policy), forbidden (by the backend, for the caller a profile acts as), invalid, error, unknown_tool or pending"`
 	Environment string `json:"environment,omitempty" jsonschema:"only calls in this environment"`
 	Namespace   string `json:"namespace,omitempty" jsonschema:"only calls in this namespace"`
 	Before      string `json:"before,omitempty" jsonschema:"continue a search: the next value of its result"`

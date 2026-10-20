@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -36,6 +37,7 @@ type listTool struct {
 	items     []Item
 	byProfile map[string][]Item
 	failFor   string
+	failErr   error // what failFor fails with; a plain error by default
 	ran       bool
 	profile   string
 	profiles  []string
@@ -55,6 +57,9 @@ func (l *listTool) tool() Tool {
 					l.caller, _ = core.PrincipalFrom(ctx)
 					l.profiles = append(l.profiles, profile)
 					if profile == l.failFor {
+						if l.failErr != nil {
+							return nil, l.failErr
+						}
 						return nil, errors.New("forbidden")
 					}
 					if l.byProfile != nil {
@@ -270,5 +275,17 @@ func TestListCarriesTheCaller(t *testing.T) {
 	}
 	if lt.caller.Subject != alice.Subject {
 		t.Fatalf("listed as %+v, want as %s", lt.caller, alice.Subject)
+	}
+}
+
+func TestListRefusedEverywhereIsForbidden(t *testing.T) {
+	lt := &listTool{failFor: ProfileReader, failErr: fmt.Errorf("list: %w", core.ErrForbidden)}
+	aud := &recordingAuditor{}
+	authz := reachPolicy{decide: allowAll, reach: func(core.Request) bool { return true }}
+	if _, err := listEngine(t, lt, authz, aud).Invoke(context.Background(), alice, "list_things", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("no error")
+	}
+	if got := aud.last().Outcome.Status; got != audit.StatusForbidden {
+		t.Fatalf("status = %s, want forbidden", got)
 	}
 }

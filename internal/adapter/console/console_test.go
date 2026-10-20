@@ -595,3 +595,10 @@ func TestSigningInAgainEndsThePreviousSession(t *testing.T) {
 		t.Fatal("the previous session is still stored")
 	}
 }
+
+// A call the backend refused is the caller's lack of permission there, not a bad gateway.
+func TestFailureOfABackendRefusalIsForbidden(t *testing.T) {
+	if got := failure(errors.Join(errors.New("get Deployment"), core.ErrForbidden)); got != http.StatusForbidden {
+		t.Fatalf("failure = %d, want 403", got)
+	}
+}

@@ -16,7 +16,7 @@ import (
 func (w *workloads) ListNamespaces(ctx context.Context) ([]string, error) {
 	list, err := w.c.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, w.refused(err)
+		return nil, err
 	}
 	out := make([]string, 0, len(list.Items))
 	for _, n := range list.Items {
@@ -83,11 +83,11 @@ func (w *workloads) ListWorkloads(ctx context.Context, namespace string) ([]capa
 func (w *workloads) WorkloadRestarts(ctx context.Context, namespace string) ([]capability.WorkloadRestarts, error) {
 	pods, err := w.c.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, w.refused(err)
+		return nil, err
 	}
 	rss, err := w.c.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, w.refused(err)
+		return nil, err
 	}
 	type key struct{ namespace, name string }
 	deploymentOf := map[key]string{}
@@ -138,13 +138,4 @@ func (w *workloads) WorkloadRestarts(ctx context.Context, namespace string) ([]c
 		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
 	})
 	return out, nil
-}
-
-// refused wraps ErrForbidden in a refusal of the caller a profile acts as; for a profile
-// acting as itself a refusal is a misconfiguration, and is returned as it is.
-func (w *workloads) refused(err error) error {
-	if w.asCaller && apierrors.IsForbidden(err) {
-		return fmt.Errorf("%w: %w", capability.ErrForbidden, err)
-	}
-	return err
 }
