@@ -84,10 +84,18 @@ var sensitiveKey = regexp.MustCompile(`(password|passwd|pwd|secret|token|apikey|
 
 var keySeparators = strings.NewReplacer("_", "", "-", "", ".", "")
 
+// tokenCredential is a principal's credential naming an API token by its ID, which
+// `opsward token list` prints: the key/value rule would take it for a secret.
+var tokenCredential = regexp.MustCompile(`^token:[a-z2-7]{12}$`)
+
 func valueFor(key string, v any) any {
 	norm := keySeparators.Replace(strings.ToLower(key))
-	if s, ok := v.(string); ok && sensitiveKey.MatchString(norm) && s != "" {
+	s, ok := v.(string)
+	switch {
+	case ok && sensitiveKey.MatchString(norm) && s != "":
 		return Placeholder
+	case ok && key == "credential" && tokenCredential.MatchString(s):
+		return s
 	}
 	return Value(v)
 }

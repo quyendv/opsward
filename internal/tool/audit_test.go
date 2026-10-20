@@ -241,3 +241,48 @@ func TestSearchAuditPagesKeepTheirWindow(t *testing.T) {
 		t.Fatalf("second page, two hours later: %d items, want the window's other 50", len(items))
 	}
 }
+
+// A page stops before its records pass the size an agent can read, and continues where
+// it stopped; a record larger than that is still returned on a page of its own.
+func TestSearchAuditBoundsTheResultSize(t *testing.T) {
+	f := &fakeAudit{}
+	for i := range 40 {
+		r := outcome(time.Duration(i)*time.Second, "alice", "propose_change", audit.StatusOK, core.Scope{Environment: "staging"})
+		r.Args = map[string]any{"note": strings.Repeat("x", 2000)}
+		f.add(t, r)
+	}
+	huge := outcome(time.Minute, "alice", "propose_change", audit.StatusOK, core.Scope{Environment: "staging"})
+	huge.Args = map[string]any{"note": strings.Repeat("y", 40<<10)}
+	f.add(t, huge)
+	window := `"since":"2026-10-17T08:00:00Z","until":"2026-10-17T09:00:00Z"`
+	items, res := searchAudit(t, f, `{`+window+`}`)
+	if len(items) != 1 || items[0].Key != "r41" || res.Next == "" {
+		t.Fatalf("first page: %d items, next %q; want the large record alone", len(items), res.Next)
+	}
+	seen := 1
+	for res.Next != "" {
+		var page []engine.Item
+		page, res = searchAudit(t, f, `{`+window+`,"before":"`+res.Next+`"}`)
+		if b, _ := json.Marshal(res); len(b) > auditSearchBytes {
+			t.Fatalf("a page of %d records encodes to %d bytes", len(page), len(b))
+		}
+		if len(page) == 0 {
+			t.Fatal("an empty page offers to continue")
+		}
+		seen += len(page)
+	}
+	if seen != 41 {
+		t.Fatalf("pages returned %d records, want 41", seen)
+	}
+}
+
+// The result names the window it searched: an agent has no clock to compute one.
+func TestSearchAuditSaysWhatItSearched(t *testing.T) {
+	now := time.Date(2026, 10, 18, 8, 0, 0, 0, time.UTC)
+	auditNow = func() time.Time { return now }
+	t.Cleanup(func() { auditNow = time.Now })
+	_, res := searchAudit(t, &fakeAudit{}, `{}`)
+	if res.Since != "2026-10-17T08:00:00Z" || res.Until != "2026-10-18T08:00:00Z" {
+		t.Fatalf("since %q, until %q", res.Since, res.Until)
+	}
+}

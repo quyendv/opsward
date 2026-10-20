@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `search_audit` returned up to 100 records whatever their size, some 65 KB, past what an
+  agent's client accepts; a page now stops at 32 KiB and continues with `next`. The result
+  also names the window it searched.
+- `search_audit` showed a record's credential as `token:[REDACTED]`; it shows the token's
+  ID, which is not a secret.
+
 ## [0.9.0] - 2026-10-20
 
 The web console: approvers decide requests and auditors search the audit in a browser,
