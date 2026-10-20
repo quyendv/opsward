@@ -163,3 +163,23 @@ func TestStringDropsTerminalEscapes(t *testing.T) {
 		t.Fatalf("String = %q", got)
 	}
 }
+
+// A principal's credential names an API token by its ID, which is not a secret: an
+// auditor needs it to tell which token made a call, and to revoke it.
+func TestValueKeepsATokenIDCredential(t *testing.T) {
+	id := "token:" + strings.Repeat("ab", 6)
+	out := Value(map[string]any{
+		"principal": map[string]any{"credential": id},
+		"note":      id,
+		"other":     map[string]any{"credential": "token:hunter2-secret"},
+	}).(map[string]any)
+	if got := out["principal"].(map[string]any)["credential"]; got != id {
+		t.Errorf("credential = %v, want the token ID kept", got)
+	}
+	if out["note"] != "token:"+Placeholder {
+		t.Errorf("note = %v: only a credential field names a token ID", out["note"])
+	}
+	if got := out["other"].(map[string]any)["credential"]; got != "token:"+Placeholder {
+		t.Errorf("credential = %v: a value not shaped as a token ID stays redacted", got)
+	}
+}

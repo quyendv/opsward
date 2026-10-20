@@ -26,6 +26,11 @@ const (
 	auditSearchScan   = 5000
 	auditSearchPage   = 500
 	auditSearchWindow = 24 * time.Hour
+	// auditSearchBytes bounds a page's records, JSON-encoded as the agent receives them:
+	// clients refuse a result past some 25,000 tokens (docs/design/0006).
+	auditSearchBytes = 32 << 10
+	// auditSearchEnvelope is kept for the rest of the result: window, next and note.
+	auditSearchEnvelope = 512
 )
 
 type auditInput struct {
@@ -41,7 +46,10 @@ type auditInput struct {
 
 // AuditSearch is search_audit's result.
 type AuditSearch struct {
-	Records []any `json:"records"`
+	// Since and Until are the window searched.
+	Since   string `json:"since"`
+	Until   string `json:"until"`
+	Records []any  `json:"records"`
 	// Next continues the search where it stopped, when it stopped early.
 	Next string `json:"next,omitempty"`
 	Note string `json:"note,omitempty"`
@@ -99,8 +107,8 @@ func SearchAudit(r AuditReader) (engine.Tool, error) {
 	return engine.Tool{
 		Name: "search_audit",
 		Description: "Search Opsward's audit records, newest first: who called which tool, where, with what decision and " +
-			"outcome, and the change a write made. Filters narrow the search; it returns at most 100 records, and a next " +
-			"value to continue when there are more.",
+			"outcome, and the change a write made. Filters narrow the search; it returns the window it searched, at most " +
+			"100 records (fewer when they are large), and a next value to continue when there are more.",
 		Risk: core.RiskRead, InputSchema: in.schema, Args: in.names,
 		Global: true, List: true, Exact: true, ByName: true, NeverApproved: true,
 		Prepare: func(raw json.RawMessage) (*engine.Prepared, error) {
@@ -147,20 +155,26 @@ func SearchAudit(r AuditReader) (engine.Tool, error) {
 					}
 					return items, read, nil
 				},
-				Wrap: func(kept []any) any { return AuditSearch{Records: kept, Next: next, Note: note} },
+				Wrap: func(kept []any) any {
+					return AuditSearch{
+						Since: q.Since.UTC().Format(time.RFC3339), Until: q.Until.UTC().Format(time.RFC3339),
+						Records: kept, Next: next, Note: note,
+					}
+				},
 			}, nil
 		},
 	}, nil
 }
 
 // scanAudit reads newest first until it has found more than auditSearchLimit records
-// that match the filters and that policy lets the caller see, has read auditSearchScan
-// records, or runs out. When it stops early it returns the last record it read and why.
+// that match the filters and that policy lets the caller see, or more than fit in
+// auditSearchBytes, has read auditSearchScan records, or runs out. When it stops early it
+// returns the last record it read and why.
 func scanAudit(ctx context.Context, r AuditReader, q store.AuditQuery, v auditInput, keep func(engine.Item) bool) ([]engine.Item, int, store.AuditPosition, string, error) {
 	var items []engine.Item
 	var last, shown store.AuditPosition
 	subject := core.NormalizeSubject(v.Subject)
-	scanned := 0
+	scanned, size := 0, 0
 	for {
 		rows, err := r.RecentAudit(ctx, q)
 		if err != nil {
@@ -174,12 +188,14 @@ func scanAudit(ctx context.Context, r AuditReader, q store.AuditQuery, v auditIn
 				return nil, scanned, last, "", fmt.Errorf("audit record %s: %w", row.ID, err)
 			}
 			if it := (engine.Item{Key: rec.ID, Scope: rec.Scope, Data: rec}); matches(rec, v, subject) && keep(it) {
-				// One more than the limit tells that there are more; the next page starts
-				// after the last one shown.
-				if len(items) == auditSearchLimit {
+				// One more than fits tells that there are more; the next page starts after
+				// the last one shown. A first record always fits, so that a search advances.
+				full := len(items) > 0 && size+len(row.Body) > auditSearchBytes-auditSearchEnvelope
+				if len(items) == auditSearchLimit || full {
 					return items, scanned, shown, "more records match; continue with next", nil
 				}
 				items = append(items, it)
+				size += len(row.Body) + 1
 				shown = last
 			}
 			if scanned == auditSearchScan {

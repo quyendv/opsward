@@ -52,9 +52,11 @@ would be a second path to escalate (0001, threat model).
 `search_audit` is a read tool, available over MCP too, so an agent can answer "who
 restarted this yesterday". Its arguments are filters: `since` and `until` (the last day by
 default), `subject`, `tool`, `status`, `environment`, `namespace`, and a `before` cursor.
-It returns at most 100 records, newest first, and reads at most 5,000 from the store per
-call; when it stops early it says so and returns the cursor to continue, which keeps the
-search's time window. Agent mode does not offer it: records would reach the model
+It returns the window it searched and at most 100 records, newest first, fewer when they
+would pass 32 KiB JSON-encoded (the bound of 0006: an agent cannot read a larger result,
+and a record of a change runs to kilobytes). It reads at most 5,000 records from the store
+per call; when it stops early it says so and returns the cursor to continue, which keeps
+the search's time window. Agent mode does not offer it: records would reach the model
 provider. Checkpoint
 records are left out: `opsward audit verify` is for the chain.
 
