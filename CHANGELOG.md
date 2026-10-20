@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-20
+
+What a trial on a real cluster found: restarts in one call, the cluster's refusals kept
+apart in the audit, and audit search results an agent can read.
+
 ### Added
 
 - An audit status `forbidden`: policy allowed the call and the backend refused it, as a
@@ -278,7 +283,8 @@ First release: a single-user, read-only gateway over MCP stdio.
   and cluster before they are sent.
 - `diagnose_workload`: status, events, failing containers' logs and resource use in one call.
 
-[Unreleased]: https://github.com/quyendv/opsward/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/quyendv/opsward/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/quyendv/opsward/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/quyendv/opsward/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/quyendv/opsward/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/quyendv/opsward/compare/v0.6.0...v0.7.0
