@@ -18,7 +18,7 @@ var callMethods = map[string]string{
 	"get": "GetWorkload", "labels": "WorkloadLabels", "metadata": "WorkloadMetadata",
 	"events": "WorkloadEvents", "logs": "WorkloadLogs", "pattern": "PodNamePattern",
 	"restart": "RestartWorkload", "scale": "ScaleWorkload",
-	"namespaces": "ListNamespaces", "workloads": "ListWorkloads",
+	"namespaces": "ListNamespaces", "workloads": "ListWorkloads", "restarts": "WorkloadRestarts",
 }
 
 // Each tool declares exactly the operations it performs on the workload source, so that
@@ -51,6 +51,8 @@ func TestToolsDeclareWhatTheyUse(t *testing.T) {
 		{func(s *fakeSource) (engine.Tool, error) { return ListWorkloads(envs, s) }, `{"environment":"staging"}`},
 		{func(s *fakeSource) (engine.Tool, error) { return ListWorkloads(envs, s) }, `{"environment":"literal"}`},
 		{func(s *fakeSource) (engine.Tool, error) { return ListWorkloads(envs, s) }, `{"environment":"patterns"}`},
+		{func(s *fakeSource) (engine.Tool, error) { return ListWorkloads(envs, s) }, `{"environment":"staging","restarting":true}`},
+		{func(s *fakeSource) (engine.Tool, error) { return ListWorkloads(envs, s) }, `{"environment":"literal","restarting":true}`},
 		{func(s *fakeSource) (engine.Tool, error) { return ListNamespaces(envs, s) }, `{"environment":"literal"}`},
 		{func(s *fakeSource) (engine.Tool, error) { return RestartWorkload(s) }, `{` + w + `}`},
 		{func(s *fakeSource) (engine.Tool, error) { return ScaleWorkload(s) }, `{` + w + `,"replicas":3}`},

@@ -77,3 +77,74 @@ func (w *workloads) ListWorkloads(ctx context.Context, namespace string) ([]capa
 	})
 	return out, nil
 }
+
+// WorkloadRestarts implements capability.Workloads. A pod belongs to the workload that
+// controls it, through its ReplicaSet for a Deployment.
+func (w *workloads) WorkloadRestarts(ctx context.Context, namespace string) ([]capability.WorkloadRestarts, error) {
+	pods, err := w.c.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, w.refused(err)
+	}
+	rss, err := w.c.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, w.refused(err)
+	}
+	type key struct{ namespace, name string }
+	deploymentOf := map[key]string{}
+	for _, rs := range rss.Items {
+		if o := metav1.GetControllerOf(&rs); o != nil && o.Kind == "Deployment" {
+			deploymentOf[key{rs.Namespace, rs.Name}] = o.Name
+		}
+	}
+	byWorkload := map[capability.WorkloadRef]*capability.WorkloadRestarts{}
+	for _, p := range pods.Items {
+		o := metav1.GetControllerOf(&p)
+		if o == nil {
+			continue
+		}
+		ref := capability.WorkloadRef{Namespace: p.Namespace, Kind: o.Kind, Name: o.Name}
+		switch o.Kind {
+		case "ReplicaSet":
+			d, ok := deploymentOf[key{p.Namespace, o.Name}]
+			if !ok {
+				continue
+			}
+			ref.Kind, ref.Name = "Deployment", d
+		case "StatefulSet", "DaemonSet":
+		default:
+			continue
+		}
+		for _, cs := range slices.Concat(p.Status.InitContainerStatuses, p.Status.ContainerStatuses) {
+			if cs.RestartCount == 0 {
+				continue
+			}
+			r := byWorkload[ref]
+			if r == nil {
+				r = &capability.WorkloadRestarts{Namespace: ref.Namespace, Kind: ref.Kind, Name: ref.Name}
+				byWorkload[ref] = r
+			}
+			r.Restarts += cs.RestartCount
+			if t := cs.LastTerminationState.Terminated; t != nil && !t.FinishedAt.IsZero() && (r.LastRestart == nil || t.FinishedAt.After(*r.LastRestart)) {
+				last := t.FinishedAt.UTC()
+				r.LastRestart = &last
+			}
+		}
+	}
+	out := make([]capability.WorkloadRestarts, 0, len(byWorkload))
+	for _, r := range byWorkload {
+		out = append(out, *r)
+	}
+	slices.SortFunc(out, func(a, b capability.WorkloadRestarts) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
+	})
+	return out, nil
+}
+
+// refused wraps ErrForbidden in a refusal of the caller a profile acts as; for a profile
+// acting as itself a refusal is a misconfiguration, and is returned as it is.
+func (w *workloads) refused(err error) error {
+	if w.asCaller && apierrors.IsForbidden(err) {
+		return fmt.Errorf("%w: %w", capability.ErrForbidden, err)
+	}
+	return err
+}

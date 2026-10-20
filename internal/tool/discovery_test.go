@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/quyendv/opsward/internal/capability"
 	"github.com/quyendv/opsward/internal/core"
@@ -172,5 +175,55 @@ func TestListWorkloadsSkipsNamespacesTheBackendRefuses(t *testing.T) {
 	prep, _ = tl.Prepare(json.RawMessage(`{"environment":"staging","namespace":"team-a-api"}`))
 	if _, err := prep.RunList(context.Background(), "reader"); !errors.Is(err, capability.ErrForbidden) {
 		t.Fatalf("named namespace: err = %v, want ErrForbidden", err)
+	}
+}
+
+// restarting keeps the workloads whose containers restarted, most restarts first, with
+// the count and when the last one ended; it reads restarts where it listed workloads.
+func TestListWorkloadsRestarting(t *testing.T) {
+	last := time.Date(2026, 10, 19, 8, 0, 0, 0, time.UTC)
+	src := &fakeSource{
+		namespaces: []string{"shared", "team-a-api"},
+		summaries: []capability.WorkloadSummary{
+			{Namespace: "shared", Kind: "Deployment", Name: "web", Desired: 2, Ready: 2},
+			{Namespace: "shared", Kind: "Deployment", Name: "quiet", Desired: 1, Ready: 1},
+			{Namespace: "team-a-api", Kind: "Deployment", Name: "api", Desired: 2, Ready: 2},
+		},
+		restarts: []capability.WorkloadRestarts{
+			{Namespace: "shared", Kind: "Deployment", Name: "web", Restarts: 2, LastRestart: &last},
+			{Namespace: "team-a-api", Kind: "Deployment", Name: "api", Restarts: 9, LastRestart: &last},
+		},
+	}
+	tl, _ := ListWorkloads(testEnvs, src)
+	prep, err := tl.Prepare(json.RawMessage(`{"environment":"staging","restarting":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := prep.RunList(context.Background(), "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range items {
+		s := it.Data.(capability.WorkloadSummary)
+		got = append(got, fmt.Sprintf("%s %d %v", s.Name, s.Restarts, s.LastRestart != nil && s.LastRestart.Equal(last)))
+	}
+	if strings.Join(got, ",") != "api 9 true,web 2 true" {
+		t.Fatalf("items = %v", got)
+	}
+	if strings.Join(src.calls, " ") != "namespaces workloads:shared workloads:team-a-api restarts:shared restarts:team-a-api" {
+		t.Fatalf("calls = %v", src.calls)
+	}
+	// Refused pods everywhere is an error, not a cluster where nothing restarts.
+	src.calls, src.restartsErr = nil, fmt.Errorf("list pods: %w", capability.ErrForbidden)
+	if _, err := prep.RunList(context.Background(), "reader"); !errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+	src.restartsErr = nil
+	// Without restarting, a listing reads no pods.
+	src.calls = nil
+	prep, _ = tl.Prepare(json.RawMessage(`{"environment":"staging"}`))
+	if items, _ = prep.RunList(context.Background(), "reader"); len(items) != 3 || slices.ContainsFunc(src.calls, func(c string) bool { return strings.HasPrefix(c, "restarts") }) {
+		t.Fatalf("%d items, calls %v", len(items), src.calls)
 	}
 }

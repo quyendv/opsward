@@ -696,3 +696,62 @@ func TestListWorkloadsAsCallerWrapsForbidden(t *testing.T) {
 		t.Fatalf("refused every kind: err = %v, want ErrForbidden", err)
 	}
 }
+
+// Restarts are counted per workload over its current pods' containers, init containers
+// included, with the time the last restarted container ended; pods no supported workload
+// controls, and workloads that never restarted, are left out.
+func TestWorkloadRestarts(t *testing.T) {
+	d := deployment()
+	d.UID = "d1"
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+		Name: "api-7d9f", Namespace: "shop", UID: "r1",
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "api", UID: "d1", Controller: ptr(true)}},
+	}}
+	owned := func(p *corev1.Pod, kind, name string) *corev1.Pod {
+		p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: kind, Name: name, Controller: ptr(true)}}
+		return p
+	}
+	// Times read from the API server are in the local zone; results are in UTC.
+	t1 := time.Date(2026, 10, 19, 15, 0, 0, 0, time.FixedZone("UTC+7", 7*3600))
+	ended := func(p *corev1.Pod, at time.Time) *corev1.Pod {
+		p.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{FinishedAt: metav1.NewTime(at)}
+		return p
+	}
+	a := ended(owned(pod("api-7d9f-a", nil, true, 2, ""), "ReplicaSet", "api-7d9f"), t1)
+	b := ended(owned(pod("api-7d9f-b", nil, true, 1, ""), "ReplicaSet", "api-7d9f"), t1.Add(time.Hour))
+	b.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "init", RestartCount: 4}}
+	db := owned(pod("db-0", nil, true, 0, ""), "StatefulSet", "db")
+	agent := ended(owned(pod("agent-x", nil, true, 3, ""), "DaemonSet", "agent"), t1)
+	bare := pod("debug", nil, true, 9, "")
+	job := owned(pod("job-x", nil, true, 5, ""), "Job", "migrate")
+	c := fake.NewClientset(d, rs, a, b, db, agent, bare, job)
+	got, err := NewWorkloads(c).WorkloadRestarts(t.Context(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []capability.WorkloadRestarts{
+		{Namespace: "shop", Kind: "DaemonSet", Name: "agent", Restarts: 3, LastRestart: ptr(t1.UTC())},
+		{Namespace: "shop", Kind: "Deployment", Name: "api", Restarts: 7, LastRestart: ptr(t1.Add(time.Hour).UTC())},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("WorkloadRestarts = %+v, want %+v", got, want)
+	}
+}
+
+func TestWorkloadRestartsAsCallerWrapsForbidden(t *testing.T) {
+	c := fake.NewClientset()
+	c.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(corev1.Resource("pods"), "", errors.New("no"))
+	})
+	src := NewSource(map[string]string{"prod": "a"},
+		map[string]map[string]Profile{"a": {"reader": {Kubeconfig: "/k", Impersonate: &Impersonation{}}, "plain": {Kubeconfig: "/k"}}},
+		func(Profile) (kubernetes.Interface, error) { return c, nil })
+	asCaller, _ := src.Workloads("prod", "reader")
+	if _, err := asCaller.WorkloadRestarts(t.Context(), "team-b"); !errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+	plain, _ := src.Workloads("prod", "plain")
+	if _, err := plain.WorkloadRestarts(t.Context(), "team-b"); err == nil || errors.Is(err, capability.ErrForbidden) {
+		t.Fatalf("plain profile: err = %v, want a failure that is not ErrForbidden", err)
+	}
+}
