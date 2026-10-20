@@ -16,7 +16,7 @@ import (
 func (w *workloads) ListNamespaces(ctx context.Context) ([]string, error) {
 	list, err := w.c.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return nil, w.refused(err)
 	}
 	out := make([]string, 0, len(list.Items))
 	for _, n := range list.Items {

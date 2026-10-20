@@ -28,11 +28,12 @@ type fakeSource struct {
 	eventLimit int
 	logsErr    error
 
-	namespaces  []string
-	summaries   []capability.WorkloadSummary
-	forbidden   map[string]bool // namespaces the backend refuses to list
-	restarts    []capability.WorkloadRestarts
-	restartsErr error // returned by WorkloadRestarts, as a refusal to list pods
+	namespaces    []string
+	summaries     []capability.WorkloadSummary
+	forbidden     map[string]bool // namespaces the backend refuses to list
+	restarts      []capability.WorkloadRestarts
+	restartsErr   error // returned by WorkloadRestarts, as a refusal to list pods
+	namespacesErr error // returned by ListNamespaces
 
 	dryRuns  []bool
 	replicas int32
@@ -54,6 +55,9 @@ func (f *fakeSource) ScaleWorkload(_ context.Context, _ capability.WorkloadRef, 
 
 func (f *fakeSource) ListNamespaces(context.Context) ([]string, error) {
 	f.calls = append(f.calls, "namespaces")
+	if f.namespacesErr != nil {
+		return nil, f.namespacesErr
+	}
 	return f.namespaces, f.err
 }
 

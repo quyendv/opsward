@@ -60,6 +60,10 @@ listing across an environment keeps the kinds and namespaces the cluster lets th
 list, and is refused only when it lets them list none; a profile acting as itself still
 fails when refused, since that is a misconfiguration. An environment with namespace
 patterns lists the cluster's namespaces first, so its callers need `list` on namespaces.
+So does one spanning every namespace for a caller bound in some namespaces only: refused
+the one request across the cluster, the listing lists the namespaces and goes namespace
+by namespace. Refused the namespaces too, the caller is told to name one; the cluster
+offers no way to ask which namespaces a person may read.
 
 Approvals do not lend the approver's permissions: the dry run, the approved retry and the
 change all act as the requester, so the cluster must let the requester make the change.

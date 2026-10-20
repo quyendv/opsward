@@ -22,6 +22,10 @@ All notable changes to this project are documented here. The format follows
   ID, which is not a secret.
 - `-h` on a command printed `flag: help requested`; it prints the command's usage, as does
   a flag the command does not have.
+- With a profile acting as the caller, `list_workloads` across an environment spanning
+  every namespace failed for a person the cluster lets read some namespaces only; it lists
+  namespace by namespace and keeps those the cluster allows, and, refused the namespaces
+  too, says to name one.
 
 ## [0.9.0] - 2026-10-20
 
