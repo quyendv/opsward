@@ -396,6 +396,7 @@ in force. See [0002](0002-identity-policy-storage.md#loading-the-file).
 | v0.7 | agent mode for alerts ([0013](0013-agent-mode.md)) |
 | v0.8 | profiles that impersonate the caller ([0014](0014-impersonation.md)) |
 | v0.9 | web console: approvals, audit search ([0015](0015-web-console.md)) |
+| v0.10 | from a trial on a real cluster: restarts in `list_workloads`, the cluster's refusals audited as `forbidden` |
 
 ## Alternatives considered
 
